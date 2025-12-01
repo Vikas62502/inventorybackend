@@ -193,20 +193,28 @@ const createStockRequest = async (req, res) => {
     const normalizedItems = await normalizeItemsPayload(itemsPayload, transaction);
     const totalQuantity = normalizedItems.reduce((sum, item) => sum + item.quantity, 0);
 
+    const requestedByRole = req.user.role === 'admin' ? 'admin' : 'agent';
     const requestedFromRole = requested_from === 'super-admin' ? 'super-admin' : 'admin';
 
+    // Validate requested_from based on requester role
     if (requestedFromRole === 'admin') {
-      const fromUser = await User.findOne({
-        where: { id: requested_from, role: 'admin' },
-        transaction
-      });
+      // If requester is an agent and requested_from is "admin" (placeholder), allow it
+      // This is a special case where agents don't specify which admin yet
+      if (requestedByRole === 'agent' && requested_from === 'admin') {
+        // Allow "admin" as a placeholder for agent requests
+        // The actual admin will be determined during dispatch
+      } else {
+        // For admin-to-admin transfers, requested_from must be a valid admin ID
+        const fromUser = await User.findOne({
+          where: { id: requested_from, role: 'admin' },
+          transaction
+        });
 
-      if (!fromUser) {
-        throw new Error('Requested from user not found or not an admin');
+        if (!fromUser) {
+          throw new Error('Requested from user not found or not an admin');
+        }
       }
     }
-
-    const requestedByRole = req.user.role === 'admin' ? 'admin' : 'agent';
     const primaryItem = normalizedItems[0];
 
     const nextId = await getNextStockRequestId(transaction);
@@ -366,9 +374,18 @@ const dispatchStockRequest = async (req, res) => {
       throw new Error(`Cannot dispatch request. Current status: ${request.status}`);
     }
 
+    // Determine if user can dispatch
+    // Super-admin can dispatch any request
+    // Admin can dispatch if:
+    //   1. Request is from super-admin (admin is dispatching to themselves or agent)
+    //   2. Request is from another admin and they are the source (admin-to-admin transfer)
+    //   3. Request is from agent with requested_from="admin" (any admin can dispatch to their agents)
     const canDispatch =
       req.user.role === 'super-admin' ||
-      (req.user.role === 'admin' && request.requested_from_role === 'admin' && request.requested_from === req.user.id);
+      (req.user.role === 'admin' && 
+       (request.requested_from_role === 'super-admin' ||
+        (request.requested_from_role === 'admin' && request.requested_from === req.user.id) ||
+        (request.requested_by_role === 'agent' && request.requested_from === 'admin')));
 
     if (!canDispatch) {
       throw new Error('You do not have permission to dispatch this request');
@@ -405,9 +422,18 @@ const dispatchStockRequest = async (req, res) => {
       }
     }
 
+    // Determine the actual source admin ID
+    // If requested_from is "admin" (placeholder for agent requests), use the dispatching admin's ID
+    const actualSourceAdminId = 
+      request.requested_from === 'admin' && req.user.role === 'admin' 
+        ? req.user.id 
+        : request.requested_from;
+
     const sourceName =
       request.requested_from_role === 'super-admin'
         ? 'Super Admin'
+        : request.requested_from === 'admin'
+        ? req.user.name
         : (await User.findByPk(request.requested_from, { transaction }))?.name || 'Unknown Admin';
 
     if (request.requested_from_role === 'super-admin') {
@@ -428,10 +454,11 @@ const dispatchStockRequest = async (req, res) => {
         }
       }
     } else {
-      await ensureSourceAdminInventory(request.requested_from, items, transaction);
+      // Use actualSourceAdminId for admin-to-admin or admin-to-agent transfers
+      await ensureSourceAdminInventory(actualSourceAdminId, items, transaction);
 
       for (const item of items) {
-        await decrementAdminInventory(request.requested_from, item, transaction);
+        await decrementAdminInventory(actualSourceAdminId, item, transaction);
 
         if (request.requested_by_role === 'admin' && request.requested_by_id) {
           await adjustAdminInventory(request.requested_by_id, item.product_id, item.quantity, transaction);
@@ -441,14 +468,23 @@ const dispatchStockRequest = async (req, res) => {
 
     const dispatchImage = req.file ? `/uploads/${req.file.filename}` : request.dispatch_image;
 
-    await request.update({
+    // Update request with dispatch info
+    // If requested_from was "admin" (placeholder), update it to the actual admin ID
+    const updateData = {
       status: 'dispatched',
       dispatched_by_id: req.user.id,
       dispatched_by_name: req.user.name,
       dispatched_date: new Date(),
       dispatch_image: dispatchImage,
       rejection_reason: null
-    }, { transaction });
+    };
+
+    // If this was an agent request with "admin" placeholder, update to actual admin ID
+    if (request.requested_from === 'admin' && req.user.role === 'admin') {
+      updateData.requested_from = req.user.id;
+    }
+
+    await request.update(updateData, { transaction });
 
     for (const item of items) {
       await createTransferTransactions({
