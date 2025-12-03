@@ -8,6 +8,8 @@ import {
   deleteStockReturn
 } from '../controllers/stockReturnController';
 import { authenticate, authorize } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { createStockReturnSchema, updateStockReturnSchema } from '../validations/stockReturnValidations';
 
 const router: Router = express.Router();
 
@@ -19,13 +21,13 @@ router.get('/', getAllStockReturns);
 router.get('/:id', getStockReturnById);
 
 // Create - admins can create returns
-router.post('/', authorize('admin'), createStockReturn);
+router.post('/', authorize('admin'), validate(createStockReturnSchema), createStockReturn);
 
 // Process - super-admin processes returns
 router.post('/:id/process', authorize('super-admin'), processStockReturn);
 
 // Update - admin or super-admin can update pending returns
-router.put('/:id', updateStockReturn);
+router.put('/:id', validate(updateStockReturnSchema), updateStockReturn);
 
 // Delete - admin or super-admin can delete pending returns
 router.delete('/:id', deleteStockReturn);

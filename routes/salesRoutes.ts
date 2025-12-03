@@ -10,6 +10,9 @@ import {
 } from '../controllers/salesController';
 import { authenticate, authorize } from '../middleware/auth';
 import upload from '../middleware/upload';
+import { validateWithJsonParse } from '../middleware/validateWithJsonParse';
+import { validate } from '../middleware/validate';
+import { createSaleSchema, updateSaleSchema } from '../validations/salesValidations';
 
 const router: Router = express.Router();
 
@@ -22,10 +25,10 @@ router.get('/summary', getSalesSummary);
 router.get('/:id', getSaleById);
 
 // Create - agents and admins can create sales
-router.post('/', authorize('agent', 'admin'), upload.single('image'), createSale);
+router.post('/', authorize('agent', 'admin'), upload.single('image'), validateWithJsonParse(createSaleSchema, ['items']), createSale);
 
 // Update - creator, admin, or super-admin can update
-router.put('/:id', upload.single('image'), updateSale);
+router.put('/:id', upload.single('image'), validate(updateSaleSchema), updateSale);
 
 // Confirm B2B bill - only account role
 router.post('/:id/confirm-bill', authorize('account'), upload.single('bill_image'), confirmB2BBill);

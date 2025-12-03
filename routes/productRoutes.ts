@@ -9,6 +9,8 @@ import {
 } from '../controllers/productController';
 import { authenticate, authorize } from '../middleware/auth';
 import upload from '../middleware/upload';
+import { validate } from '../middleware/validate';
+import { createProductSchema, updateProductSchema } from '../validations/productValidations';
 
 const router: Router = express.Router();
 
@@ -23,8 +25,8 @@ router.use(authenticate);
 router.get('/inventory/levels', authenticate, getInventoryLevels);
 
 // Super-admin manages products
-router.post('/', authorize('super-admin'), upload.single('image'), createProduct);
-router.put('/:id', authorize('super-admin'), upload.single('image'), updateProduct);
+router.post('/', authorize('super-admin'), upload.single('image'), validate(createProductSchema), createProduct);
+router.put('/:id', authorize('super-admin'), upload.single('image'), validate(updateProductSchema), updateProduct);
 router.delete('/:id', authorize('super-admin'), deleteProduct);
 
 export default router;

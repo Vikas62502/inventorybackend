@@ -10,6 +10,8 @@ import {
 } from '../controllers/stockRequestController';
 import { authenticate, authorize } from '../middleware/auth';
 import upload from '../middleware/upload';
+import { validateWithJsonParse } from '../middleware/validateWithJsonParse';
+import { createStockRequestSchema, updateStockRequestSchema } from '../validations/stockRequestValidations';
 
 const router: Router = express.Router();
 
@@ -21,7 +23,7 @@ router.get('/', getAllStockRequests);
 router.get('/:id', getStockRequestById);
 
 // Create - admins and agents can create requests
-router.post('/', authorize('admin', 'agent'), createStockRequest);
+router.post('/', authorize('admin', 'agent'), validateWithJsonParse(createStockRequestSchema, ['items']), createStockRequest);
 
 // Dispatch - super-admin and admins can dispatch
 router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), dispatchStockRequest);
@@ -30,7 +32,7 @@ router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('d
 router.post('/:id/confirm', upload.single('confirmation_image'), confirmStockRequest);
 
 // Update - requester can update pending requests
-router.put('/:id', updateStockRequest);
+router.put('/:id', validateWithJsonParse(updateStockRequestSchema, ['items']), updateStockRequest);
 
 // Delete - requester or super-admin can delete pending requests
 router.delete('/:id', deleteStockRequest);

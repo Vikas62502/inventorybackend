@@ -5,6 +5,8 @@ import {
   createInventoryTransaction
 } from '../controllers/inventoryTransactionController';
 import { authenticate, authorize } from '../middleware/auth';
+import { validate } from '../middleware/validate';
+import { createInventoryTransactionSchema } from '../validations/inventoryTransactionValidations';
 
 const router: Router = express.Router();
 
@@ -16,7 +18,7 @@ router.get('/', getAllInventoryTransactions);
 router.get('/:id', getInventoryTransactionById);
 
 // Create - super-admin and admin can create manual transactions
-router.post('/', authorize('super-admin', 'admin'), createInventoryTransaction);
+router.post('/', authorize('super-admin', 'admin'), validate(createInventoryTransactionSchema), createInventoryTransaction);
 
 export default router;
 
