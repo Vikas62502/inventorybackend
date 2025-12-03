@@ -1,0 +1,50 @@
+import { Sequelize } from 'sequelize';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const shouldUseSSL = (process.env.DB_SSL || '').toLowerCase() === 'true';
+const allowUnauthorized =
+  (process.env.DB_SSL_REJECT_UNAUTHORIZED || '').toLowerCase() !== 'false';
+
+const sequelize = new Sequelize(
+  process.env.DB_NAME || 'chairbord_solar',
+  process.env.DB_USER || 'postgres',
+  process.env.DB_PASSWORD || '',
+  {
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432', 10),
+    dialect: 'postgres',
+    logging: process.env.NODE_ENV === 'development' ? console.log : false,
+    pool: {
+      max: 10,
+      min: 0,
+      acquire: 30000,
+      idle: 10000
+    },
+    dialectOptions: shouldUseSSL
+      ? {
+          ssl: {
+            require: true,
+            rejectUnauthorized: allowUnauthorized
+          }
+        }
+      : {}
+  }
+);
+
+// Test database connection
+const testConnection = async (): Promise<void> => {
+  try {
+    await sequelize.authenticate();
+    console.log('✅ PostgreSQL database connected successfully');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('❌ Database connection error:', errorMessage);
+  }
+};
+
+testConnection();
+
+export default sequelize;
+

@@ -1,0 +1,249 @@
+import { Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
+import jwt, { SignOptions } from 'jsonwebtoken';
+import { User } from '../models';
+
+// Login
+export const login = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      res.status(400).json({ error: 'Username and password are required' });
+      return;
+    }
+
+    const user = await User.findOne({ where: { username } });
+
+    if (!user) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    if (!user.is_active) {
+      res.status(401).json({ error: 'Account is inactive' });
+      return;
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.password);
+
+    if (!isValidPassword) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      res.status(500).json({ error: 'JWT secret not configured' });
+      return;
+    }
+
+    const expiresIn: string = process.env.JWT_EXPIRE || '7d';
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      jwtSecret,
+      { expiresIn } as SignOptions
+    );
+
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Server error during login' });
+  }
+};
+
+// Get current user
+export const getCurrentUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['id', 'username', 'name', 'role', 'created_at', 'is_active']
+    });
+
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Forgot password - Generate reset token
+export const forgotPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      res.status(400).json({ error: 'Username is required' });
+      return;
+    }
+
+    const user = await User.findOne({ where: { username } });
+
+    if (!user) {
+      // Don't reveal if user exists or not for security
+      res.json({
+        message: 'If the username exists, a password reset token has been generated'
+      });
+      return;
+    }
+
+    if (!user.is_active) {
+      res.status(401).json({ error: 'Account is inactive. Please contact administrator' });
+      return;
+    }
+
+    // Generate reset token (expires in 1 hour)
+    const resetToken = jwt.sign(
+      { id: user.id, type: 'password_reset' },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '1h' }
+    );
+
+    // In a production system, you would send this token via email
+    // For now, we'll return it in the response (in production, remove this)
+    res.json({
+      message: 'Password reset token generated successfully',
+      resetToken: resetToken, // Remove this in production and send via email instead
+      expiresIn: '1 hour'
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Reset password - Reset password using token
+export const resetPassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { resetToken, newPassword } = req.body;
+
+    if (!resetToken || !newPassword) {
+      res.status(400).json({ error: 'Reset token and new password are required' });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: 'Password must be at least 6 characters long' });
+      return;
+    }
+
+    // Verify reset token
+    let decoded: { id: string; type?: string };
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET as string) as { id: string; type?: string };
+      
+      if (decoded.type !== 'password_reset') {
+        res.status(400).json({ error: 'Invalid reset token' });
+        return;
+      }
+    } catch (error) {
+      if (error instanceof jwt.TokenExpiredError) {
+        res.status(400).json({ error: 'Reset token has expired. Please request a new one' });
+        return;
+      }
+      res.status(400).json({ error: 'Invalid reset token' });
+      return;
+    }
+
+    const user = await User.findByPk(decoded.id);
+
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    if (!user.is_active) {
+      res.status(401).json({ error: 'Account is inactive. Please contact administrator' });
+      return;
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await user.update({ password: hashedPassword });
+
+    res.json({
+      message: 'Password reset successfully. Please login with your new password'
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Change password - For authenticated users
+export const changePassword = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: 'Current password and new password are required' });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: 'Password must be at least 6 characters long' });
+      return;
+    }
+
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isValidPassword) {
+      res.status(401).json({ error: 'Current password is incorrect' });
+      return;
+    }
+
+    // Check if new password is same as current
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      res.status(400).json({ error: 'New password must be different from current password' });
+      return;
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await user.update({ password: hashedPassword });
+
+    res.json({
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
