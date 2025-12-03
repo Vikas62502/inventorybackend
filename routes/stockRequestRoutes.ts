@@ -18,11 +18,82 @@ const router: Router = express.Router();
 // All routes require authentication
 router.use(authenticate);
 
-// Get routes
+/**
+ * @swagger
+ * /api/stock-requests:
+ *   get:
+ *     summary: Get all stock requests
+ *     tags: [Stock Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of stock requests
+ */
 router.get('/', getAllStockRequests);
+
+/**
+ * @swagger
+ * /api/stock-requests/{id}:
+ *   get:
+ *     summary: Get stock request by ID
+ *     tags: [Stock Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Stock request details
+ *       404:
+ *         description: Stock request not found
+ */
 router.get('/:id', getStockRequestById);
 
-// Create - admins and agents can create requests
+/**
+ * @swagger
+ * /api/stock-requests:
+ *   post:
+ *     summary: Create a new stock request
+ *     tags: [Stock Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - requested_from
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     product_id:
+ *                       type: string
+ *                     product_name:
+ *                       type: string
+ *                     model:
+ *                       type: string
+ *                     quantity:
+ *                       type: integer
+ *               requested_from:
+ *                 type: string
+ *               notes:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Stock request created successfully
+ *       400:
+ *         description: Validation error
+ */
 router.post('/', authorize('admin', 'agent'), validateWithJsonParse(createStockRequestSchema, ['items']), createStockRequest);
 
 // Dispatch - super-admin and admins can dispatch

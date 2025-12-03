@@ -2,6 +2,8 @@ import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerSpec } from './config/swagger';
 
 dotenv.config();
 
@@ -26,6 +28,12 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Swagger UI
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'Chairbord Solar Inventory API Documentation'
+}));
 
 // Health check route
 app.get('/health', (_: Request, res: Response) => {
@@ -61,6 +69,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+  console.log(`📚 Swagger UI: http://localhost:${PORT}/api-docs`);
 });
 
 export default app;
