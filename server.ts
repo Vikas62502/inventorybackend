@@ -4,6 +4,7 @@ import path from 'path';
 import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
+import logger from './config/logger';
 
 dotenv.config();
 
@@ -56,9 +57,33 @@ app.use((_: Request, res: Response) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// Request logging middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const start = Date.now();
+  
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    logger.info('HTTP Request', {
+      method: req.method,
+      url: req.url,
+      statusCode: res.statusCode,
+      duration: `${duration}ms`,
+      ip: req.ip,
+      userAgent: req.get('user-agent')
+    });
+  });
+  
+  next();
+});
+
 // Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Error:', err);
+  logger.error('Unhandled error', {
+    error: err.message,
+    stack: err.stack,
+    status: (err as any).status || 500
+  });
+  
   res.status((err as any).status || 500).json({
     error: err.message || 'Internal server error'
   });
@@ -66,6 +91,13 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 // Start server
 app.listen(PORT, () => {
+  logger.info('Server started', {
+    port: PORT,
+    environment: process.env.NODE_ENV || 'development',
+    apiBaseUrl: `http://localhost:${PORT}/api`,
+    swaggerUrl: `http://localhost:${PORT}/api-docs`
+  });
+  
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);

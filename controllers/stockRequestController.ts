@@ -9,6 +9,7 @@ import {
 } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import sequelize from '../config/database';
+import { logError, logInfo } from '../utils/loggerHelper';
 import { Transaction } from 'sequelize';
 
 // Helper function to generate next integer ID for stock requests
@@ -142,9 +143,10 @@ export const getAllStockRequests = async (req: Request, res: Response): Promise<
       order: [['requested_date', 'DESC']]
     });
 
+    logInfo('Get all stock requests', { count: requests.length, status: status as string || 'all' });
     res.json(requests);
   } catch (error) {
-    console.error('Get all stock requests error:', error);
+    logError('Get all stock requests error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -163,9 +165,10 @@ export const getStockRequestById = async (req: Request, res: Response): Promise<
       return;
     }
 
+    logInfo('Get stock request by ID', { requestId: id });
     res.json(request);
   } catch (error) {
-    console.error('Get stock request by ID error:', error);
+    logError('Get stock request by ID error', error, { requestId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -263,10 +266,16 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
       include: buildRequestIncludes()
     });
 
+    if (!created) {
+      res.status(500).json({ error: 'Failed to retrieve created request' });
+      return;
+    }
+
+    logInfo('Stock request created', { requestId: created.id, requestedBy: req.user.id, requestedFrom: requested_from, totalQuantity, createdBy: req.user.id });
     res.status(201).json(created);
   } catch (error: any) {
     await transaction.rollback();
-    console.error('Create stock request error:', error);
+    logError('Create stock request error', error, { requestedBy: req.user?.id, requestedFrom: req.body.requested_from });
     res.status(400).json({ error: error.message || 'Unable to create stock request' });
   }
 };
@@ -593,10 +602,17 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       include: buildRequestIncludes()
     });
 
+    if (!updated) {
+      await transaction.rollback();
+      res.status(500).json({ error: 'Failed to retrieve updated request' });
+      return;
+    }
+
+    logInfo('Stock request dispatched', { requestId: id, dispatchedBy: req.user.id, status: updated.status });
     res.json(updated);
   } catch (error: any) {
     await transaction.rollback();
-    console.error('Dispatch stock request error:', error);
+    logError('Dispatch stock request error', error, { requestId: req.params.id, dispatchedBy: req.user?.id });
     res.status(400).json({ error: error.message || 'Unable to dispatch stock request' });
   }
 };
@@ -645,9 +661,10 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
       include: buildRequestIncludes()
     });
 
+    logInfo('Stock request confirmed', { requestId: id, confirmedBy: req.user.id });
     res.json(updated);
   } catch (error) {
-    console.error('Confirm stock request error:', error);
+    logError('Confirm stock request error', error, { requestId: req.params.id, confirmedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -734,10 +751,11 @@ export const updateStockRequest = async (req: Request, res: Response): Promise<v
       include: buildRequestIncludes()
     });
 
+    logInfo('Stock request updated', { requestId: id, updatedBy: req.user.id });
     res.json(updated);
   } catch (error: any) {
     await transaction.rollback();
-    console.error('Update stock request error:', error);
+    logError('Update stock request error', error, { requestId: req.params.id, updatedBy: req.user?.id });
     res.status(400).json({ error: error.message || 'Unable to update stock request' });
   }
 };
@@ -778,9 +796,10 @@ export const deleteStockRequest = async (req: Request, res: Response): Promise<v
 
     await StockRequestItem.destroy({ where: { stock_request_id: id } });
     await request.destroy();
+    logInfo('Stock request deleted', { requestId: id, deletedBy: req.user.id });
     res.json({ message: 'Stock request deleted successfully' });
   } catch (error) {
-    console.error('Delete stock request error:', error);
+    logError('Delete stock request error', error, { requestId: req.params.id, deletedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

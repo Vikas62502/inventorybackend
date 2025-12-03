@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { InventoryTransaction, Product, User, StockRequest, Sale } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 // Get all inventory transactions
 export const getAllInventoryTransactions = async (req: Request, res: Response): Promise<void> => {
@@ -68,9 +69,10 @@ export const getAllInventoryTransactions = async (req: Request, res: Response): 
       };
     });
 
+    logInfo('Get all inventory transactions', { count: formatted.length, productId: product_id as string || 'all', transactionType: transaction_type as string || 'all' });
     res.json(formatted);
   } catch (error) {
-    console.error('Get all inventory transactions error:', error);
+    logError('Get all inventory transactions error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -122,9 +124,10 @@ export const getInventoryTransactionById = async (req: Request, res: Response): 
       related_sale: transactionAny.relatedSale || null
     };
 
+    logInfo('Get inventory transaction by ID', { transactionId: id });
     res.json(formatted);
   } catch (error) {
-    console.error('Get inventory transaction by ID error:', error);
+    logError('Get inventory transaction by ID error', error, { transactionId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -223,9 +226,10 @@ export const createInventoryTransaction = async (req: Request, res: Response): P
       related_sale: createdAny.relatedSale || null
     };
 
+    logInfo('Inventory transaction created', { transactionId: newTransaction.id, productId: product_id, transactionType: transaction_type, quantity, createdBy: req.user.id });
     res.status(201).json(formatted);
   } catch (error) {
-    console.error('Create inventory transaction error:', error);
+    logError('Create inventory transaction error', error, { productId: req.body.product_id, transactionType: req.body.transaction_type, createdBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { User } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 // Get all users
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
@@ -30,9 +31,10 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
       order: [['created_at', 'DESC']]
     });
 
+    logInfo('Get all users', { count: users.length, role: role as string || 'all', userId: req.user?.id });
     res.json(users);
   } catch (error) {
-    console.error('Get all users error:', error);
+    logError('Get all users error', error, { userId: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -61,9 +63,10 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    logInfo('Get user by ID', { userId: id, requestedBy: req.user?.id });
     res.json(user);
   } catch (error) {
-    console.error('Get user by ID error:', error);
+    logError('Get user by ID error', error, { userId: req.params.id, requestedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -135,8 +138,9 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       created_at: newUser.created_at,
       updated_at: newUser.updated_at
     });
+    logInfo('User created', { userId: newUser.id, username: newUser.username, role: newUser.role, createdBy: req.user?.id });
   } catch (error) {
-    console.error('Create user error:', error);
+    logError('Create user error', error, { username: req.body.username, createdBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -201,8 +205,9 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
       created_at: user.created_at,
       updated_at: user.updated_at
     });
+    logInfo('User updated', { userId: id, updatedBy: req.user?.id, updates: Object.keys(updates) });
   } catch (error) {
-    console.error('Update user error:', error);
+    logError('Update user error', error, { userId: req.params.id, updatedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -230,9 +235,10 @@ export const deleteUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     await user.destroy();
+    logInfo('User deleted', { userId: id, deletedBy: req.user?.id, username: user.username });
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
-    console.error('Delete user error:', error);
+    logError('Delete user error', error, { userId: req.params.id, deletedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { Transaction } from 'sequelize';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 const buildSaleIncludes = () => ([
   {
@@ -247,9 +248,10 @@ export const getAllSales = async (req: Request, res: Response): Promise<void> =>
       order: [['sale_date', 'DESC']]
     });
 
+    logInfo('Get all sales', { count: sales.length, type: type as string || 'all', paymentStatus: payment_status as string || 'all' });
     res.json(sales);
   } catch (error) {
-    console.error('Get all sales error:', error);
+    logError('Get all sales error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -268,9 +270,10 @@ export const getSaleById = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    logInfo('Get sale by ID', { saleId: id });
     res.json(sale);
   } catch (error) {
-    console.error('Get sale by ID error:', error);
+    logError('Get sale by ID error', error, { saleId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -466,10 +469,11 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       include: buildSaleIncludes()
     });
 
+    logInfo('Sale created', { saleId: saleRecord.id, type, customerName: customer_name, totalAmount: totalAmountValue, createdBy: req.user.id });
     res.status(201).json(created);
   } catch (error: any) {
     await transaction.rollback();
-    console.error('Create sale error:', error);
+    logError('Create sale error', error, { type: req.body.type, customerName: req.body.customer_name, createdBy: req.user?.id });
     res.status(400).json({ error: error.message || 'Unable to create sale' });
   }
 };
@@ -615,9 +619,10 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
       include: buildSaleIncludes()
     });
 
+    logInfo('Sale updated', { saleId: id, updatedBy: req.user.id, updates: Object.keys(updates) });
     res.json(updated);
   } catch (error) {
-    console.error('Update sale error:', error);
+    logError('Update sale error', error, { saleId: req.params.id, updatedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -669,9 +674,10 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       include: buildSaleIncludes()
     });
 
+    logInfo('B2B bill confirmed', { saleId: id, confirmedBy: req.user.id });
     res.json(updated);
   } catch (error) {
-    console.error('Confirm B2B bill error:', error);
+    logError('Confirm B2B bill error', error, { saleId: req.params.id, confirmedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -705,9 +711,10 @@ export const deleteSale = async (req: Request, res: Response): Promise<void> => 
 
     await SaleItem.destroy({ where: { sale_id: id } });
     await sale.destroy();
+    logInfo('Sale deleted', { saleId: id, customerName: sale.customer_name, deletedBy: req.user.id });
     res.json({ message: 'Sale deleted successfully' });
   } catch (error) {
-    console.error('Delete sale error:', error);
+    logError('Delete sale error', error, { saleId: req.params.id, deletedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -729,9 +736,10 @@ export const getSalesSummary = async (_req: Request, res: Response): Promise<voi
       raw: true
     });
 
+    logInfo('Get sales summary', { summaryCount: summary.length });
     res.json(summary);
   } catch (error) {
-    console.error('Get sales summary error:', error);
+    logError('Get sales summary error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { AdminInventory, User, Product } from '../models';
 import { v4 as uuidv4 } from 'uuid';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 // Get all admin inventory
 export const getAllAdminInventory = async (req: Request, res: Response): Promise<void> => {
@@ -45,9 +46,10 @@ export const getAllAdminInventory = async (req: Request, res: Response): Promise
       };
     });
 
+    logInfo('Get all admin inventory', { count: formattedInventory.length, adminId: admin_id as string || 'all' });
     res.json(formattedInventory);
   } catch (error) {
-    console.error('Get all admin inventory error:', error);
+    logError('Get all admin inventory error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -87,9 +89,10 @@ export const getAdminInventoryById = async (req: Request, res: Response): Promis
       category_name: inventoryAny.product ? (inventoryAny.product as Product).category : null
     };
 
+    logInfo('Get admin inventory by ID', { inventoryId: id });
     res.json(formatted);
   } catch (error) {
-    console.error('Get admin inventory by ID error:', error);
+    logError('Get admin inventory by ID error', error, { inventoryId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -131,9 +134,10 @@ export const getAdminInventoryByAdminId = async (req: Request, res: Response): P
       };
     });
 
+    logInfo('Get admin inventory by admin ID', { adminId, count: formatted.length });
     res.json(formatted);
   } catch (error) {
-    console.error('Get admin inventory by admin ID error:', error);
+    logError('Get admin inventory by admin ID error', error, { adminId: req.params.adminId });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -210,6 +214,7 @@ export const upsertAdminInventory = async (req: Request, res: Response): Promise
         category_name: updatedAny.product ? (updatedAny.product as Product).category : null
       };
 
+      logInfo('Admin inventory updated', { inventoryId: existing.id, adminId: admin_id, productId: product_id, quantity, updatedBy: req.user?.id });
       res.json(formatted);
     } else {
       // Create new
@@ -250,10 +255,11 @@ export const upsertAdminInventory = async (req: Request, res: Response): Promise
         category_name: createdAny.product ? (createdAny.product as Product).category : null
       };
 
+      logInfo('Admin inventory created', { inventoryId: created.id, adminId: admin_id, productId: product_id, quantity, createdBy: req.user?.id });
       res.status(201).json(formatted);
     }
   } catch (error) {
-    console.error('Upsert admin inventory error:', error);
+    logError('Upsert admin inventory error', error, { adminId: req.body.admin_id, productId: req.body.product_id, createdBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -311,9 +317,10 @@ export const updateAdminInventory = async (req: Request, res: Response): Promise
       category_name: updatedAny.product ? (updatedAny.product as Product).category : null
     };
 
+    logInfo('Admin inventory updated', { inventoryId: id, quantity, updatedBy: req.user?.id });
     res.json(formatted);
   } catch (error) {
-    console.error('Update admin inventory error:', error);
+    logError('Update admin inventory error', error, { inventoryId: req.params.id, updatedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -330,9 +337,10 @@ export const deleteAdminInventory = async (req: Request, res: Response): Promise
     }
 
     await inventory.destroy();
+    logInfo('Admin inventory deleted', { inventoryId: id, adminId: inventory.admin_id, productId: inventory.product_id, deletedBy: req.user?.id });
     res.json({ message: 'Admin inventory deleted successfully' });
   } catch (error) {
-    console.error('Delete admin inventory error:', error);
+    logError('Delete admin inventory error', error, { inventoryId: req.params.id, deletedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

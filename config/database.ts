@@ -1,5 +1,6 @@
 import { Sequelize } from 'sequelize';
 import dotenv from 'dotenv';
+import logger from './logger';
 
 dotenv.config();
 
@@ -37,9 +38,14 @@ const sequelize = new Sequelize(
 const testConnection = async (): Promise<void> => {
   try {
     await sequelize.authenticate();
+    logger.info('PostgreSQL database connected successfully');
     console.log('✅ PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    logger.error('Database connection error', {
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined
+    });
     console.error('❌ Database connection error:', errorMessage);
   }
 };

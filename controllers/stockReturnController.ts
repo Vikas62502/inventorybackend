@@ -3,6 +3,7 @@ import { StockReturn, User, Product, AdminInventory, InventoryTransaction } from
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 // Get all stock returns
 export const getAllStockReturns = async (req: Request, res: Response): Promise<void> => {
@@ -62,9 +63,10 @@ export const getAllStockReturns = async (req: Request, res: Response): Promise<v
       };
     });
 
+    logInfo('Get all stock returns', { count: formatted.length, status: status as string || 'all' });
     res.json(formatted);
   } catch (error) {
-    console.error('Get all stock returns error:', error);
+    logError('Get all stock returns error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -109,9 +111,10 @@ export const getStockReturnById = async (req: Request, res: Response): Promise<v
       processed_by_name: returnRecordAny.processor ? (returnRecordAny.processor as User).name : null
     };
 
+    logInfo('Get stock return by ID', { returnId: id });
     res.json(formatted);
   } catch (error) {
-    console.error('Get stock return by ID error:', error);
+    logError('Get stock return by ID error', error, { returnId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -198,9 +201,10 @@ export const createStockReturn = async (req: Request, res: Response): Promise<vo
       model: createdAny.product ? (createdAny.product as Product).model : null
     };
 
+    logInfo('Stock return created', { returnId: newReturn.id, adminId: req.user.id, productId: product_id, quantity });
     res.status(201).json(formatted);
   } catch (error) {
-    console.error('Create stock return error:', error);
+    logError('Create stock return error', error, { adminId: req.user?.id, productId: req.body.product_id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -332,10 +336,11 @@ export const processStockReturn = async (req: Request, res: Response): Promise<v
       processed_by_name: updatedAny.processor ? (updatedAny.processor as User).name : null
     };
 
+    logInfo('Stock return processed', { returnId: id, processedBy: req.user.id, productId: returnRecord.product_id, quantity: returnRecord.quantity });
     res.json(formatted);
   } catch (error) {
     await transaction.rollback();
-    console.error('Process stock return error:', error);
+    logError('Process stock return error', error, { returnId: req.params.id, processedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -424,9 +429,10 @@ export const updateStockReturn = async (req: Request, res: Response): Promise<vo
       model: updatedAny.product ? (updatedAny.product as Product).model : null
     };
 
+    logInfo('Stock return updated', { returnId: id, updatedBy: req.user.id, updates: Object.keys(updates) });
     res.json(formatted);
   } catch (error) {
-    console.error('Update stock return error:', error);
+    logError('Update stock return error', error, { returnId: req.params.id, updatedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -468,9 +474,10 @@ export const deleteStockReturn = async (req: Request, res: Response): Promise<vo
     }
 
     await returnRecord.destroy();
+    logInfo('Stock return deleted', { returnId: id, adminId: returnRecord.admin_id, deletedBy: req.user.id });
     res.json({ message: 'Stock return deleted successfully' });
   } catch (error) {
-    console.error('Delete stock return error:', error);
+    logError('Delete stock return error', error, { returnId: req.params.id, deletedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

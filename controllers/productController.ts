@@ -3,6 +3,7 @@ import { Product, AdminInventory } from '../models';
 import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 // Get all products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
@@ -26,9 +27,10 @@ export const getAllProducts = async (req: Request, res: Response): Promise<void>
       order: [['name', 'ASC']]
     });
 
+    logInfo('Get all products', { count: products.length, category: category as string || 'all', search: search as string || 'none' });
     res.json(products);
   } catch (error) {
-    console.error('Get all products error:', error);
+    logError('Get all products error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -45,9 +47,10 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
       return;
     }
 
+    logInfo('Get product by ID', { productId: id });
     res.json(product);
   } catch (error) {
-    console.error('Get product by ID error:', error);
+    logError('Get product by ID error', error, { productId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -94,9 +97,10 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       created_by: req.user.id
     });
 
+    logInfo('Product created', { productId: newProduct.id, name: newProduct.name, model: newProduct.model, createdBy: req.user?.id });
     res.status(201).json(newProduct);
   } catch (error) {
-    console.error('Create product error:', error);
+    logError('Create product error', error, { name: req.body.name, model: req.body.model, createdBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -174,9 +178,10 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
     const updatedProduct = await Product.findByPk(id);
 
+    logInfo('Product updated', { productId: id, updatedBy: req.user?.id, updates: Object.keys(updates) });
     res.json(updatedProduct);
   } catch (error) {
-    console.error('Update product error:', error);
+    logError('Update product error', error, { productId: req.params.id, updatedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -203,9 +208,10 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     await product.destroy();
+    logInfo('Product deleted', { productId: id, name: product.name, deletedBy: req.user?.id });
     res.json({ message: 'Product deleted successfully' });
   } catch (error) {
-    console.error('Delete product error:', error);
+    logError('Delete product error', error, { productId: req.params.id, deletedBy: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -244,9 +250,10 @@ export const getInventoryLevels = async (_req: Request, res: Response): Promise<
       raw: true
     });
 
+    logInfo('Get inventory levels', { count: inventory.length });
     res.json(inventory);
   } catch (error) {
-    console.error('Get inventory levels error:', error);
+    logError('Get inventory levels error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };

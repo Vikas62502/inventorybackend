@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { User } from '../models';
+import { logError } from '../utils/loggerHelper';
 
 // Login
 export const login = async (req: Request, res: Response): Promise<void> => {
@@ -56,7 +57,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logError('Login error', error, { username: req.body.username });
     res.status(500).json({ error: 'Server error during login' });
   }
 };
@@ -80,7 +81,7 @@ export const getCurrentUser = async (req: Request, res: Response): Promise<void>
 
     res.json(user);
   } catch (error) {
-    console.error('Get current user error:', error);
+    logError('Get current user error', error, { userId: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -125,7 +126,7 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
       expiresIn: '1 hour'
     });
   } catch (error) {
-    console.error('Forgot password error:', error);
+    logError('Forgot password error', error, { username: req.body.username });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -185,7 +186,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       message: 'Password reset successfully. Please login with your new password'
     });
   } catch (error) {
-    console.error('Reset password error:', error);
+    logError('Reset password error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -242,7 +243,7 @@ export const changePassword = async (req: Request, res: Response): Promise<void>
       message: 'Password changed successfully'
     });
   } catch (error) {
-    console.error('Change password error:', error);
+    logError('Change password error', error, { userId: req.user?.id });
     res.status(500).json({ error: 'Server error' });
   }
 };

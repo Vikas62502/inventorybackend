@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Product } from '../models';
 import { Op, fn, col } from 'sequelize';
+import { logError, logInfo } from '../utils/loggerHelper';
 
 // Get all categories
 export const getAllCategories = async (_req: Request, res: Response): Promise<void> => {
@@ -16,11 +17,13 @@ export const getAllCategories = async (_req: Request, res: Response): Promise<vo
       raw: true
     });
 
-    res.json(categories.map((cat: any) => ({
+    const result = categories.map((cat: any) => ({
       name: cat.name
-    })));
+    }));
+    logInfo('Get all categories', { count: result.length });
+    res.json(result);
   } catch (error) {
-    console.error('Get all categories error:', error);
+    logError('Get all categories error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -41,9 +44,10 @@ export const getCategoryById = async (req: Request, res: Response): Promise<void
       return;
     }
 
+    logInfo('Get category by ID', { categoryId: id });
     res.json({ name: id });
   } catch (error) {
-    console.error('Get category by ID error:', error);
+    logError('Get category by ID error', error, { categoryId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -55,7 +59,7 @@ export const createCategory = async (_req: Request, res: Response): Promise<void
       error: 'Categories are derived from products. Assign the category when creating or updating a product.'
     });
   } catch (error) {
-    console.error('Create category error:', error);
+    logError('Create category error', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -78,7 +82,7 @@ export const updateCategory = async (req: Request, res: Response): Promise<void>
       error: 'Categories are read-only. Update product records to rename or reassign categories.'
     });
   } catch (error) {
-    console.error('Update category error:', error);
+    logError('Update category error', error, { categoryId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -101,7 +105,7 @@ export const deleteCategory = async (req: Request, res: Response): Promise<void>
       error: 'Categories cannot be deleted independently. Update or delete the associated products instead.'
     });
   } catch (error) {
-    console.error('Delete category error:', error);
+    logError('Delete category error', error, { categoryId: req.params.id });
     res.status(500).json({ error: 'Server error' });
   }
 };
