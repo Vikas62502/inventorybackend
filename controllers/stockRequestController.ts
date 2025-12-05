@@ -10,7 +10,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
-import { Transaction } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 
 // Helper function to generate next integer ID for stock requests
 const getNextStockRequestId = async (transaction: Transaction): Promise<string> => {
@@ -119,23 +119,66 @@ const attachStockRequestItems = async (stockRequestId: string, items: Normalized
   }
 };
 
-// Get all stock requests
+// Get all stock requests (with role-based filtering)
 export const getAllStockRequests = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
     const { status, requested_by_id, requested_by, requested_from } = req.query;
-    const where: any = {};
+    const andConditions: any[] = [];
+
+    const userRole = req.user.role;
+    const userId = req.user.id;
+
+    if (userRole === 'agent') {
+      // Agents only see their own requests
+      andConditions.push({ requested_by_id: userId });
+    } else if (userRole === 'admin') {
+      // Admins see:
+      // 1. Requests from their agents
+      // 2. Their own requests (to super-admin or other admins)
+      // 3. Incoming admin-to-admin transfers (requested_from = admin's ID)
+      const agents = await User.findAll({
+        where: {
+          role: 'agent',
+          created_by_id: userId
+        },
+        attributes: ['id']
+      });
+      const agentIds = agents.map((agent) => agent.id);
+
+      const roleCondition: any = {
+        [Op.or]: [
+          { requested_by_id: { [Op.in]: agentIds } },
+          { requested_by_id: userId },
+          { requested_from: userId }
+        ]
+      };
+
+      andConditions.push(roleCondition);
+    } else if (userRole === 'super-admin') {
+      // Super-admin sees requests from admins (requested_from = 'super-admin')
+      andConditions.push({ requested_from: 'super-admin' });
+    } else if (userRole === 'account') {
+      // Account role sees all requests (no base filter)
+    }
 
     if (status) {
-      where.status = status;
+      andConditions.push({ status });
     }
 
     if (requested_by_id || requested_by) {
-      where.requested_by_id = requested_by_id || requested_by;
+      andConditions.push({ requested_by_id: requested_by_id || requested_by });
     }
 
     if (requested_from) {
-      where.requested_from = requested_from;
+      andConditions.push({ requested_from });
     }
+
+    const where = andConditions.length > 0 ? { [Op.and]: andConditions } : {};
 
     const requests = await StockRequest.findAll({
       where,

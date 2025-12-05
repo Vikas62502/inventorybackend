@@ -5,14 +5,41 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 
-// Get all users
+// Get all users (with role-based filtering for agents)
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
     const { role } = req.query;
     const where: any = {};
-    
-    if (role) {
-      where.role = role;
+
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const userRole = req.user.role;
+    const userId = req.user.id;
+
+    // Role-based filtering primarily focused on agents
+    if (userRole === 'admin') {
+      // Admins only see their own agents
+      where.role = 'agent';
+      where.created_by_id = userId;
+    } else if (userRole === 'account') {
+      // Account role sees all agents by default
+      if (role) {
+        where.role = role;
+      } else {
+        where.role = 'agent';
+      }
+    } else if (userRole === 'super-admin') {
+      // Super-admin can see any role, optionally filtered by query
+      if (role) {
+        where.role = role;
+      }
+    } else {
+      // Agents and other roles are not allowed here
+      res.status(403).json({ error: 'Access denied' });
+      return;
     }
 
     const users = await User.findAll({

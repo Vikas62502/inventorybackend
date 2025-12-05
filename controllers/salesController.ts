@@ -122,6 +122,52 @@ const normalizeSaleItems = async (rawItems: any, transaction: Transaction): Prom
   return normalized;
 };
 
+/**
+ * Build base WHERE conditions for sales based on the authenticated user's role.
+ *
+ * - Agent: only their own sales
+ * - Admin: their own sales + sales from agents they created
+ * - Account / Super-Admin: all sales
+ */
+const buildSalesRoleConditions = async (req: Request): Promise<any[]> => {
+  const conditions: any[] = [];
+
+  if (!req.user) {
+    return conditions;
+  }
+
+  const userRole = req.user.role;
+  const userId = req.user.id;
+
+  if (userRole === 'agent') {
+    // Agents only see their own sales
+    conditions.push({ created_by: userId });
+  } else if (userRole === 'admin') {
+    // Admins see:
+    // - Their own sales
+    // - Sales from agents they created
+    const agents = await User.findAll({
+      where: {
+        role: 'agent',
+        created_by_id: userId
+      },
+      attributes: ['id']
+    });
+
+    const agentIds = agents.map((agent) => agent.id);
+    const ids = [userId, ...agentIds];
+
+    conditions.push({
+      created_by: {
+        [Op.in]: ids
+      }
+    });
+  }
+
+  // Account and Super-Admin: no additional base filter (see everything)
+  return conditions;
+};
+
 const createAddressIfNeeded = async (idParam: string | undefined, payload: any, transaction: Transaction): Promise<string | null> => {
   if (idParam) {
     return idParam;
@@ -214,33 +260,43 @@ const buildProductSummary = (items: NormalizedSaleItem[]): string => items
   .map((item) => `${item.product_name} (${item.quantity})`)
   .join(', ');
 
-// Get all sales
+// Get all sales (with role-based filtering)
 export const getAllSales = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
     const { type, payment_status, customer_name, start_date, end_date } = req.query;
-    const where: any = {};
+    const andConditions: any[] = await buildSalesRoleConditions(req);
 
     if (type) {
-      where.type = type;
+      andConditions.push({ type });
     }
 
     if (payment_status) {
-      where.payment_status = payment_status;
+      andConditions.push({ payment_status });
     }
 
     if (customer_name) {
-      where.customer_name = { [Op.iLike]: `%${customer_name}%` };
+      andConditions.push({
+        customer_name: { [Op.iLike]: `%${customer_name}%` }
+      });
     }
 
     if (start_date || end_date) {
-      where.sale_date = {};
+      const dateCond: any = {};
       if (start_date) {
-        where.sale_date[Op.gte] = new Date(start_date as string);
+        dateCond[Op.gte] = new Date(start_date as string);
       }
       if (end_date) {
-        where.sale_date[Op.lte] = new Date(end_date as string);
+        dateCond[Op.lte] = new Date(end_date as string);
       }
+      andConditions.push({ sale_date: dateCond });
     }
+
+    const where = andConditions.length > 0 ? { [Op.and]: andConditions } : {};
 
     const sales = await Sale.findAll({
       where,
@@ -720,8 +776,16 @@ export const deleteSale = async (req: Request, res: Response): Promise<void> => 
 };
 
 // Get sales summary
-export const getSalesSummary = async (_req: Request, res: Response): Promise<void> => {
+export const getSalesSummary = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const andConditions: any[] = await buildSalesRoleConditions(req);
+    const where = andConditions.length > 0 ? { [Op.and]: andConditions } : undefined;
+
     const summary = await Sale.findAll({
       attributes: [
         'type',
@@ -731,6 +795,7 @@ export const getSalesSummary = async (_req: Request, res: Response): Promise<voi
         [sequelize.fn('SUM', sequelize.col('total_amount')), 'total_revenue'],
         [sequelize.fn('SUM', sequelize.col('subtotal')), 'total_subtotal']
       ],
+      where,
       group: ['type', 'payment_status'],
       order: [['type', 'ASC'], ['payment_status', 'ASC']],
       raw: true

@@ -16,8 +16,45 @@ const router: Router = express.Router();
 // All routes require authentication
 router.use(authenticate);
 
-// Get routes
+/**
+ * @swagger
+ * /api/stock-returns:
+ *   get:
+ *     summary: Get stock returns (filtered by role)
+ *     tags: [Stock Returns]
+ *     security:
+ *       - bearerAuth: []
+ *     description: >
+ *       Results are filtered on the server based on the authenticated user's role:
+ *       - Admins see only their own returns (admin_id = current admin).
+ *       - Super-admin and Account roles can see all returns.
+ *       - Agents are not allowed to list stock returns.
+ *     responses:
+ *       200:
+ *         description: List of stock returns
+ */
 router.get('/', getAllStockReturns);
+
+/**
+ * @swagger
+ * /api/stock-returns/{id}:
+ *   get:
+ *     summary: Get stock return by ID
+ *     tags: [Stock Returns]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Stock return details
+ *       404:
+ *         description: Stock return not found
+ */
 router.get('/:id', getStockReturnById);
 
 // Create - admins can create returns

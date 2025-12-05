@@ -5,11 +5,31 @@ import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
 
-// Get all stock returns
+// Get all stock returns (with role-based filtering)
 export const getAllStockReturns = async (req: Request, res: Response): Promise<void> => {
   try {
     const { admin_id, status, start_date, end_date } = req.query;
     const where: any = {};
+
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const userRole = req.user.role;
+    const userId = req.user.id;
+
+    if (userRole === 'agent') {
+      // Agents currently do not create returns; deny listing for now
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    if (userRole === 'admin') {
+      // Admins see only their own returns
+      where.admin_id = userId;
+    }
+    // Super-admin and account roles see all returns (optionally filtered by query params)
 
     if (admin_id) {
       where.admin_id = admin_id;

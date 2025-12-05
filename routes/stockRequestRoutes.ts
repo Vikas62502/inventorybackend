@@ -22,10 +22,17 @@ router.use(authenticate);
  * @swagger
  * /api/stock-requests:
  *   get:
- *     summary: Get all stock requests
+ *     summary: Get all stock requests (filtered by role)
  *     tags: [Stock Requests]
  *     security:
  *       - bearerAuth: []
+ *     description: >
+ *       Results are filtered on the server based on the authenticated user's role:
+ *       - Agents see only their own requests (requested_by_id = current user).
+ *       - Admins see requests from their agents, their own requests to super-admin or other admins,
+ *         and incoming admin-to-admin transfers.
+ *       - Super-admin sees requests coming to super-admin.
+ *       - Account role can see all requests.
  *     responses:
  *       200:
  *         description: List of stock requests

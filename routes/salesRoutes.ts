@@ -23,10 +23,15 @@ router.use(authenticate);
  * @swagger
  * /api/sales:
  *   get:
- *     summary: Get all sales
+ *     summary: Get all sales (filtered by role)
  *     tags: [Sales]
  *     security:
  *       - bearerAuth: []
+ *     description: >
+ *       Results are filtered on the server based on the authenticated user's role:
+ *       - Agents see only their own sales (created_by = current user).
+ *       - Admins see their own sales and sales from agents they created.
+ *       - Account and Super-Admin roles see all sales.
  *     responses:
  *       200:
  *         description: List of sales
@@ -37,10 +42,14 @@ router.get('/', getAllSales);
  * @swagger
  * /api/sales/summary:
  *   get:
- *     summary: Get sales summary
+ *     summary: Get sales summary (respecting role-based filters)
  *     tags: [Sales]
  *     security:
  *       - bearerAuth: []
+ *     description: >
+ *       Aggregated sales summary. The underlying data is filtered using the same role-based
+ *       rules as GET /api/sales, so agents and admins only see summaries for sales they are
+ *       allowed to access.
  *     responses:
  *       200:
  *         description: Sales summary

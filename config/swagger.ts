@@ -12,7 +12,7 @@ const swaggerDefinition = {
   },
   servers: [
     {
-      url: `http://localhost:${process.env.PORT || 3000}/api`,
+      url: `http://localhost:${process.env.PORT || 3001}/api`,
       description: 'Development server'
     },
     {

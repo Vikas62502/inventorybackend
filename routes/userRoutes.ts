@@ -19,10 +19,15 @@ router.use(authenticate);
  * @swagger
  * /api/users:
  *   get:
- *     summary: Get all users
+ *     summary: Get users (role-aware)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
+ *     description: >
+ *       Behaviour depends on the authenticated user's role:
+ *       - Super-admin: can fetch any users, optionally filtered by role query param.
+ *       - Admin: only sees their own agents (users with role=agent and created_by_id=current admin).
+ *       - Account: sees all agents by default, or all users if a role query param is provided.
  *     responses:
  *       200:
  *         description: List of users
@@ -37,7 +42,7 @@ router.use(authenticate);
  *       403:
  *         description: Forbidden
  */
-router.get('/', authorize('super-admin', 'admin'), getAllUsers);
+router.get('/', authorize('super-admin', 'admin', 'account'), getAllUsers);
 
 /**
  * @swagger
@@ -63,7 +68,7 @@ router.get('/', authorize('super-admin', 'admin'), getAllUsers);
  *       404:
  *         description: User not found
  */
-router.get('/:id', authorize('super-admin', 'admin'), getUserById);
+router.get('/:id', authorize('super-admin', 'admin', 'account'), getUserById);
 
 /**
  * @swagger
