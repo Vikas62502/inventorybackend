@@ -100,3 +100,4 @@ The following environment variables can be used:
 - Triggers are set up for automatic `updated_at` timestamp updates
 - Views are created for reporting and analytics
 
+

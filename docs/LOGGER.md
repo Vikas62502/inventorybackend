@@ -94,3 +94,4 @@ When `LOKI_HOST_IP` is configured, logs are automatically sent to Loki with:
 - Job label: `Solar_Inventory` (or custom `LOKI_JOB_NAME`)
 - JSON format for structured logging
 
+

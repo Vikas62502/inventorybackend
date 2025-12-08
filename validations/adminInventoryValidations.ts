@@ -10,3 +10,4 @@ export const updateAdminInventorySchema = z.object({
   quantity: z.number().int().min(0, 'Quantity cannot be negative')
 });
 
+
