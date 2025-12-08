@@ -4,6 +4,8 @@ import LokiTransport from 'winston-loki';
 const customJobName = process.env.LOKI_JOB_NAME || 'Solar_Inventory';
 const lokiHostip = process.env.LOKI_HOST_IP;
 
+
+
 // Safe stringify formatter for Loki
 const safeStringify = format((info: any) => {
   if (typeof info.message === 'object') {
