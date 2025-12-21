@@ -15,6 +15,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const user = await User.findOne({ where: { username } });
+    console.log(user, "<-- admin");
 
     if (!user) {
       res.status(401).json({ error: 'Invalid credentials' });
@@ -150,7 +151,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
     let decoded: { id: string; type?: string };
     try {
       decoded = jwt.verify(resetToken, process.env.JWT_SECRET as string) as { id: string; type?: string };
-      
+
       if (decoded.type !== 'password_reset') {
         res.status(400).json({ error: 'Invalid reset token' });
         return;

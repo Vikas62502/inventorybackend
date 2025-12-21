@@ -25,3 +25,4 @@ router.delete('/:id', authorize('super-admin'), deleteCategory);
 export default router;
 
 
+

@@ -31,3 +31,4 @@ This directory contains CI/CD workflows for the Chairbord Solar Inventory Backen
 See [docs/GITHUB_ACTIONS.md](../docs/GITHUB_ACTIONS.md) for detailed documentation.
 
 
+

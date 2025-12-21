@@ -95,3 +95,4 @@ When `LOKI_HOST_IP` is configured, logs are automatically sent to Loki with:
 - JSON format for structured logging
 
 
+

@@ -15,6 +15,9 @@ RUN npm install --legacy-peer-deps
 # Copy all project files
 COPY . .
 
+# Ensure .env exists in the image (prevents COPY error when .env is absent locally)
+RUN if [ -f .env ]; then echo ".env found"; else touch .env; fi
+
 # Build the TypeScript application
 RUN npm run build
 
@@ -31,6 +34,7 @@ ENV NODE_ENV=production
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.env ./
 
 # Create uploads directory if needed
 RUN mkdir -p uploads

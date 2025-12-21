@@ -23,7 +23,20 @@ const app: Application = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3050', 'http://localhost:3001', 'http://43.204.133.228:3051', 'http://43.204.133.228:3050'];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -60,7 +73,7 @@ app.use((_: Request, res: Response) => {
 // Request logging middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
-  
+
   res.on('finish', () => {
     const duration = Date.now() - start;
     logger.info('HTTP Request', {
@@ -72,7 +85,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
       userAgent: req.get('user-agent')
     });
   });
-  
+
   next();
 });
 
@@ -83,7 +96,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     stack: err.stack,
     status: (err as any).status || 500
   });
-  
+
   res.status((err as any).status || 500).json({
     error: err.message || 'Internal server error'
   });
@@ -97,7 +110,7 @@ app.listen(PORT, () => {
     apiBaseUrl: `http://localhost:${PORT}/api`,
     swaggerUrl: `http://localhost:${PORT}/api-docs`
   });
-  
+
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
