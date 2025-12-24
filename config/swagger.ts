@@ -1,4 +1,5 @@
 import swaggerJsdoc from 'swagger-jsdoc';
+import path from 'path';
 
 const swaggerDefinition = {
   openapi: '3.0.0',
@@ -12,11 +13,19 @@ const swaggerDefinition = {
   },
   servers: [
     {
-      url: `http://localhost:${process.env.PORT || 3000}/api`,
-      description: 'Development server'
+      url: `http://api.inventory.chairbordsolar.com`,
+      description: 'Live server with domain name'
+    },
+    {
+      url: `http://43.204.133.228:${3050}`,
+      description: 'Live server for testing purposes'
     },
     {
       url: `http://localhost:${3050}`,
+      description: 'Development server'
+    },
+    {
+      url: `http://localhost:${process.env.PORT || 3000}/api`,
       description: 'Development server'
     },
     {
@@ -121,9 +130,16 @@ const swaggerDefinition = {
   ]
 };
 
+const apiGlobs = [
+  path.resolve(__dirname, '../routes/*.ts'),
+  path.resolve(__dirname, '../controllers/*.ts'),
+  path.resolve(__dirname, '../routes/*.js'),
+  path.resolve(__dirname, '../controllers/*.js')
+];
+
 const options = {
   definition: swaggerDefinition,
-  apis: ['./routes/*.ts', './controllers/*.ts'] // Path to the API files
+  apis: apiGlobs // Path to the API files (supports TS in dev and transpiled JS in Docker)
 };
 
 export const swaggerSpec = swaggerJsdoc(options);
