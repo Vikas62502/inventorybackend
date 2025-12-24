@@ -151,7 +151,7 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       role,
       is_active: isActive,
       created_by_id: req.user.id,
-      created_by_name: req.user.name
+      created_by_name: (req.user as any).name || req.user.username
     });
 
     res.status(201).json({

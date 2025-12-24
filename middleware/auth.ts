@@ -24,7 +24,15 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       return;
     }
 
-    req.user = user;
+    // Assign user with proper typing for inventory system
+    req.user = {
+      id: user.id,
+      username: user.username,
+      password: '', // Not needed in request
+      name: user.name,
+      role: user.role as 'super-admin' | 'admin' | 'agent' | 'account',
+      is_active: user.is_active
+    };
     next();
   } catch (error) {
     res.status(401).json({ error: 'Invalid token.' });

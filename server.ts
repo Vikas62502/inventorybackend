@@ -8,7 +8,7 @@ import logger from './config/logger';
 
 dotenv.config();
 
-// Import routes
+// Import routes (Inventory System)
 import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
 import categoryRoutes from './routes/categoryRoutes';
@@ -19,11 +19,21 @@ import salesRoutes from './routes/salesRoutes';
 import inventoryTransactionRoutes from './routes/inventoryTransactionRoutes';
 import stockReturnRoutes from './routes/stockReturnRoutes';
 
+// Import routes (Quotation System)
+import quotationAuthRoutes from './routes/quotationAuthRoutes';
+import dealerRoutes from './routes/dealerRoutes';
+import customerRoutes from './routes/customerRoutes';
+import quotationRoutes from './routes/quotationRoutes';
+import visitRoutes from './routes/visitRoutes';
+import visitorRoutes from './routes/visitorRoutes';
+import adminRoutes from './routes/adminRoutes';
+import configRoutes from './routes/configRoutes';
+
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3050', 'http://localhost:3001', 'http://43.204.133.228:3051', 'http://43.204.133.228:3050'];
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:3050', 'http://localhost:3001', 'http://43.204.133.228:3051', 'http://43.204.133.228:3050', 'http://localhost:3002'];
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -54,7 +64,7 @@ app.get('/health', (_: Request, res: Response) => {
   res.json({ status: 'OK', message: 'Server is running' });
 });
 
-// API Routes
+// API Routes (Inventory System)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/categories', categoryRoutes);
@@ -64,6 +74,16 @@ app.use('/api/stock-requests', stockRequestRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/inventory-transactions', inventoryTransactionRoutes);
 app.use('/api/stock-returns', stockReturnRoutes);
+
+// API Routes (Quotation System)
+app.use('/api/auth', quotationAuthRoutes); // Overlaps with inventory auth - can be merged
+app.use('/api/dealers', dealerRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/quotations', quotationRoutes);
+app.use('/api/visits', visitRoutes);
+app.use('/api/visitors', visitorRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/config', configRoutes);
 
 // 404 handler
 app.use((_: Request, res: Response) => {
