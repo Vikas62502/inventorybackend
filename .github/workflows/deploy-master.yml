@@ -22,7 +22,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cbpl-backend:master
+          IMAGE_NAME=vikasyadav30/cbplsolarinventory:master
           docker build --build-arg NODE_ENV=master -t $IMAGE_NAME .
 
       - name: Login to Docker Hub
@@ -30,7 +30,7 @@ jobs:
 
       - name: Push image to Docker Hub
         run: |
-          IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cbpl-backend:master
+          IMAGE_NAME=vikasyadav30/cbplsolarinventory:master
           docker push $IMAGE_NAME
 
       - name: ✅ Done
@@ -79,7 +79,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cbpl-backend:master
+            IMAGE_NAME=vikasyadav30/cbplsolarinventory:master
             PORTS="-p 3001:3001"
             CONTAINER_NAME="cbpl-live"
             DEPLOY_PATH=${{ secrets.EC2_DEPLOY_PATH || '/opt/chairbord-api' }}
