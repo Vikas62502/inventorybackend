@@ -12,7 +12,8 @@
     "migrate:undo": "sequelize-cli db:migrate:undo",
     "migrate:undo:all": "sequelize-cli db:migrate:undo:all",
     "init:superadmin": "ts-node scripts/initSuperAdmin.ts",
-    "init:quotation": "ts-node scripts/initQuotationAdmin.ts"
+    "init:quotation": "ts-node scripts/initQuotationAdmin.ts",
+    "check:admin": "ts-node scripts/checkAndFixAdmin.ts"
   },
   "keywords": [
     "inventory",

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { Visit, VisitAssignment, Quotation, Visitor } from '../models/index-quotation';
+import { Op } from 'sequelize';
+import { Visit, VisitAssignment, Quotation, Visitor, Customer } from '../models/index-quotation';
 import { logError, logInfo } from '../utils/loggerHelper';
 
 // Create visit
@@ -35,8 +36,8 @@ export const createVisit = async (req: Request, res: Response): Promise<void> =>
       visitDate,
       visitTime,
       location,
-      locationLink,
-      notes,
+      locationLink: locationLink || null, // Allow null if not provided
+      notes: notes || null,
       status: 'pending'
     });
 
@@ -55,22 +56,61 @@ export const createVisit = async (req: Request, res: Response): Promise<void> =>
       }
     }
 
-    // Get visit with assignments
+    // Get visit with assignments and visitor details
     const visitWithAssignments = await Visit.findByPk(visit.id, {
-      include: [{ model: VisitAssignment, as: 'assignments' }]
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
+            }
+          ]
+        }
+      ]
     });
 
     logInfo('Visit created', { visitId: visit.id, quotationId, dealerId: req.dealer.id });
 
     const visitAny = visitWithAssignments as any;
+    const assignments = visitAny.assignments || [];
+    
+    // Get full visitor details
+    const formattedVisitors = assignments.map((a: any) => {
+      const visitor = a.visitor;
+      if (visitor) {
+        return {
+          visitorId: visitor.id,
+          username: visitor.username,
+          firstName: visitor.firstName,
+          lastName: visitor.lastName,
+          fullName: `${visitor.firstName} ${visitor.lastName}`,
+          email: visitor.email,
+          mobile: visitor.mobile,
+          employeeId: visitor.employeeId,
+          isActive: visitor.isActive
+        };
+      }
+      // Fallback to assignment data if visitor not loaded
+      return {
+        visitorId: a.visitorId,
+        visitorName: a.visitorName,
+        fullName: a.visitorName
+      };
+    });
+
+    const visitData = visitAny.toJSON();
+    delete visitData.assignments; // Remove raw assignments, use formatted visitors instead
+
     res.status(201).json({
       success: true,
       data: {
-        ...visitAny.toJSON(),
-        visitors: (visitAny.assignments || []).map((a: any) => ({
-          visitorId: a.visitorId,
-          visitorName: a.visitorName
-        }))
+        ...visitData,
+        visitors: formattedVisitors
       }
     });
   } catch (error) {
@@ -82,8 +122,8 @@ export const createVisit = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// Get visits for quotation
-export const getVisitsForQuotation = async (req: Request, res: Response): Promise<void> => {
+// Get all visits for dealer (visit schedule)
+export const getAllVisits = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!req.dealer) {
       res.status(401).json({
@@ -93,10 +133,214 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
       return;
     }
 
-    const { quotationId } = req.params;
-    const quotation = await Quotation.findOne({
-      where: { id: quotationId, dealerId: req.dealer.id }
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const offset = (page - 1) * limit;
+    const status = req.query.status as string;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const search = req.query.search as string;
+
+    const where: any = { dealerId: req.dealer.id };
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (startDate || endDate) {
+      where.visitDate = {};
+      if (startDate) where.visitDate[Op.gte] = new Date(startDate);
+      if (endDate) where.visitDate[Op.lte] = new Date(endDate);
+    }
+
+    const visits = await Visit.findAndCountAll({
+      where,
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          required: false,
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
+            }
+          ]
+        },
+        {
+          model: Quotation,
+          as: 'quotation',
+          include: [
+            {
+              model: Customer,
+              as: 'customer',
+              attributes: ['id', 'firstName', 'lastName', 'mobile', 'email']
+            }
+          ],
+          attributes: ['id', 'systemType', 'finalAmount']
+        }
+      ],
+      limit,
+      offset,
+      order: [['visitDate', 'ASC'], ['visitTime', 'ASC']]
     });
+
+    // Filter by search if provided (search in customer name, location, quotation ID)
+    let filteredVisits = visits.rows;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredVisits = visits.rows.filter(v => {
+        const vAny = v as any;
+        const quotation = vAny.quotation;
+        const customer = quotation?.customer;
+        return (
+          v.location.toLowerCase().includes(searchLower) ||
+          quotation?.id?.toLowerCase().includes(searchLower) ||
+          customer?.firstName?.toLowerCase().includes(searchLower) ||
+          customer?.lastName?.toLowerCase().includes(searchLower) ||
+          `${customer?.firstName} ${customer?.lastName}`.toLowerCase().includes(searchLower)
+        );
+      });
+    }
+
+    const formattedVisits = filteredVisits.map(v => {
+      const vAny = v as any;
+      const quotation = vAny.quotation;
+      const customer = quotation?.customer;
+      const assignments = vAny.assignments || [];
+
+      // Get full visitor details
+      const visitors = assignments.map((a: any) => {
+        const visitor = a.visitor;
+        if (visitor) {
+          return {
+            visitorId: visitor.id,
+            username: visitor.username,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            fullName: `${visitor.firstName} ${visitor.lastName}`,
+            email: visitor.email,
+            mobile: visitor.mobile,
+            employeeId: visitor.employeeId,
+            isActive: visitor.isActive
+          };
+        }
+        // Fallback to assignment data if visitor not loaded
+        return {
+          visitorId: a.visitorId,
+          visitorName: a.visitorName,
+          fullName: a.visitorName
+        };
+      });
+
+      return {
+        id: v.id,
+        quotation: quotation ? {
+          id: quotation.id,
+          systemType: quotation.systemType,
+          finalAmount: Number(quotation.finalAmount)
+        } : null,
+        customer: customer ? {
+          id: customer.id,
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          fullName: `${customer.firstName} ${customer.lastName}`,
+          mobile: customer.mobile,
+          email: customer.email
+        } : null,
+        visitDate: v.visitDate,
+        visitTime: v.visitTime,
+        location: v.location,
+        locationLink: v.locationLink,
+        notes: v.notes,
+        status: v.status,
+        length: v.length,
+        width: v.width,
+        height: v.height,
+        images: v.images,
+        feedback: v.feedback,
+        rejectionReason: v.rejectionReason,
+        visitors: visitors,
+        createdAt: v.createdAt,
+        updatedAt: v.updatedAt
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        visits: formattedVisits,
+        pagination: {
+          page,
+          limit,
+          total: search ? filteredVisits.length : visits.count,
+          totalPages: Math.ceil((search ? filteredVisits.length : visits.count) / limit),
+          hasNext: page < Math.ceil((search ? filteredVisits.length : visits.count) / limit),
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    logError('Get all visits error', error, { dealerId: req.dealer?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Get visits for quotation
+export const getVisitsForQuotation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer && !req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    
+    // Check permissions
+    let quotation;
+    if (req.visitor) {
+      // Visitors can only see visits for quotations from their assigned visits
+      const visitorAssignments = await VisitAssignment.findAll({
+        where: { visitorId: req.visitor.id },
+        attributes: ['visitId']
+      });
+      const visitIds = visitorAssignments.map(a => a.visitId);
+      if (visitIds.length > 0) {
+        const visits = await Visit.findAll({
+          where: { id: visitIds, quotationId },
+          attributes: ['quotationId']
+        });
+        if (visits.length === 0) {
+          res.status(403).json({
+            success: false,
+            error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+          });
+          return;
+        }
+      } else {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        });
+        return;
+      }
+      quotation = await Quotation.findOne({ where: { id: quotationId } });
+    } else if (req.dealer) {
+      // Dealers can see their own quotations, admins can see all
+      const where: any = { id: quotationId };
+      if (req.dealer.role !== 'admin') {
+        where.dealerId = req.dealer.id;
+      }
+      quotation = await Quotation.findOne({ where });
+    }
 
     if (!quotation) {
       res.status(404).json({
@@ -108,7 +352,21 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
 
     const visits = await Visit.findAll({
       where: { quotationId },
-      include: [{ model: VisitAssignment, as: 'assignments' }],
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          required: false,
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
+            }
+          ]
+        }
+      ],
       order: [['visitDate', 'DESC'], ['visitTime', 'DESC']]
     });
 
@@ -117,18 +375,49 @@ export const getVisitsForQuotation = async (req: Request, res: Response): Promis
       data: {
         visits: visits.map(v => {
           const vAny = v as any;
+          const assignments = vAny.assignments || [];
+          
+          // Get full visitor details from the included Visitor model
+          const visitors = assignments.map((a: any) => {
+            const visitor = a.visitor;
+            if (visitor) {
+              return {
+                visitorId: visitor.id,
+                username: visitor.username,
+                firstName: visitor.firstName,
+                lastName: visitor.lastName,
+                fullName: `${visitor.firstName} ${visitor.lastName}`,
+                email: visitor.email,
+                mobile: visitor.mobile,
+                employeeId: visitor.employeeId,
+                isActive: visitor.isActive
+              };
+            }
+            // Fallback to assignment data if visitor not loaded
+            return {
+              visitorId: a.visitorId,
+              visitorName: a.visitorName,
+              fullName: a.visitorName
+            };
+          });
+
           return {
             id: v.id,
             visitDate: v.visitDate,
             visitTime: v.visitTime,
             location: v.location,
             locationLink: v.locationLink,
+            notes: v.notes,
             status: v.status,
-            visitors: (vAny.assignments || []).map((a: any) => ({
-              visitorId: a.visitorId,
-              visitorName: a.visitorName
-            })),
-            createdAt: v.createdAt
+            length: v.length,
+            width: v.width,
+            height: v.height,
+            images: v.images,
+            feedback: v.feedback,
+            rejectionReason: v.rejectionReason,
+            visitors: visitors,
+            createdAt: v.createdAt,
+            updatedAt: v.updatedAt
           };
         })
       }
@@ -494,4 +783,5 @@ export const deleteVisit = async (req: Request, res: Response): Promise<void> =>
     });
   }
 };
+
 

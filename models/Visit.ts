@@ -8,7 +8,7 @@ interface VisitAttributes {
   visitDate: Date;
   visitTime: string;
   location: string;
-  locationLink: string;
+  locationLink?: string | null;
   notes?: string | null;
   status: 'pending' | 'approved' | 'completed' | 'incomplete' | 'rejected' | 'rescheduled';
   feedback?: string | null;
@@ -21,7 +21,7 @@ interface VisitAttributes {
   updatedAt?: Date;
 }
 
-interface VisitCreationAttributes extends Optional<VisitAttributes, 'id' | 'notes' | 'status' | 'feedback' | 'rejectionReason' | 'length' | 'width' | 'height' | 'images' | 'createdAt' | 'updatedAt'> {}
+interface VisitCreationAttributes extends Optional<VisitAttributes, 'id' | 'locationLink' | 'notes' | 'status' | 'feedback' | 'rejectionReason' | 'length' | 'width' | 'height' | 'images' | 'createdAt' | 'updatedAt'> {}
 
 class Visit extends Model<VisitAttributes, VisitCreationAttributes> implements VisitAttributes {
   public id!: string;
@@ -30,7 +30,7 @@ class Visit extends Model<VisitAttributes, VisitCreationAttributes> implements V
   public visitDate!: Date;
   public visitTime!: string;
   public location!: string;
-  public locationLink!: string;
+  public locationLink!: string | null;
   public notes!: string | null;
   public status!: 'pending' | 'approved' | 'completed' | 'incomplete' | 'rejected' | 'rescheduled';
   public feedback!: string | null;
@@ -71,7 +71,8 @@ Visit.init(
     },
     locationLink: {
       type: DataTypes.STRING(500),
-      allowNull: false
+      allowNull: true,
+      defaultValue: null
     },
     notes: {
       type: DataTypes.TEXT,
@@ -125,4 +126,5 @@ Visit.init(
 );
 
 export default Visit;
+
 

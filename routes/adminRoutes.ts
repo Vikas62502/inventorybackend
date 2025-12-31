@@ -3,6 +3,8 @@ import {
   getAllQuotations,
   updateQuotationStatus,
   getAllDealers,
+  updateDealer,
+  activateDealer,
   getSystemStatistics
 } from '../controllers/adminController';
 import {
@@ -16,6 +18,7 @@ import {
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { updateStatusSchema, createVisitorSchema, updateVisitorSchema, updateVisitorPasswordSchema } from '../validations/adminValidations';
+import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 
 const router: Router = express.Router();
 
@@ -50,11 +53,137 @@ router.patch('/quotations/:quotationId/status', validate(updateStatusSchema), up
  * /api/admin/dealers:
  *   get:
  *     summary: Get all dealers (admin)
+ *     description: Retrieve all dealers with complete registration information, statistics, and filtering options
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *         description: Items per page (max 100)
+ *       - in: query
+ *         name: isActive
+ *         schema:
+ *           type: boolean
+ *         description: Filter by active status (true/false)
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search by name, email, mobile, username
+ *     responses:
+ *       200:
+ *         description: Dealers retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     dealers:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Dealer'
+ *                     pagination:
+ *                       $ref: '#/components/schemas/Pagination'
  */
 router.get('/dealers', getAllDealers);
+
+/**
+ * @swagger
+ * /api/admin/dealers/{dealerId}:
+ *   put:
+ *     summary: Update dealer (admin)
+ *     description: Update dealer information including activation status
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: dealerId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               mobile:
+ *                 type: string
+ *               gender:
+ *                 type: string
+ *                 enum: [Male, Female, Other]
+ *               dateOfBirth:
+ *                 type: string
+ *                 format: date
+ *               fatherName:
+ *                 type: string
+ *               fatherContact:
+ *                 type: string
+ *               governmentIdType:
+ *                 type: string
+ *               governmentIdNumber:
+ *                 type: string
+ *               address:
+ *                 type: object
+ *               isActive:
+ *                 type: boolean
+ *               emailVerified:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Dealer updated successfully
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: Dealer not found
+ */
+router.put('/dealers/:dealerId', validate(adminUpdateDealerSchema), updateDealer);
+
+/**
+ * @swagger
+ * /api/admin/dealers/{dealerId}/activate:
+ *   patch:
+ *     summary: Activate dealer (admin)
+ *     description: Convenience endpoint to activate/approve a pending dealer
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: dealerId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Dealer activated successfully
+ *       404:
+ *         description: Dealer not found
+ */
+router.patch('/dealers/:dealerId/activate', activateDealer);
 
 /**
  * @swagger
@@ -134,4 +263,5 @@ router.put('/visitors/:visitorId/password', validate(updateVisitorPasswordSchema
 router.delete('/visitors/:visitorId', deleteVisitor);
 
 export default router;
+
 

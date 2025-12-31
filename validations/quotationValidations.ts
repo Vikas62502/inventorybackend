@@ -23,10 +23,10 @@ const productsSchema = z.object({
   panelPrice: z.number().nonnegative().nullish(),
   dcrPanelBrand: z.string().nullish(),
   dcrPanelSize: z.string().nullish(),
-  dcrPanelQuantity: z.number().int().positive().nullish(),
+  dcrPanelQuantity: z.number().int().nonnegative().nullish(),
   nonDcrPanelBrand: z.string().nullish(),
   nonDcrPanelSize: z.string().nullish(),
-  nonDcrPanelQuantity: z.number().int().positive().nullish(),
+  nonDcrPanelQuantity: z.number().int().nonnegative().nullish(),
   inverterType: z.string().nullish(),
   inverterBrand: z.string().nullish(),
   inverterSize: z.string().nullish(),
@@ -64,7 +64,28 @@ export const createQuotationSchema = z.object({
   customerId: z.string().nullish(),
   customer: customerSchema.nullish(),
   products: productsSchema,
-  discount: z.number().min(0).max(100).default(0)
+  discount: z.number().min(0).max(100).default(0),
+  // Pricing fields - required at root level
+  subtotal: z.number().positive('Subtotal must be greater than 0'),
+  totalAmount: z.number().nonnegative('Total amount must be a valid number'),
+  finalAmount: z.number().nonnegative('Final amount must be a valid number'),
+  // Optional pricing fields
+  centralSubsidy: z.number().nonnegative().default(0).nullish(),
+  stateSubsidy: z.number().nonnegative().default(0).nullish(),
+  totalSubsidy: z.number().nonnegative().default(0).nullish(),
+  amountAfterSubsidy: z.number().nonnegative().default(0).nullish(),
+  discountAmount: z.number().nonnegative().default(0).nullish(),
+  // Optional nested pricing object (for backward compatibility)
+  pricing: z.object({
+    subtotal: z.number().positive().nullish(),
+    totalAmount: z.number().nonnegative().nullish(),
+    finalAmount: z.number().nonnegative().nullish(),
+    centralSubsidy: z.number().nonnegative().nullish(),
+    stateSubsidy: z.number().nonnegative().nullish(),
+    totalSubsidy: z.number().nonnegative().nullish(),
+    amountAfterSubsidy: z.number().nonnegative().nullish(),
+    discountAmount: z.number().nonnegative().nullish()
+  }).nullish()
 }).refine((data) => data.customerId || data.customer, {
   message: 'Either customerId or customer object is required'
 });

@@ -82,6 +82,16 @@ const initQuotationAdmin = async (): Promise<void> => {
     const email = 'admin@chairbord.com';
     const mobile = '9876543210';
     const role = 'admin';
+    const gender = 'Male';
+    const dateOfBirth = '1990-01-01'; // Default date (over 18 years old)
+    const fatherName = 'Admin Father';
+    const fatherContact = '9876543211';
+    const governmentIdType = 'PAN Card';
+    const governmentIdNumber = 'ABCDE1234F';
+    const addressStreet = 'Admin Office';
+    const addressCity = 'Mumbai';
+    const addressState = 'Maharashtra';
+    const addressPincode = '400001';
 
     // Check if admin already exists using raw SQL
     const existingAdmins = await sequelize.query(
@@ -98,6 +108,47 @@ const initQuotationAdmin = async (): Promise<void> => {
       console.log('✅ Admin user already exists');
       console.log(`   Username: ${username}`);
       console.log(`   Role: ${existing.role || role}`);
+      
+      // Hash password to verify/update
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      // Check if admin is active, if not, activate it and update password
+      const adminDetails = await sequelize.query(
+        'SELECT "isActive", password FROM dealers WHERE username = :username',
+        {
+          replacements: { username },
+          type: QueryTypes.SELECT
+        }
+      ) as any[];
+      
+      let needsUpdate = false;
+      const updateFields: string[] = [];
+      
+      if (adminDetails && adminDetails.length > 0) {
+        if (!adminDetails[0].isActive) {
+          updateFields.push('"isActive" = true');
+          needsUpdate = true;
+          console.log('   ⚠️  Admin account is inactive - will activate');
+        }
+        
+        // Always update password to ensure it matches
+        updateFields.push('password = :password');
+        needsUpdate = true;
+        console.log('   ⚠️  Updating password to ensure it matches');
+      }
+      
+      if (needsUpdate) {
+        await sequelize.query(
+          `UPDATE dealers SET ${updateFields.join(', ')}, "updatedAt" = NOW() WHERE username = :username`,
+          {
+            replacements: { username, password: hashedPassword },
+            type: QueryTypes.UPDATE
+          }
+        );
+        console.log('   ✅ Admin account updated');
+      }
+      
+      console.log(`   ✅ Ready to login with username: ${username} and password: ${password}`);
       return;
     }
 
@@ -105,26 +156,77 @@ const initQuotationAdmin = async (): Promise<void> => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Generate a unique ID for the admin
-    const id = uuidv4();
+    const id = `dealer_${uuidv4()}`;
+
+    // Check if new required fields exist in the table
+    const tableInfo = await sequelize.query(
+      `SELECT column_name FROM information_schema.columns 
+       WHERE table_name = 'dealers' AND column_name = 'gender'`,
+      { type: QueryTypes.SELECT }
+    ) as any[];
 
     // Create admin user using raw SQL
-    await sequelize.query(
-      `INSERT INTO dealers (id, username, password, "firstName", "lastName", email, mobile, role, "isActive", "createdAt", "updatedAt")
-       VALUES (:id, :username, :password, :firstName, :lastName, :email, :mobile, :role::enum_dealers_role, true, NOW(), NOW())`,
-      {
-        replacements: {
-          id,
-          username,
-          password: hashedPassword,
-          firstName,
-          lastName,
-          email,
-          mobile,
-          role
-        },
-        type: QueryTypes.INSERT
-      }
-    );
+    if (tableInfo && tableInfo.length > 0) {
+      // New schema with all required fields
+      await sequelize.query(
+        `INSERT INTO dealers (
+          id, username, password, "firstName", "lastName", email, mobile, 
+          gender, "dateOfBirth", "fatherName", "fatherContact", 
+          "governmentIdType", "governmentIdNumber",
+          "addressStreet", "addressCity", "addressState", "addressPincode",
+          role, "isActive", "emailVerified", "createdAt", "updatedAt"
+        )
+        VALUES (
+          :id, :username, :password, :firstName, :lastName, :email, :mobile,
+          :gender::enum_dealers_gender, :dateOfBirth, :fatherName, :fatherContact,
+          :governmentIdType::enum_dealers_governmentidtype, :governmentIdNumber,
+          :addressStreet, :addressCity, :addressState, :addressPincode,
+          :role::enum_dealers_role, true, false, NOW(), NOW()
+        )`,
+        {
+          replacements: {
+            id,
+            username,
+            password: hashedPassword,
+            firstName,
+            lastName,
+            email,
+            mobile,
+            gender,
+            dateOfBirth,
+            fatherName,
+            fatherContact,
+            governmentIdType,
+            governmentIdNumber,
+            addressStreet,
+            addressCity,
+            addressState,
+            addressPincode,
+            role
+          },
+          type: QueryTypes.INSERT
+        }
+      );
+    } else {
+      // Old schema without new fields (backward compatibility)
+      await sequelize.query(
+        `INSERT INTO dealers (id, username, password, "firstName", "lastName", email, mobile, role, "isActive", "createdAt", "updatedAt")
+         VALUES (:id, :username, :password, :firstName, :lastName, :email, :mobile, :role::enum_dealers_role, true, NOW(), NOW())`,
+        {
+          replacements: {
+            id,
+            username,
+            password: hashedPassword,
+            firstName,
+            lastName,
+            email,
+            mobile,
+            role
+          },
+          type: QueryTypes.INSERT
+        }
+      );
+    }
 
     logger.info('Admin user created successfully', { username, id });
     console.log('✅ Admin user created successfully');

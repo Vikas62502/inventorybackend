@@ -1,104 +1,58 @@
 # Database Migrations
 
-This directory contains Sequelize migration files for the Chairbord Solar Inventory Management System.
+## Add Subtotal Column to Quotations Table
 
-## Migration Files
+### Problem
+The `subtotal` column is missing from the `quotations` table, causing queries to fail.
 
-The migrations are organized in chronological order:
+### Solution
+Run the migration to add the `subtotal` column.
 
-1. **20250103000001-create-users.js** - Creates the users table
-2. **20250103000002-create-products.js** - Creates the products table
-3. **20250103000003-create-addresses.js** - Creates the addresses table
-4. **20250103000004-create-admin-inventory.js** - Creates the admin_inventory table
-5. **20250103000005-create-stock-requests.js** - Creates the stock_requests table
-6. **20250103000006-create-stock-request-items.js** - Creates the stock_request_items table
-7. **20250103000007-create-sales.js** - Creates the sales table
-8. **20250103000008-create-sale-items.js** - Creates the sale_items table
-9. **20250103000009-create-inventory-transactions.js** - Creates the inventory_transactions table
-10. **20250103000010-create-stock-returns.js** - Creates the stock_returns table
-11. **20250103000011-create-indexes.js** - Creates all database indexes
-12. **20250103000012-create-triggers.js** - Creates triggers and functions
-13. **20250103000013-create-views.js** - Creates database views
-
-## Running Migrations
-
-### Install Dependencies
-
-First, make sure you have installed all dependencies:
+### Option 1: Using Node.js Script (Recommended)
 
 ```bash
-npm install
+node scripts/run-migration.js
 ```
 
-### Run Migrations
-
-To run all pending migrations:
+### Option 2: Using psql directly
 
 ```bash
-npm run migrate
+psql -U postgres -d chairbord_solar -f database/migrations/add_subtotal_to_quotations.sql
 ```
 
-Or using sequelize-cli directly:
+### Option 3: Using Sequelize Query
 
-```bash
-npx sequelize-cli db:migrate
+Connect to your database and run:
+
+```sql
+ALTER TABLE quotations 
+ADD COLUMN IF NOT EXISTS subtotal DECIMAL(12,2) NOT NULL DEFAULT 0;
+
+UPDATE quotations 
+SET subtotal = finalAmount 
+WHERE subtotal = 0 AND finalAmount > 0;
 ```
 
-### Undo Last Migration
+### What the Migration Does
 
-To undo the last migration:
+1. Adds `subtotal` column to `quotations` table
+2. Sets default value to 0 for existing records
+3. Updates existing records to use `finalAmount` as temporary `subtotal` value
 
-```bash
-npm run migrate:undo
+### Verification
+
+After running the migration, verify the column exists:
+
+```sql
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'quotations' 
+AND column_name = 'subtotal';
 ```
 
-Or:
-
-```bash
-npx sequelize-cli db:migrate:undo
+You should see:
 ```
-
-### Undo All Migrations
-
-To undo all migrations:
-
-```bash
-npm run migrate:undo:all
+column_name | data_type
+------------|-----------
+subtotal    | numeric
 ```
-
-Or:
-
-```bash
-npx sequelize-cli db:migrate:undo:all
-```
-
-## Database Configuration
-
-The database configuration is stored in `config/database.json`. Make sure to update it with your database credentials before running migrations.
-
-For production, you can use the `DATABASE_URL` environment variable instead of the JSON configuration.
-
-## Environment Variables
-
-The following environment variables can be used:
-
-- `DB_NAME` - Database name (default: `chairbord_solar`)
-- `DB_USER` - Database user (default: `postgres`)
-- `DB_PASSWORD` - Database password
-- `DB_HOST` - Database host (default: `localhost`)
-- `DB_PORT` - Database port (default: `5432`)
-- `DB_SSL` - Enable SSL (default: `false`)
-- `DB_SSL_REJECT_UNAUTHORIZED` - Reject unauthorized SSL certificates (default: `true`)
-- `DATABASE_URL` - Full database connection URL (for production)
-
-## Notes
-
-- Migrations are run in order based on their timestamp prefix
-- All foreign key constraints are properly defined
-- Check constraints are added for data validation
-- Indexes are created for performance optimization
-- Triggers are set up for automatic `updated_at` timestamp updates
-- Views are created for reporting and analytics
-
-
-

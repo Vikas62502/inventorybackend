@@ -46,16 +46,23 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
 
     logInfo('Customer created', { customerId: customer.id, dealerId: req.dealer.id });
 
+    const customerData = customer.toJSON();
     res.status(201).json({
       success: true,
       data: {
-        ...customer.toJSON(),
+        id: customerData.id,
+        firstName: customerData.firstName,
+        lastName: customerData.lastName,
+        mobile: customerData.mobile,
+        email: customerData.email,
         address: {
-          street: customer.streetAddress,
-          city: customer.city,
-          state: customer.state,
-          pincode: customer.pincode
-        }
+          street: customerData.streetAddress || '',
+          city: customerData.city || '',
+          state: customerData.state || '',
+          pincode: customerData.pincode || ''
+        },
+        createdAt: customerData.createdAt,
+        updatedAt: customerData.updatedAt
       }
     });
   } catch (error) {
@@ -85,7 +92,8 @@ export const getCustomers = async (req: Request, res: Response): Promise<void> =
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
 
-    const where: any = { dealerId: req.dealer.id };
+    // Admins can see all customers, dealers only see their own
+    const where: any = req.dealer.role === 'admin' ? {} : { dealerId: req.dealer.id };
 
     if (search) {
       where[Op.or] = [
@@ -101,13 +109,32 @@ export const getCustomers = async (req: Request, res: Response): Promise<void> =
       limit,
       offset,
       order: [[sortBy, sortOrder.toUpperCase()]],
-      attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'city', 'state', 'createdAt']
+      attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode', 'createdAt']
+    });
+
+    // Format customers with address object (consistent with getCustomerById and updateCustomer)
+    const customers = rows.map(customer => {
+      const customerData = customer.toJSON();
+      return {
+        id: customerData.id,
+        firstName: customerData.firstName,
+        lastName: customerData.lastName,
+        mobile: customerData.mobile,
+        email: customerData.email,
+        address: {
+          street: customerData.streetAddress || '',
+          city: customerData.city || '',
+          state: customerData.state || '',
+          pincode: customerData.pincode || ''
+        },
+        createdAt: customerData.createdAt
+      };
     });
 
     res.json({
       success: true,
       data: {
-        customers: rows,
+        customers,
         pagination: {
           page,
           limit,
@@ -139,9 +166,12 @@ export const getCustomerById = async (req: Request, res: Response): Promise<void
     }
 
     const { customerId } = req.params;
-    const customer = await Customer.findOne({
-      where: { id: customerId, dealerId: req.dealer.id }
-    });
+    // Admins can see all customers, dealers only see their own
+    const where: any = { id: customerId };
+    if (req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+    const customer = await Customer.findOne({ where });
 
     if (!customer) {
       res.status(404).json({
@@ -158,16 +188,23 @@ export const getCustomerById = async (req: Request, res: Response): Promise<void
       order: [['createdAt', 'DESC']]
     });
 
+    const customerData = customer.toJSON();
     res.json({
       success: true,
       data: {
-        ...customer.toJSON(),
+        id: customerData.id,
+        firstName: customerData.firstName,
+        lastName: customerData.lastName,
+        mobile: customerData.mobile,
+        email: customerData.email,
         address: {
-          street: customer.streetAddress,
-          city: customer.city,
-          state: customer.state,
-          pincode: customer.pincode
+          street: customerData.streetAddress || '',
+          city: customerData.city || '',
+          state: customerData.state || '',
+          pincode: customerData.pincode || ''
         },
+        createdAt: customerData.createdAt,
+        updatedAt: customerData.updatedAt,
         quotations
       }
     });
@@ -194,9 +231,12 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
     const { customerId } = req.params;
     const { firstName, lastName, mobile, email, address } = req.body;
 
-    const customer = await Customer.findOne({
-      where: { id: customerId, dealerId: req.dealer.id }
-    });
+    // Admins can update all customers, dealers only their own
+    const where: any = { id: customerId };
+    if (req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+    const customer = await Customer.findOne({ where });
 
     if (!customer) {
       res.status(404).json({
@@ -224,29 +264,42 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
       }
     }
 
-    await customer.update({
-      firstName: firstName || customer.firstName,
-      lastName: lastName || customer.lastName,
-      mobile: mobile || customer.mobile,
-      email: email || customer.email,
-      streetAddress: address?.street || customer.streetAddress,
-      city: address?.city || customer.city,
-      state: address?.state || customer.state,
-      pincode: address?.pincode || customer.pincode
-    });
+    // Update customer fields
+    const updateData: any = {};
+    if (firstName !== undefined) updateData.firstName = firstName;
+    if (lastName !== undefined) updateData.lastName = lastName;
+    if (mobile !== undefined) updateData.mobile = mobile;
+    if (email !== undefined) updateData.email = email;
+    
+    // Update address fields if address object is provided
+    if (address) {
+      if (address.street !== undefined) updateData.streetAddress = address.street;
+      if (address.city !== undefined) updateData.city = address.city;
+      if (address.state !== undefined) updateData.state = address.state;
+      if (address.pincode !== undefined) updateData.pincode = address.pincode;
+    }
+
+    await customer.update(updateData);
 
     const updatedCustomer = await Customer.findByPk(customer.id);
+    const customerData = updatedCustomer!.toJSON();
 
     res.json({
       success: true,
       data: {
-        ...updatedCustomer!.toJSON(),
+        id: customerData.id,
+        firstName: customerData.firstName,
+        lastName: customerData.lastName,
+        mobile: customerData.mobile,
+        email: customerData.email,
         address: {
-          street: updatedCustomer!.streetAddress,
-          city: updatedCustomer!.city,
-          state: updatedCustomer!.state,
-          pincode: updatedCustomer!.pincode
-        }
+          street: customerData.streetAddress || '',
+          city: customerData.city || '',
+          state: customerData.state || '',
+          pincode: customerData.pincode || ''
+        },
+        createdAt: customerData.createdAt,
+        updatedAt: customerData.updatedAt
       }
     });
   } catch (error) {
@@ -257,4 +310,5 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
     });
   }
 };
+
 

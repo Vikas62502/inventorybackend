@@ -8,10 +8,11 @@ const router: Router = express.Router();
 
 /**
  * @swagger
- * /api/auth/login:
+ * /api/inventory-auth/login:
  *   post:
- *     summary: User login
- *     tags: [Auth]
+ *     summary: Inventory System login (Super Admin, Admin, Agent, Account)
+ *     description: Login endpoint for Inventory System users (super admin, admin, agent, account roles)
+ *     tags: [Auth - Inventory]
  *     requestBody:
  *       required: true
  *       content:
@@ -46,10 +47,11 @@ router.post('/login', validate(loginSchema), login);
 
 /**
  * @swagger
- * /api/auth/me:
+ * /api/inventory-auth/me:
  *   get:
- *     summary: Get current authenticated user
- *     tags: [Auth]
+ *     summary: Get current authenticated user (Inventory System)
+ *     description: Get current authenticated Inventory System user information
+ *     tags: [Auth - Inventory]
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -66,10 +68,11 @@ router.get('/me', authenticate, getCurrentUser);
 
 /**
  * @swagger
- * /api/auth/forgot-password:
+ * /api/inventory-auth/forgot-password:
  *   post:
- *     summary: Request password reset token
- *     tags: [Auth]
+ *     summary: Request password reset token (Inventory System)
+ *     description: Request password reset token for Inventory System users
+ *     tags: [Auth - Inventory]
  *     requestBody:
  *       required: true
  *       content:
@@ -91,10 +94,11 @@ router.post('/forgot-password', validate(forgotPasswordSchema), forgotPassword);
 
 /**
  * @swagger
- * /api/auth/reset-password:
+ * /api/inventory-auth/reset-password:
  *   post:
- *     summary: Reset password using token
- *     tags: [Auth]
+ *     summary: Reset password using token (Inventory System)
+ *     description: Reset password for Inventory System users using reset token
+ *     tags: [Auth - Inventory]
  *     requestBody:
  *       required: true
  *       content:
@@ -120,10 +124,11 @@ router.post('/reset-password', validate(resetPasswordSchema), resetPassword);
 
 /**
  * @swagger
- * /api/auth/change-password:
+ * /api/inventory-auth/change-password:
  *   post:
- *     summary: Change password for authenticated user
- *     tags: [Auth]
+ *     summary: Change password for authenticated user (Inventory System)
+ *     description: Change password for authenticated Inventory System users
+ *     tags: [Auth - Inventory]
  *     security:
  *       - bearerAuth: []
  *     requestBody:

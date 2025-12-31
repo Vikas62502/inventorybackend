@@ -5,11 +5,25 @@ export const createVisitSchema = z.object({
   visitDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   visitTime: z.string().regex(/^\d{2}:\d{2}$/),
   location: z.string().min(1),
-  locationLink: z.string().url(),
+  locationLink: z.string().optional(),
   notes: z.string().optional(),
   visitors: z.array(z.object({
     visitorId: z.string().min(1)
   })).optional()
+}).refine((data) => {
+  // If locationLink is provided and not empty, it must be a valid URL
+  if (data.locationLink && data.locationLink.trim() !== '') {
+    try {
+      new URL(data.locationLink);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}, {
+  message: 'locationLink must be a valid URL if provided',
+  path: ['locationLink']
 });
 
 export const completeVisitSchema = z.object({
@@ -31,4 +45,5 @@ export const rescheduleVisitSchema = z.object({
 export const rejectVisitSchema = z.object({
   rejectionReason: z.string().min(1, 'Rejection reason is required')
 });
+
 

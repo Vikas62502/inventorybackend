@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Visit, VisitAssignment, Quotation, Customer, Dealer } from '../models/index-quotation';
+import { Visit, VisitAssignment, Quotation, Customer, Dealer, Visitor } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError } from '../utils/loggerHelper';
 
@@ -41,7 +41,15 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
           model: VisitAssignment,
           as: 'assignments',
           where: { visitorId: req.visitor.id },
-          required: true
+          required: true,
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
+            }
+          ]
         },
         {
           model: Quotation,
@@ -117,10 +125,48 @@ export const getAssignedVisits = async (req: Request, res: Response): Promise<vo
       width: v.width,
       height: v.height,
       images: v.images,
-      otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => ({
-        visitorId: a.visitorId,
-        visitorName: a.visitorName
-      })),
+      otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
+        const visitor = a.visitor;
+        if (visitor) {
+          return {
+            visitorId: visitor.id,
+            username: visitor.username,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            fullName: `${visitor.firstName} ${visitor.lastName}`,
+            email: visitor.email,
+            mobile: visitor.mobile,
+            employeeId: visitor.employeeId,
+            isActive: visitor.isActive
+          };
+        }
+        return {
+          visitorId: a.visitorId,
+          visitorName: a.visitorName,
+          fullName: a.visitorName
+        };
+      }),
+      assignedVisitors: (vAny.assignments || []).map((a: any) => {
+        const visitor = a.visitor;
+        if (visitor) {
+          return {
+            visitorId: visitor.id,
+            username: visitor.username,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            fullName: `${visitor.firstName} ${visitor.lastName}`,
+            email: visitor.email,
+            mobile: visitor.mobile,
+            employeeId: visitor.employeeId,
+            isActive: visitor.isActive
+          };
+        }
+        return {
+          visitorId: a.visitorId,
+          visitorName: a.visitorName,
+          fullName: a.visitorName
+        };
+      }),
       createdAt: v.createdAt
       };
     });
@@ -231,4 +277,5 @@ export const getVisitorStatistics = async (req: Request, res: Response): Promise
     });
   }
 };
+
 

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { Dealer, Visitor } from '../models/index-quotation';
+import { User } from '../models';
 import { logError } from '../utils/loggerHelper';
 
 // Login - for dealers and visitors
@@ -36,11 +37,12 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     let dealer = await Dealer.findOne({ where: { username } });
     if (dealer) {
       if (!dealer.isActive) {
+        logError('Login attempt - account inactive', new Error('Account inactive'), { username, dealerId: dealer.id });
         res.status(401).json({
           success: false,
           error: {
             code: 'AUTH_005',
-            message: 'Account suspended'
+            message: 'Account is pending approval. Please contact administrator.'
           }
         });
         return;
@@ -48,6 +50,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
       const isValidPassword = await bcrypt.compare(password, dealer.password);
       if (!isValidPassword) {
+        logError('Login attempt - invalid password', new Error('Invalid password'), { username, dealerId: dealer.id });
         res.status(401).json({
           success: false,
           error: {
@@ -149,6 +152,68 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Try User model (Inventory System) as fallback
+    const user = await User.findOne({ where: { username } });
+    if (user) {
+      if (!user.is_active) {
+        logError('Login attempt - account inactive', new Error('Account inactive'), { username, userId: user.id });
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'AUTH_005',
+            message: 'Account is inactive'
+          }
+        });
+        return;
+      }
+
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      if (!isValidPassword) {
+        logError('Login attempt - invalid password', new Error('Invalid password'), { username, userId: user.id });
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'AUTH_001',
+            message: 'Invalid username or password'
+          }
+        });
+        return;
+      }
+
+      const expiresIn: string = process.env.JWT_EXPIRE || '7d';
+      const token = jwt.sign(
+        { id: user.id, role: user.role },
+        jwtSecret,
+        { expiresIn } as SignOptions
+      );
+
+      const refreshToken = jwt.sign(
+        { id: user.id, role: user.role, type: 'refresh' },
+        jwtSecret,
+        { expiresIn: '30d' } as SignOptions
+      );
+
+      res.json({
+        success: true,
+        data: {
+          token,
+          refreshToken,
+          user: {
+            id: user.id,
+            username: user.username,
+            firstName: user.name.split(' ')[0] || user.name,
+            lastName: user.name.split(' ').slice(1).join(' ') || '',
+            name: user.name,
+            role: user.role
+          },
+          expiresIn: 3600
+        }
+      });
+      return;
+    }
+
+    // User not found in any system
+    logError('Login attempt - user not found', new Error('User not found in dealers, visitors, or users'), { username });
     res.status(401).json({
       success: false,
       error: {
@@ -396,4 +461,5 @@ export const changePassword = async (req: Request, res: Response): Promise<void>
     });
   }
 };
+
 

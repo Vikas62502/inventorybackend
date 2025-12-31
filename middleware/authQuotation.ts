@@ -12,7 +12,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         success: false,
         error: {
           code: 'AUTH_003',
-          message: 'Invalid token'
+          message: 'User not authenticated'
         }
       });
       return;
@@ -94,7 +94,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         success: false,
         error: {
           code: 'AUTH_003',
-          message: 'Invalid token'
+          message: 'User not authenticated'
         }
       });
     } catch (error) {
@@ -112,7 +112,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         success: false,
         error: {
           code: 'AUTH_003',
-          message: 'Invalid token'
+          message: 'User not authenticated'
         }
       });
     }
@@ -142,6 +142,22 @@ export const authorizeDealer = (req: Request, res: Response, next: NextFunction)
   next();
 };
 
+// Authorize dealer or admin (both can access)
+export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.dealer) {
+    res.status(401).json({
+      success: false,
+      error: {
+        code: 'AUTH_004',
+        message: 'Insufficient permissions'
+      }
+    });
+    return;
+  }
+  // Both dealers and admins are stored in Dealer model, so req.dealer exists for both
+  next();
+};
+
 // Authorize admin only
 export const authorizeAdmin = (req: Request, res: Response, next: NextFunction): void => {
   if (!req.dealer || req.dealer.role !== 'admin') {
@@ -149,7 +165,7 @@ export const authorizeAdmin = (req: Request, res: Response, next: NextFunction):
       success: false,
       error: {
         code: 'AUTH_004',
-        message: 'Insufficient permissions'
+        message: 'Insufficient permissions. Admin access required.'
       }
     });
     return;
@@ -171,4 +187,20 @@ export const authorizeVisitor = (req: Request, res: Response, next: NextFunction
   }
   next();
 };
+
+// Authorize dealer, admin, or visitor (for read operations)
+export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.dealer && !req.visitor) {
+    res.status(401).json({
+      success: false,
+      error: {
+        code: 'AUTH_004',
+        message: 'Insufficient permissions'
+      }
+    });
+    return;
+  }
+  next();
+};
+
 

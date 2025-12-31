@@ -161,13 +161,23 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
     const offset = (page - 1) * limit;
     const search = req.query.search as string;
+    const isActive = req.query.isActive as string;
 
     const where: any = { role: 'dealer' };
+    
+    // Filter by isActive if provided
+    if (isActive !== undefined) {
+      where.isActive = isActive === 'true';
+    }
+
+    // Search by name, email, mobile, username
     if (search) {
       where[Op.or] = [
         { firstName: { [Op.iLike]: `%${search}%` } },
         { lastName: { [Op.iLike]: `%${search}%` } },
         { email: { [Op.iLike]: `%${search}%` } },
+        { mobile: { [Op.iLike]: `%${search}%` } },
+        { username: { [Op.iLike]: `%${search}%` } },
         { company: { [Op.iLike]: `%${search}%` } }
       ];
     }
@@ -180,16 +190,42 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
       order: [['createdAt', 'DESC']]
     });
 
-    // Get statistics for each dealer
+    // Get statistics for each dealer and format response
     const dealersWithStats = await Promise.all(
       dealers.rows.map(async (dealer) => {
         const quotationCount = await Quotation.count({ where: { dealerId: dealer.id } });
         const totalRevenue = await Quotation.sum('finalAmount', { where: { dealerId: dealer.id } }) || 0;
 
+        const dealerData = dealer.toJSON() as any;
+        
+        // Format response with address object
         return {
-          ...dealer.toJSON(),
+          id: dealerData.id,
+          username: dealerData.username,
+          firstName: dealerData.firstName,
+          lastName: dealerData.lastName,
+          email: dealerData.email,
+          mobile: dealerData.mobile,
+          gender: dealerData.gender,
+          dateOfBirth: dealerData.dateOfBirth,
+          fatherName: dealerData.fatherName,
+          fatherContact: dealerData.fatherContact,
+          governmentIdType: dealerData.governmentIdType,
+          governmentIdNumber: dealerData.governmentIdNumber,
+          governmentIdImage: dealerData.governmentIdImage,
+          address: {
+            street: dealerData.addressStreet,
+            city: dealerData.addressCity,
+            state: dealerData.addressState,
+            pincode: dealerData.addressPincode
+          },
+          company: dealerData.company,
+          isActive: dealerData.isActive,
+          emailVerified: dealerData.emailVerified,
           quotationCount,
-          totalRevenue: Number(totalRevenue)
+          totalRevenue: Number(totalRevenue),
+          createdAt: dealerData.createdAt,
+          updatedAt: dealerData.updatedAt
         };
       })
     );
@@ -208,6 +244,165 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
     });
   } catch (error) {
     logError('Get all dealers error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Update dealer (admin)
+export const updateDealer = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer || req.dealer.role !== 'admin') {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { dealerId } = req.params;
+    const updateData: any = {};
+
+    const dealer = await Dealer.findByPk(dealerId);
+    if (!dealer) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Dealer not found' }
+      });
+      return;
+    }
+
+    // Update basic fields
+    if (req.body.firstName !== undefined) updateData.firstName = req.body.firstName;
+    if (req.body.lastName !== undefined) updateData.lastName = req.body.lastName;
+    if (req.body.email !== undefined) {
+      // Check if email is already taken by another dealer
+      const existingDealer = await Dealer.findOne({ 
+        where: { email: req.body.email, id: { [Op.ne]: dealerId } } 
+      });
+      if (existingDealer) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RES_002',
+            message: 'Email already exists',
+            details: [{ field: 'email', message: 'Email already exists' }]
+          }
+        });
+        return;
+      }
+      updateData.email = req.body.email;
+    }
+    if (req.body.mobile !== undefined) {
+      // Check if mobile is already taken by another dealer
+      const existingDealer = await Dealer.findOne({ 
+        where: { mobile: req.body.mobile, id: { [Op.ne]: dealerId } } 
+      });
+      if (existingDealer) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'RES_002',
+            message: 'Mobile number already exists',
+            details: [{ field: 'mobile', message: 'Mobile number already exists' }]
+          }
+        });
+        return;
+      }
+      updateData.mobile = req.body.mobile;
+    }
+    if (req.body.gender !== undefined) updateData.gender = req.body.gender;
+    if (req.body.dateOfBirth !== undefined) updateData.dateOfBirth = new Date(req.body.dateOfBirth);
+    if (req.body.fatherName !== undefined) updateData.fatherName = req.body.fatherName;
+    if (req.body.fatherContact !== undefined) updateData.fatherContact = req.body.fatherContact;
+    if (req.body.governmentIdType !== undefined) updateData.governmentIdType = req.body.governmentIdType;
+    if (req.body.governmentIdNumber !== undefined) updateData.governmentIdNumber = req.body.governmentIdNumber;
+    if (req.body.governmentIdImage !== undefined) updateData.governmentIdImage = req.body.governmentIdImage;
+    if (req.body.company !== undefined) updateData.company = req.body.company;
+    if (req.body.isActive !== undefined) updateData.isActive = req.body.isActive;
+    if (req.body.emailVerified !== undefined) updateData.emailVerified = req.body.emailVerified;
+
+    // Update address fields if provided
+    if (req.body.address) {
+      if (req.body.address.street) updateData.addressStreet = req.body.address.street;
+      if (req.body.address.city) updateData.addressCity = req.body.address.city;
+      if (req.body.address.state) updateData.addressState = req.body.address.state;
+      if (req.body.address.pincode) updateData.addressPincode = req.body.address.pincode;
+    }
+
+    await dealer.update(updateData);
+
+    const updatedDealer = await Dealer.findByPk(dealerId, {
+      attributes: { exclude: ['password'] }
+    });
+
+    const dealerData = updatedDealer?.toJSON() as any;
+    const responseData = {
+      ...dealerData,
+      address: {
+        street: dealerData.addressStreet,
+        city: dealerData.addressCity,
+        state: dealerData.addressState,
+        pincode: dealerData.addressPincode
+      }
+    };
+
+    // Remove individual address fields from response
+    delete responseData.addressStreet;
+    delete responseData.addressCity;
+    delete responseData.addressState;
+    delete responseData.addressPincode;
+
+    res.json({
+      success: true,
+      data: responseData
+    });
+  } catch (error) {
+    logError('Update dealer error', error, { dealerId: req.params.dealerId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Activate dealer (admin)
+export const activateDealer = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer || req.dealer.role !== 'admin') {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+      });
+      return;
+    }
+
+    const { dealerId } = req.params;
+
+    const dealer = await Dealer.findByPk(dealerId);
+    if (!dealer) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Dealer not found' }
+      });
+      return;
+    }
+
+    await dealer.update({ isActive: true });
+
+    res.json({
+      success: true,
+      message: 'Dealer activated successfully',
+      data: {
+        id: dealer.id,
+        isActive: true,
+        updatedAt: dealer.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Activate dealer error', error, { dealerId: req.params.dealerId });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
@@ -321,4 +516,5 @@ export const getSystemStatistics = async (req: Request, res: Response): Promise<
     });
   }
 };
+
 

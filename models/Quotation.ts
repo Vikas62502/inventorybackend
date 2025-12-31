@@ -8,13 +8,20 @@ interface QuotationAttributes {
   systemType: 'on-grid' | 'off-grid' | 'hybrid' | 'dcr' | 'non-dcr' | 'both' | 'customize';
   status: 'pending' | 'approved' | 'rejected' | 'completed';
   discount: number;
-  finalAmount: number;
+  subtotal: number;        // Set price (complete package price)
+  totalAmount: number;     // Amount after discount (Subtotal - Subsidy - Discount)
+  finalAmount: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
+  centralSubsidy: number;  // Central government subsidy
+  stateSubsidy: number;    // State subsidy
+  totalSubsidy: number;    // Total subsidy (central + state)
+  amountAfterSubsidy: number; // Amount after subsidy
+  discountAmount: number;  // Discount amount
   createdAt?: Date;
   updatedAt?: Date;
   validUntil: Date;
 }
 
-interface QuotationCreationAttributes extends Optional<QuotationAttributes, 'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt'> {}
+interface QuotationCreationAttributes extends Optional<QuotationAttributes, 'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount'> {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
   public id!: string;
@@ -23,7 +30,14 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public systemType!: 'on-grid' | 'off-grid' | 'hybrid' | 'dcr' | 'non-dcr' | 'both' | 'customize';
   public status!: 'pending' | 'approved' | 'rejected' | 'completed';
   public discount!: number;
-  public finalAmount!: number;
+  public subtotal!: number;        // Set price (complete package price)
+  public totalAmount!: number;     // Amount after discount (Subtotal - Subsidy - Discount)
+  public finalAmount!: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
+  public centralSubsidy!: number;  // Central government subsidy
+  public stateSubsidy!: number;    // State subsidy
+  public totalSubsidy!: number;    // Total subsidy (central + state)
+  public amountAfterSubsidy!: number; // Amount after subsidy
+  public discountAmount!: number;  // Discount amount
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
   public validUntil!: Date;
@@ -55,9 +69,44 @@ Quotation.init(
       type: DataTypes.DECIMAL(5, 2),
       defaultValue: 0
     },
+    subtotal: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    totalAmount: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
     finalAmount: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: false
+    },
+    centralSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    stateSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    totalSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    amountAfterSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    discountAmount: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
     },
     validUntil: {
       type: DataTypes.DATEONLY,
@@ -84,4 +133,5 @@ Quotation.init(
 );
 
 export default Quotation;
+
 

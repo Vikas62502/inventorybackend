@@ -15,7 +15,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const user = await User.findOne({ where: { username } });
-    console.log(user, "<-- admin");
 
     if (!user) {
       res.status(401).json({ error: 'Invalid credentials' });
