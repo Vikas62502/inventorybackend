@@ -92,7 +92,7 @@ app.use('/api/sales', salesRoutes);
 app.use('/api/inventory-transactions', inventoryTransactionRoutes);
 app.use('/api/stock-returns', stockReturnRoutes);
 
-// 404 handler
+// 404 handler res
 app.use((_: Request, res: Response) => {
   res.status(404).json({ error: 'Route not found' });
 });

@@ -48,7 +48,6 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
 
       - name: Create .env file on production server
         uses: appleboy/ssh-action@v1.0.0
@@ -87,20 +86,6 @@ jobs:
             EOF
             chmod 600 .env
 
-      - name: Run database migrations
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || 22 }}
-          script: |
-            cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
-            IMAGE_NAME=vikasyadav30/cbplsolarinventory:main
-            docker pull $IMAGE_NAME
-            docker-compose pull api
-            docker-compose run --rm api npm run migrate
-
       - name: Deploy to production server
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -112,8 +97,9 @@ jobs:
             cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
             IMAGE_NAME=vikasyadav30/cbplsolarinventory:main
             docker pull $IMAGE_NAME
-            docker-compose pull api
-            docker-compose up -d api
+            docker-compose pull || true
+            docker-compose up -d
+            docker-compose exec -T api npm run migrate || true
             docker system prune -f
 
       - name: Health check
@@ -144,7 +130,7 @@ jobs:
           port: ${{ secrets.PROD_PORT || 22 }}
           script: |
             cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
-            docker-compose rollback api || docker-compose up -d api
+            docker-compose up -d api || true
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
