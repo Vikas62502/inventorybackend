@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { Dealer, Visitor } from '../models/index-quotation';
+import { Dealer } from '../models/index-quotation';
 import { User } from '../models';
 import sequelize from '../config/database';
 import logger from '../config/logger';
