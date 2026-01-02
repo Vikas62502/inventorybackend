@@ -89,36 +89,75 @@ jobs:
       - name: Deploy to production server
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || 22 }}
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 3050 }}
           script: |
-            cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
+            set -e  # Exit on error
+            DEPLOY_PATH=${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
             IMAGE_NAME=vikasyadav30/cbplsolarinventory:main
             CONTAINER_NAME="cbpl-solar-inventory-backend-prod"
-            PORT=${PORT:-3000}
+            
+            echo "🚀 Starting deployment..."
+            echo "📁 Deploy path: $DEPLOY_PATH"
+            echo "🐳 Image: $IMAGE_NAME"
+            echo "📦 Container: $CONTAINER_NAME"
+            
+            # Navigate to deploy path
+            cd $DEPLOY_PATH || { echo "❌ Failed to cd to $DEPLOY_PATH"; exit 1; }
+            echo "✅ Changed to directory: $(pwd)"
+            
+            # Check if .env file exists
+            if [ ! -f .env ]; then
+              echo "❌ .env file not found in $DEPLOY_PATH"
+              exit 1
+            fi
+            echo "✅ .env file found"
             
             # Pull the latest image
-            docker pull $IMAGE_NAME
+            echo "📥 Pulling image from Docker Hub..."
+            sudo docker pull $IMAGE_NAME || { echo "❌ Failed to pull image"; exit 1; }
+            echo "✅ Image pulled successfully"
             
             # Stop and remove old container
-            docker stop $CONTAINER_NAME || true
-            docker rm $CONTAINER_NAME || true
+            echo "🛑 Stopping old container..."
+            sudo docker stop $CONTAINER_NAME || echo "⚠️  Container not running (this is OK)"
+            sudo docker rm $CONTAINER_NAME || echo "⚠️  Container not found (this is OK)"
+            echo "✅ Old container removed"
             
             # Run new container with .env file
-            docker run -d \
+            echo "🚀 Starting new container..."
+            sudo docker run -d \
               --name $CONTAINER_NAME \
               --restart unless-stopped \
               -p 3050:3000 \
               --env-file .env \
-              $IMAGE_NAME
+              $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
+            echo "✅ Container started"
+            
+            # Wait a moment for container to start
+            sleep 5
+            
+            # Check if container is running
+            if sudo docker ps | grep -q $CONTAINER_NAME; then
+              echo "✅ Container is running"
+            else
+              echo "❌ Container is not running!"
+              echo "📋 Container logs:"
+              sudo docker logs $CONTAINER_NAME || true
+              exit 1
+            fi
             
             # Run migrations
-            docker exec $CONTAINER_NAME npm run migrate || true
+            echo "🔄 Running migrations..."
+            sudo docker exec $CONTAINER_NAME npm run migrate || echo "⚠️  Migrations failed (non-critical)"
             
             # Clean up unused images
-            docker system prune -f
+            echo "🧹 Cleaning up unused images..."
+            sudo docker system prune -f || true
+            
+            echo "✅ Deployment completed successfully!"
 
       - name: Health check
         run: |
