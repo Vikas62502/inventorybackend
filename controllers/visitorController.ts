@@ -1,0 +1,281 @@
+import { Request, Response } from 'express';
+import { Visit, VisitAssignment, Quotation, Customer, Dealer, Visitor } from '../models/index-quotation';
+import { Op } from 'sequelize';
+import { logError } from '../utils/loggerHelper';
+
+// Get assigned visits (visitor)
+export const getAssignedVisits = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const status = req.query.status as string;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const search = req.query.search as string;
+
+    const where: any = {};
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (startDate || endDate) {
+      where.visitDate = {};
+      if (startDate) where.visitDate[Op.gte] = new Date(startDate);
+      if (endDate) where.visitDate[Op.lte] = new Date(endDate);
+    }
+
+    // Note: Search will be handled after fetching visits with associations
+    // since we need to search in customer name and quotation ID
+
+    const visits = await Visit.findAll({
+      where,
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          where: { visitorId: req.visitor.id },
+          required: true,
+          include: [
+            {
+              model: Visitor,
+              as: 'visitor',
+              required: false,
+              attributes: ['id', 'username', 'firstName', 'lastName', 'email', 'mobile', 'employeeId', 'isActive']
+            }
+          ]
+        },
+        {
+          model: Quotation,
+          as: 'quotation',
+          include: [
+            {
+              model: Customer,
+              as: 'customer'
+            },
+            {
+              model: Dealer,
+              as: 'dealer',
+              attributes: ['firstName', 'lastName']
+            }
+          ]
+        }
+      ],
+      order: [['visitDate', 'ASC'], ['visitTime', 'ASC']]
+    });
+
+    // Filter by search if provided
+    let filteredVisits = visits;
+    if (search) {
+      filteredVisits = visits.filter(v => {
+        const vAny = v as any;
+        const quotation = vAny.quotation;
+        const customer = quotation?.customer;
+        const searchLower = search.toLowerCase();
+        return (
+          v.location.toLowerCase().includes(searchLower) ||
+          quotation?.id?.toLowerCase().includes(searchLower) ||
+          customer?.firstName?.toLowerCase().includes(searchLower) ||
+          customer?.lastName?.toLowerCase().includes(searchLower) ||
+          `${customer?.firstName} ${customer?.lastName}`.toLowerCase().includes(searchLower)
+        );
+      });
+    }
+
+    const formattedVisits = filteredVisits.map(v => {
+      const vAny = v as any;
+      const quotation = vAny.quotation;
+      return {
+        id: v.id,
+        quotation: quotation ? {
+          id: quotation.id,
+          systemType: quotation.systemType,
+          finalAmount: Number(quotation.finalAmount),
+          createdAt: quotation.createdAt
+        } : null,
+        customer: quotation?.customer ? {
+          firstName: quotation.customer.firstName,
+          lastName: quotation.customer.lastName,
+          mobile: quotation.customer.mobile,
+          email: quotation.customer.email,
+          address: {
+            street: quotation.customer.streetAddress,
+            city: quotation.customer.city,
+            state: quotation.customer.state,
+            pincode: quotation.customer.pincode
+          }
+        } : null,
+        dealer: quotation?.dealer ? {
+          firstName: quotation.dealer.firstName,
+          lastName: quotation.dealer.lastName
+        } : null,
+      visitDate: v.visitDate,
+      visitTime: v.visitTime,
+      location: v.location,
+      locationLink: v.locationLink,
+      notes: v.notes,
+      status: v.status,
+      length: v.length,
+      width: v.width,
+      height: v.height,
+      images: v.images,
+      otherVisitors: (vAny.assignments || []).filter((a: any) => a.visitorId !== req.visitor!.id).map((a: any) => {
+        const visitor = a.visitor;
+        if (visitor) {
+          return {
+            visitorId: visitor.id,
+            username: visitor.username,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            fullName: `${visitor.firstName} ${visitor.lastName}`,
+            email: visitor.email,
+            mobile: visitor.mobile,
+            employeeId: visitor.employeeId,
+            isActive: visitor.isActive
+          };
+        }
+        return {
+          visitorId: a.visitorId,
+          visitorName: a.visitorName,
+          fullName: a.visitorName
+        };
+      }),
+      assignedVisitors: (vAny.assignments || []).map((a: any) => {
+        const visitor = a.visitor;
+        if (visitor) {
+          return {
+            visitorId: visitor.id,
+            username: visitor.username,
+            firstName: visitor.firstName,
+            lastName: visitor.lastName,
+            fullName: `${visitor.firstName} ${visitor.lastName}`,
+            email: visitor.email,
+            mobile: visitor.mobile,
+            employeeId: visitor.employeeId,
+            isActive: visitor.isActive
+          };
+        }
+        return {
+          visitorId: a.visitorId,
+          visitorName: a.visitorName,
+          fullName: a.visitorName
+        };
+      }),
+      createdAt: v.createdAt
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        visits: formattedVisits,
+        count: formattedVisits.length
+      }
+    });
+  } catch (error) {
+    logError('Get assigned visits error', error, { visitorId: req.visitor?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Get visitor statistics
+export const getVisitorStatistics = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const visits = await Visit.findAll({
+      include: [
+        {
+          model: VisitAssignment,
+          as: 'assignments',
+          where: { visitorId: req.visitor.id },
+          required: true
+        },
+        {
+          model: Quotation,
+          as: 'quotation',
+          include: [
+            {
+              model: Customer,
+              as: 'customer'
+            }
+          ]
+        }
+      ]
+    });
+
+    const totalVisits = visits.length;
+    const pendingVisits = visits.filter(v => v.status === 'pending').length;
+    const approvedVisits = visits.filter(v => v.status === 'approved').length;
+    const completedVisits = visits.filter(v => v.status === 'completed').length;
+    const incompleteVisits = visits.filter(v => v.status === 'incomplete').length;
+    const rejectedVisits = visits.filter(v => v.status === 'rejected').length;
+    const rescheduledVisits = visits.filter(v => v.status === 'rescheduled').length;
+
+    // Get upcoming visits with customer names
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const upcomingVisitsData = visits
+      .filter(v => {
+        const visitDate = new Date(v.visitDate);
+        visitDate.setHours(0, 0, 0, 0);
+        return visitDate >= today && (v.status === 'pending' || v.status === 'approved');
+      })
+      .slice(0, 5);
+
+    const upcomingVisits = await Promise.all(
+      upcomingVisitsData.map(async (v) => {
+        const vAny = v as any;
+        const quotation = vAny.quotation;
+        const customer = quotation?.customer;
+        const customerName = customer 
+          ? `${customer.firstName} ${customer.lastName}`
+          : 'Unknown Customer';
+
+        return {
+          id: v.id,
+          visitDate: v.visitDate,
+          visitTime: v.visitTime,
+          customerName
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: {
+        totalVisits,
+        pendingVisits,
+        approvedVisits,
+        completedVisits,
+        incompleteVisits,
+        rejectedVisits,
+        rescheduledVisits,
+        upcomingVisits
+      }
+    });
+  } catch (error) {
+    logError('Get visitor statistics error', error, { visitorId: req.visitor?.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+
