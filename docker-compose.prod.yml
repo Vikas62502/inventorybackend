@@ -24,7 +24,7 @@ services:
 
   # API Backend
   api:
-    image: ghcr.io/${GITHUB_OWNER}/${GITHUB_REPO}:latest
+    image: vikasyadav30/cbplsolarinventory:main
     container_name: chairbord-api
     environment:
       NODE_ENV: production

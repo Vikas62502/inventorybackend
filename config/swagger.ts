@@ -30,7 +30,7 @@ const swaggerDefinition = {
       description: 'Development server'
     },
     {
-      url: `${process.env.PROD_URL || 'https://api.chairbord.com'}/v1`,
+      url: `${process.env.PROD_URL || 'https://api.chairbord.com'}/api`,
       description: 'Production server'
     },
     {
