@@ -1,6 +1,7 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '../config/database';
 
+// CRITICAL FIX: Ensure sequelize.options.define exists before model initialization
 // Model.init() accesses sequelize.options.define synchronously, so it MUST exist
 // The database config should have set this, but we ensure it exists here as a safeguard
 const sequelizeAny = sequelize as any;
