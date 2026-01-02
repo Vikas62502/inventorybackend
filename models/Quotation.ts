@@ -1,0 +1,137 @@
+import { DataTypes, Model, Optional } from 'sequelize';
+import sequelize from '../config/database';
+
+interface QuotationAttributes {
+  id: string;
+  dealerId: string;
+  customerId: string;
+  systemType: 'on-grid' | 'off-grid' | 'hybrid' | 'dcr' | 'non-dcr' | 'both' | 'customize';
+  status: 'pending' | 'approved' | 'rejected' | 'completed';
+  discount: number;
+  subtotal: number;        // Set price (complete package price)
+  totalAmount: number;     // Amount after discount (Subtotal - Subsidy - Discount)
+  finalAmount: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
+  centralSubsidy: number;  // Central government subsidy
+  stateSubsidy: number;    // State subsidy
+  totalSubsidy: number;    // Total subsidy (central + state)
+  amountAfterSubsidy: number; // Amount after subsidy
+  discountAmount: number;  // Discount amount
+  createdAt?: Date;
+  updatedAt?: Date;
+  validUntil: Date;
+}
+
+interface QuotationCreationAttributes extends Optional<QuotationAttributes, 'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount'> {}
+
+class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
+  public id!: string;
+  public dealerId!: string;
+  public customerId!: string;
+  public systemType!: 'on-grid' | 'off-grid' | 'hybrid' | 'dcr' | 'non-dcr' | 'both' | 'customize';
+  public status!: 'pending' | 'approved' | 'rejected' | 'completed';
+  public discount!: number;
+  public subtotal!: number;        // Set price (complete package price)
+  public totalAmount!: number;     // Amount after discount (Subtotal - Subsidy - Discount)
+  public finalAmount!: number;     // Final amount (Subtotal - Subsidy, discount NOT applied)
+  public centralSubsidy!: number;  // Central government subsidy
+  public stateSubsidy!: number;    // State subsidy
+  public totalSubsidy!: number;    // Total subsidy (central + state)
+  public amountAfterSubsidy!: number; // Amount after subsidy
+  public discountAmount!: number;  // Discount amount
+  public readonly createdAt!: Date;
+  public readonly updatedAt!: Date;
+  public validUntil!: Date;
+}
+
+Quotation.init(
+  {
+    id: {
+      type: DataTypes.STRING(50),
+      primaryKey: true
+    },
+    dealerId: {
+      type: DataTypes.STRING(50),
+      allowNull: false
+    },
+    customerId: {
+      type: DataTypes.STRING(50),
+      allowNull: false
+    },
+    systemType: {
+      type: DataTypes.ENUM('on-grid', 'off-grid', 'hybrid', 'dcr', 'non-dcr', 'both', 'customize'),
+      allowNull: false
+    },
+    status: {
+      type: DataTypes.ENUM('pending', 'approved', 'rejected', 'completed'),
+      defaultValue: 'pending'
+    },
+    discount: {
+      type: DataTypes.DECIMAL(5, 2),
+      defaultValue: 0
+    },
+    subtotal: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    totalAmount: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    finalAmount: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false
+    },
+    centralSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    stateSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    totalSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    amountAfterSubsidy: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    discountAmount: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    validUntil: {
+      type: DataTypes.DATEONLY,
+      allowNull: false
+    }
+  },
+  {
+    sequelize,
+    tableName: 'quotations',
+    timestamps: true,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+    freezeTableName: true,
+    underscored: false,
+    indexes: [
+      { fields: ['dealerId'] },
+      { fields: ['customerId'] },
+      { fields: ['status'] },
+      { fields: ['createdAt'] },
+      { fields: ['dealerId', 'status'] },
+      { fields: ['createdAt', 'status'] }
+    ]
+  }
+);
+
+export default Quotation;
+
+

@@ -11,11 +11,13 @@ const saleItemSchema = z.object({
 });
 
 const addressSchema = z.object({
-  street: z.string().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  postal_code: z.string().optional(),
-  country: z.string().optional()
+  id: z.string().optional(),
+  line1: z.string().min(1, 'Address line1 is required').optional(),
+  line2: z.string().nullable().optional(),
+  city: z.string().min(1, 'City is required').optional(),
+  state: z.string().min(1, 'State is required').optional(),
+  postal_code: z.string().min(1, 'Postal code is required').optional(),
+  country: z.string().min(1, 'Country is required').optional()
 });
 
 export const createSaleSchema = z.object({
