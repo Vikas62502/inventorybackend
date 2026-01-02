@@ -96,10 +96,28 @@ jobs:
           script: |
             cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
             IMAGE_NAME=vikasyadav30/cbplsolarinventory:main
+            CONTAINER_NAME="cbpl-solar-inventory-backend-prod"
+            PORT=${PORT:-3000}
+            
+            # Pull the latest image
             docker pull $IMAGE_NAME
-            docker-compose pull || true
-            docker-compose up -d
-            docker-compose exec -T api npm run migrate || true
+            
+            # Stop and remove old container
+            docker stop $CONTAINER_NAME || true
+            docker rm $CONTAINER_NAME || true
+            
+            # Run new container with .env file
+            docker run -d \
+              --name $CONTAINER_NAME \
+              --restart unless-stopped \
+              -p 3050:3000 \
+              --env-file .env \
+              $IMAGE_NAME
+            
+            # Run migrations
+            docker exec $CONTAINER_NAME npm run migrate || true
+            
+            # Clean up unused images
             docker system prune -f
 
       - name: Health check
