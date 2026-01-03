@@ -62,7 +62,7 @@ jobs:
             
             # Application Configuration
             PORT=${{ secrets.PORT || '3000' }}
-            NODE_ENV=staging
+            NODE_ENV=development
             
             # JWT Configuration
             JWT_SECRET=${{ secrets.JWT_SECRET }}
@@ -120,11 +120,13 @@ jobs:
             
             # Run new container with .env file
             echo "🚀 Starting new container..."
+            ENV_FILE_PATH="$DEPLOY_PATH/.env"
+            echo "📄 Using .env file at: $ENV_FILE_PATH"
             sudo docker run -d \
               --name $CONTAINER_NAME \
               --restart unless-stopped \
-              -p 3000:3000 \
-              --env-file .env \
+              -p 3050:3000 \
+              --env-file "$ENV_FILE_PATH" \
               $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
             echo "✅ Container started"
             

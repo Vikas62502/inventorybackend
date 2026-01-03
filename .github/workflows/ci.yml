@@ -154,6 +154,16 @@ jobs:
               exit 1
             fi
             
+            echo "📋 Checking .env file contents (DB_HOST only):"
+            grep "^DB_HOST=" .env || echo "⚠️  DB_HOST not found in .env"
+            
+            # Verify DB_HOST is not localhost
+            if grep -q "^DB_HOST=localhost" .env || grep -q "^DB_HOST=$" .env; then
+              echo "⚠️  WARNING: DB_HOST is set to localhost or empty!"
+              echo "   This won't work from inside Docker container."
+              echo "   DB_HOST should be the actual database server IP/hostname"
+            fi
+            
             echo "📥 Pulling image from Docker Hub..."
             sudo docker pull $IMAGE_NAME || { echo "❌ Failed to pull image"; exit 1; }
             
@@ -162,11 +172,14 @@ jobs:
             sudo docker rm $CONTAINER_NAME || echo "⚠️  Container not found"
             
             echo "🚀 Starting new container..."
+            ENV_FILE_PATH="$DEPLOY_PATH/.env"
+            echo "📄 Using .env file at: $ENV_FILE_PATH"
             sudo docker run -d \
               --name $CONTAINER_NAME \
               --restart unless-stopped \
+              --network host \
               -p 3050:3000 \
-              --env-file .env \
+              --env-file "$ENV_FILE_PATH" \
               $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
             
             sleep 5
