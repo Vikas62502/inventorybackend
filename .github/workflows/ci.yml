@@ -177,7 +177,6 @@ jobs:
             sudo docker run -d \
               --name $CONTAINER_NAME \
               --restart unless-stopped \
-              --network host \
               -p 3050:3000 \
               --env-file "$ENV_FILE_PATH" \
               $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
