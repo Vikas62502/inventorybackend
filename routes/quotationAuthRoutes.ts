@@ -1,3 +1,4 @@
+// import express, { NextFunction, RequestHandler, Router } from 'express';
 import express, { Router } from 'express';
 import { login, refreshToken, logout, changePassword } from '../controllers/quotationAuthController';
 import { authenticate } from '../middleware/authQuotation';
@@ -48,7 +49,23 @@ const router: Router = express.Router();
  *                   code: AUTH_001
  *                   message: Invalid username or password
  */
-router.post('/login', validate(loginSchema), login);
+// const logRequest: RequestHandler = (_req, _res, next: NextFunction) => {
+//     console.log("Login request received");
+//     next();
+// };
+
+// const logValidated: RequestHandler = (_req, _res, next) => {
+//     console.log("Login request validated");
+//     next();
+// };
+
+router.post(
+    "/login",
+    // logRequest,
+    validate(loginSchema),
+    // logValidated,
+    login
+);
 
 /**
  * @swagger
