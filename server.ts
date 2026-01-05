@@ -47,7 +47,7 @@ app.use(cors({
   },
   credentials: true
 }));
-// Increase body parser limits to handle larger payloads (e.g., large quotation data, images)
+// Increase body parser limits to handle larger payloads
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
