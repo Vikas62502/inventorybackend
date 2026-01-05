@@ -253,8 +253,58 @@ inventorybackend/
 └── README.md
 ```
 
+## Docker Deployment
+
+### Using Docker Compose
+
+1. **Create `.env` file** with your configuration
+2. **Start services:**
+   ```bash
+   docker-compose up -d
+   ```
+3. **View logs:**
+   ```bash
+   docker-compose logs -f api
+   ```
+
+See [docs/DOCKER.md](docs/DOCKER.md) for detailed Docker documentation.
+
+### Building Docker Image
+
+```bash
+docker build -t chairbord-api:latest .
+```
+
+## CI/CD with GitHub Actions
+
+The project includes GitHub Actions workflows for automated CI/CD:
+
+- **CI Workflow**: Type checking, building, and security scanning
+- **Test Workflow**: Automated testing with database
+- **Deploy Staging**: Automatic deployment to staging on `develop` branch
+- **Deploy Production**: Automatic deployment to production on `main` branch
+- **Docker Hub**: Build and push to Docker Hub
+
+See [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md) for detailed workflow documentation.
+
+## API Documentation
+
+Interactive API documentation is available via Swagger UI:
+
+- **Development**: `http://localhost:3000/api-docs`
+- **Production**: `https://api.chairbord.com/api-docs`
+
+## Logging
+
+The application uses Winston with Loki transport for centralized logging:
+
+- **Console output**: Enabled in development mode
+- **Loki integration**: Configured when `LOKI_HOST_IP` is set
+- **Request logging**: All HTTP requests are automatically logged
+- **Error logging**: Structured error logging with context
+
+See [docs/LOGGER.md](docs/LOGGER.md) for logging configuration.
+
 ## License
 
 ISC
-
-# inventorybackend
