@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
 import {
   StockRequest,
   StockRequestItem,
@@ -599,7 +600,15 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       }
     }
 
-    const dispatchImage = req.file ? `/uploads/${req.file.filename}` : request.dispatch_image;
+    // Use S3 URL if available, otherwise fall back to local path or existing image
+    const dispatchImage = req.file 
+      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
+      : request.dispatch_image;
+    
+    // Delete old dispatch image from S3 if it exists
+    if (request.dispatch_image && req.file) {
+      await deleteFileFromS3IfExists(request.dispatch_image);
+    }
 
     // Update request with dispatch info
     // If requested_from was "admin" (placeholder), update it to the actual admin ID
@@ -691,7 +700,15 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
       return;
     }
 
-    const confirmationImage = req.file ? `/uploads/${req.file.filename}` : request.confirmation_image;
+    // Use S3 URL if available, otherwise fall back to local path or existing image
+    const confirmationImage = req.file 
+      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
+      : request.confirmation_image;
+    
+    // Delete old confirmation image from S3 if it exists
+    if (request.confirmation_image && req.file) {
+      await deleteFileFromS3IfExists(request.confirmation_image);
+    }
     await request.update({
       status: 'confirmed',
       confirmed_by_id: req.user.id,

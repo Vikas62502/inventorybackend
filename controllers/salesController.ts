@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
 import {
   Sale,
   SaleItem,
@@ -452,7 +453,10 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       deliveryAddressId = billingAddressId;
     }
 
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : null;
+    // Use S3 URL if available, otherwise fall back to local path
+    const imagePath = req.file 
+      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
+      : null;
 
     const saleRecord = await Sale.create({
       id: uuidv4(),
@@ -666,7 +670,13 @@ export const updateSale = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+      // Use S3 URL if available, otherwise fall back to local path
+      updates.image = (req.file as any).s3Location || `/uploads/${req.file.filename}`;
+      
+      // Delete old image from S3 if it exists
+      if (sale.image) {
+        await deleteFileFromS3IfExists(sale.image);
+      }
     }
 
     await sale.update(updates);
@@ -711,7 +721,15 @@ export const confirmB2BBill = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const billImage = req.file ? `/uploads/${req.file.filename}` : sale.bill_image;
+    // Use S3 URL if available, otherwise fall back to local path or existing image
+    const billImage = req.file 
+      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
+      : sale.bill_image;
+    
+    // Delete old bill image from S3 if it exists
+    if (sale.bill_image && req.file) {
+      await deleteFileFromS3IfExists(sale.bill_image);
+    }
 
     if (!billImage) {
       res.status(400).json({ error: 'Bill image is required' });

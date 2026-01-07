@@ -9,7 +9,7 @@ import {
   getSalesSummary
 } from '../controllers/salesController';
 import { authenticate, authorize } from '../middleware/auth';
-import upload from '../middleware/upload';
+import upload, { uploadToS3 } from '../middleware/upload';
 import { validateWithJsonParse } from '../middleware/validateWithJsonParse';
 import { validate } from '../middleware/validate';
 import { createSaleSchema, updateSaleSchema } from '../validations/salesValidations';
@@ -122,13 +122,13 @@ router.get('/:id', getSaleById);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorize('agent', 'admin'), upload.single('image'), validateWithJsonParse(createSaleSchema, ['items']), createSale);
+router.post('/', authorize('agent', 'admin'), upload.single('image'), uploadToS3('sales'), validateWithJsonParse(createSaleSchema, ['items']), createSale);
 
 // Update - creator, admin, or super-admin can update
-router.put('/:id', upload.single('image'), validate(updateSaleSchema), updateSale);
+router.put('/:id', upload.single('image'), uploadToS3('sales'), validate(updateSaleSchema), updateSale);
 
 // Confirm B2B bill - only account role
-router.post('/:id/confirm-bill', authorize('account'), upload.single('bill_image'), confirmB2BBill);
+router.post('/:id/confirm-bill', authorize('account'), upload.single('bill_image'), uploadToS3('sales'), confirmB2BBill);
 
 // Delete - creator or super-admin can delete
 router.delete('/:id', deleteSale);

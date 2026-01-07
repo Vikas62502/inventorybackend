@@ -9,7 +9,7 @@ import {
   deleteStockRequest
 } from '../controllers/stockRequestController';
 import { authenticate, authorize } from '../middleware/auth';
-import upload from '../middleware/upload';
+import upload, { uploadToS3 } from '../middleware/upload';
 import { validateWithJsonParse } from '../middleware/validateWithJsonParse';
 import { createStockRequestSchema, updateStockRequestSchema } from '../validations/stockRequestValidations';
 
@@ -104,10 +104,10 @@ router.get('/:id', getStockRequestById);
 router.post('/', authorize('admin', 'agent'), validateWithJsonParse(createStockRequestSchema, ['items']), createStockRequest);
 
 // Dispatch - super-admin and admins can dispatch
-router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), dispatchStockRequest);
+router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), uploadToS3('stock-requests'), dispatchStockRequest);
 
 // Confirm - requester can confirm
-router.post('/:id/confirm', upload.single('confirmation_image'), confirmStockRequest);
+router.post('/:id/confirm', upload.single('confirmation_image'), uploadToS3('stock-requests'), confirmStockRequest);
 
 // Update - requester can update pending requests
 router.put('/:id', validateWithJsonParse(updateStockRequestSchema, ['items']), updateStockRequest);

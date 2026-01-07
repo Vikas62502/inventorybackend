@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Op } from 'sequelize';
 import sequelize from '../config/database';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { deleteFileFromS3IfExists } from '../middleware/upload';
 
 // Get all products
 export const getAllProducts = async (req: Request, res: Response): Promise<void> => {
@@ -83,7 +84,10 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     const id = uuidv4();
-    const imagePath = req.file ? `/uploads/${req.file.filename}` : image;
+    // Use S3 URL if available, otherwise fall back to local path or provided image
+    const imagePath = req.file 
+      ? ((req.file as any).s3Location || `/uploads/${req.file.filename}`)
+      : image;
 
     const newProduct = await Product.create({
       id,
@@ -152,7 +156,13 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     }
 
     if (req.file) {
-      updates.image = `/uploads/${req.file.filename}`;
+      // Use S3 URL if available, otherwise fall back to local path
+      updates.image = (req.file as any).s3Location || `/uploads/${req.file.filename}`;
+      
+      // Delete old image from S3 if it exists
+      if (product.image) {
+        await deleteFileFromS3IfExists(product.image);
+      }
     } else if (image !== undefined) {
       updates.image = image;
     }
@@ -207,6 +217,11 @@ export const deleteProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    // Delete associated image from S3 if it exists
+    if (product.image) {
+      await deleteFileFromS3IfExists(product.image);
+    }
+    
     await product.destroy();
     logInfo('Product deleted', { productId: id, name: product.name, deletedBy: req.user?.id });
     res.json({ message: 'Product deleted successfully' });

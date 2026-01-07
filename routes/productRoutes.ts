@@ -8,7 +8,7 @@ import {
   getInventoryLevels
 } from '../controllers/productController';
 import { authenticate, authorize } from '../middleware/auth';
-import upload from '../middleware/upload';
+import upload, { uploadToS3 } from '../middleware/upload';
 import { validate } from '../middleware/validate';
 import { createProductSchema, updateProductSchema } from '../validations/productValidations';
 
@@ -113,7 +113,7 @@ router.get('/inventory/levels', authenticate, getInventoryLevels);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorize('super-admin'), upload.single('image'), validate(createProductSchema), createProduct);
+router.post('/', authorize('super-admin'), upload.single('image'), uploadToS3('products'), validate(createProductSchema), createProduct);
 
 /**
  * @swagger
