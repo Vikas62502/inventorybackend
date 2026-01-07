@@ -69,4 +69,3 @@ const initSuperAdmin = async (): Promise<void> => {
 // Run the script
 initSuperAdmin();
 
-

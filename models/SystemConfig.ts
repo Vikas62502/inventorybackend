@@ -62,4 +62,3 @@ SystemConfig.init(
 
 export default SystemConfig;
 
-

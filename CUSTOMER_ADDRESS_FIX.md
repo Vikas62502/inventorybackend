@@ -300,4 +300,3 @@ All customer endpoints now return consistent address structure:
 **Last Updated:** December 23, 2025
 
 
-

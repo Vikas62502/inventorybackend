@@ -108,4 +108,3 @@ const checkAndFixAdmin = async (): Promise<void> => {
 
 checkAndFixAdmin();
 
-

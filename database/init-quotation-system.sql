@@ -299,4 +299,3 @@ COMMENT ON TABLE system_config IS 'System-wide configuration key-value pairs';
 -- END OF SCHEMA
 -- ================================================================================
 
-

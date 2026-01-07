@@ -80,4 +80,3 @@ PricingRule.init(
 
 export default PricingRule;
 
-

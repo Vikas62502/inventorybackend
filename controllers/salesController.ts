@@ -389,7 +389,10 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         saleItems = JSON.parse(saleItems);
       } catch (parseError) {
         await transaction.rollback();
-        res.status(400).json({ error: 'items must be a JSON array' });
+        res.status(400).json({ 
+          error: 'items must be a valid JSON array',
+          details: 'Failed to parse items JSON string'
+        });
         return;
       }
     }
@@ -404,6 +407,16 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
         unit_price: req.body.unit_price,
         line_total: req.body.line_total
       }];
+    }
+
+    // Validate items are provided
+    if (!saleItems || !Array.isArray(saleItems) || saleItems.length === 0) {
+      await transaction.rollback();
+      res.status(400).json({ 
+        error: 'At least one sale item is required',
+        details: 'Please provide an items array with at least one product'
+      });
+      return;
     }
 
     const normalizedItems = await normalizeSaleItems(saleItems, transaction);
@@ -533,8 +546,27 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
     res.status(201).json(created);
   } catch (error: any) {
     await transaction.rollback();
-    logError('Create sale error', error, { type: req.body.type, customerName: req.body.customer_name, createdBy: req.user?.id });
-    res.status(400).json({ error: error.message || 'Unable to create sale' });
+    logError('Create sale error', error, { 
+      type: req.body.type, 
+      customerName: req.body.customer_name, 
+      createdBy: req.user?.id,
+      hasItems: !!req.body.items,
+      itemsType: typeof req.body.items,
+      itemsLength: Array.isArray(req.body.items) ? req.body.items.length : 'N/A'
+    });
+    
+    // Provide detailed error message
+    const errorMessage = error.message || 'Unable to create sale';
+    const errorResponse: any = { error: errorMessage };
+    
+    // Add helpful details for common errors
+    if (errorMessage.includes('item') || errorMessage.includes('product')) {
+      errorResponse.details = 'Please check that all items have valid product_id, product_name, model, quantity, unit_price, and line_total';
+    } else if (errorMessage.includes('inventory')) {
+      errorResponse.details = 'Insufficient stock available. Please check inventory levels.';
+    }
+    
+    res.status(400).json(errorResponse);
   }
 };
 

@@ -236,4 +236,3 @@ All endpoints are ready for testing. Use the following tools:
 6. Implement caching for frequently accessed data
 7. Add unit and integration tests
 
-

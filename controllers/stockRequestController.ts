@@ -295,7 +295,7 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
       primary_model: primaryItem.model,
       total_quantity: totalQuantity,
       requested_by_id: req.user.id,
-      requested_by_name: req.user.name,
+        requested_by_name: (req.user as any).name || req.user.username,
       requested_by_role: requestedByRole,
       requested_from,
       requested_from_role: requestedFromRole,
@@ -546,7 +546,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
       request.requested_from_role === 'super-admin'
         ? 'Super Admin'
         : request.requested_from === 'admin'
-        ? req.user.name
+        ? (req.user as any).name || req.user.username
         : (await User.findByPk(request.requested_from, { transaction }))?.name || 'Unknown Admin';
 
     if (request.requested_from_role === 'super-admin') {
@@ -576,15 +576,33 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
         }
       }
     } else {
-      // Use actualSourceAdminId for admin-to-admin or admin-to-agent transfers
+      // Admin-to-admin or admin-to-agent transfer
+      // Validate that actualSourceAdminId is a valid admin ID (not the placeholder string)
+      if (actualSourceAdminId === 'admin' || !actualSourceAdminId) {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Invalid source admin ID for transfer' });
+        return;
+      }
+
+      // Verify the source admin exists and is actually an admin
+      const sourceAdmin = await User.findByPk(actualSourceAdminId, { transaction });
+      if (!sourceAdmin || sourceAdmin.role !== 'admin') {
+        await transaction.rollback();
+        res.status(400).json({ error: 'Source admin not found or invalid role' });
+        return;
+      }
+
       const normalizedItems: NormalizedItem[] = items.map(item => ({
         product_id: item.product_id,
         product_name: item.product_name,
         model: item.model,
         quantity: item.quantity
       }));
+      
+      // Ensure source admin has enough inventory
       await ensureSourceAdminInventory(actualSourceAdminId, normalizedItems, transaction);
 
+      // Decrease source admin's inventory (this is critical for admin-to-agent transfers)
       for (const item of items) {
         const normalizedItem: NormalizedItem = {
           product_id: item.product_id,
@@ -592,11 +610,25 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
           model: item.model,
           quantity: item.quantity
         };
+        
+        // This MUST execute to decrease admin inventory when dispatching to agent
+        // Log for debugging
+        logInfo('Decrementing admin inventory', {
+          adminId: actualSourceAdminId,
+          productId: item.product_id,
+          quantity: item.quantity,
+          requestedByRole: request.requested_by_role,
+          requestedById: request.requested_by_id
+        });
+        
         await decrementAdminInventory(actualSourceAdminId, normalizedItem, transaction);
 
+        // If destination is an admin (admin-to-admin transfer), increase their inventory
         if (request.requested_by_role === 'admin' && request.requested_by_id && item.product_id) {
           await adjustAdminInventory(request.requested_by_id, item.product_id, item.quantity, transaction);
         }
+        // Note: If destination is an agent (admin-to-agent transfer), they don't have inventory records
+        // The stock is just issued to them, and the source admin's inventory is decreased above
       }
     }
 
@@ -615,7 +647,7 @@ export const dispatchStockRequest = async (req: Request, res: Response): Promise
     const updateData: any = {
       status: 'dispatched',
       dispatched_by_id: req.user.id,
-      dispatched_by_name: req.user.name,
+      dispatched_by_name: (req.user as any).name || req.user.username,
       dispatched_date: new Date(),
       dispatch_image: dispatchImage,
       rejection_reason: null
@@ -712,7 +744,7 @@ export const confirmStockRequest = async (req: Request, res: Response): Promise<
     await request.update({
       status: 'confirmed',
       confirmed_by_id: req.user.id,
-      confirmed_by_name: req.user.name,
+      confirmed_by_name: (req.user as any).name || req.user.username,
       confirmed_date: new Date(),
       confirmation_image: confirmationImage
     });

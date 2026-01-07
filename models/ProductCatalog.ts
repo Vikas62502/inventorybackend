@@ -88,4 +88,3 @@ ProductCatalog.init(
 
 export default ProductCatalog;
 
-

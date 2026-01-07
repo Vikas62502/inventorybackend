@@ -72,4 +72,3 @@ CustomPanel.init(
 
 export default CustomPanel;
 
-

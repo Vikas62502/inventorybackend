@@ -161,4 +161,3 @@ Planned features that may require additional tables:
 7. Inventory tracking
 8. Service/maintenance scheduling
 
-

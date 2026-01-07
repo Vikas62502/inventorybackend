@@ -63,4 +63,3 @@ VisitAssignment.init(
 
 export default VisitAssignment;
 
-

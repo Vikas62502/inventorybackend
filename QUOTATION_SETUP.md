@@ -123,4 +123,3 @@ You should see the admin user with `role = 'admin'` and `isActive = true`.
 1. Start the server: `npm run dev`
 2. Test login: `POST /api/auth/login` with admin credentials
 3. Create additional dealers/visitors as needed through the admin API
-

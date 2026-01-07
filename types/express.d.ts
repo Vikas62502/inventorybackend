@@ -1,5 +1,6 @@
 /// <reference types="express" />
 
+// Inventory System User Attributes
 interface UserAttributes {
   id: string;
   username: string;
@@ -13,10 +14,28 @@ interface UserAttributes {
   updated_at?: Date;
 }
 
+// Quotation System User Attributes
+interface QuotationUserAttributes {
+  id: string;
+  username: string;
+  role: 'dealer' | 'admin' | 'visitor';
+}
+
 declare global {
   namespace Express {
     interface Request {
-      user?: UserAttributes;
+      // Inventory system user
+      user?: UserAttributes | QuotationUserAttributes;
+      // Quotation system specific
+      dealer?: {
+        id: string;
+        username: string;
+        role: 'dealer' | 'admin';
+      };
+      visitor?: {
+        id: string;
+        username: string;
+      };
     }
   }
 }
