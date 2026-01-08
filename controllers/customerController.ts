@@ -36,7 +36,7 @@ export const createCustomer = async (req: Request, res: Response): Promise<void>
       firstName,
       lastName,
       mobile,
-      email,
+      email: email && email.trim() !== '' ? email : null,
       streetAddress: address.street,
       city: address.city,
       state: address.state,
@@ -269,7 +269,7 @@ export const updateCustomer = async (req: Request, res: Response): Promise<void>
     if (firstName !== undefined) updateData.firstName = firstName;
     if (lastName !== undefined) updateData.lastName = lastName;
     if (mobile !== undefined) updateData.mobile = mobile;
-    if (email !== undefined) updateData.email = email;
+    if (email !== undefined) updateData.email = email && email.trim() !== '' ? email : null;
     
     // Update address fields if address object is provided
     if (address) {

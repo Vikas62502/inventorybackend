@@ -11,7 +11,7 @@ const customerSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   mobile: z.string().regex(/^\d{10}$/),
-  email: z.string().email(),
+  email: z.union([z.string().email(), z.literal('')]).optional(),
   address: addressSchema
 });
 

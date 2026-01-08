@@ -115,15 +115,18 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   }
 
   // Validate inverter selection
-  if (products.inverterType && catalog.inverters?.types && !catalog.inverters.types.includes(products.inverterType)) {
+  // Only validate if catalog has defined options and allow custom values
+  if (products.inverterType && catalog.inverters?.types && catalog.inverters.types.length > 0 && !catalog.inverters.types.includes(products.inverterType)) {
     errors.push(`Invalid inverter type: ${products.inverterType}`);
   }
-  if (products.inverterBrand && catalog.inverters?.brands && !catalog.inverters.brands.includes(products.inverterBrand)) {
+  if (products.inverterBrand && catalog.inverters?.brands && catalog.inverters.brands.length > 0 && !catalog.inverters.brands.includes(products.inverterBrand)) {
     errors.push(`Invalid inverter brand: ${products.inverterBrand}`);
   }
-  if (products.inverterSize && catalog.inverters?.sizes && !catalog.inverters.sizes.includes(products.inverterSize)) {
-    errors.push(`Invalid inverter size: ${products.inverterSize}`);
-  }
+  // Allow custom inverter sizes - only validate if catalog has sizes and user wants strict validation
+  // For now, we allow any size to be entered even if not in catalog
+  // if (products.inverterSize && catalog.inverters?.sizes && catalog.inverters.sizes.length > 0 && !catalog.inverters.sizes.includes(products.inverterSize)) {
+  //   errors.push(`Invalid inverter size: ${products.inverterSize}`);
+  // }
 
   // Validate structure selection
   if (products.structureType && catalog.structures?.types && !catalog.structures.types.includes(products.structureType)) {
@@ -306,7 +309,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
           firstName: customer.firstName,
           lastName: customer.lastName,
           mobile: customer.mobile,
-          email: customer.email,
+          email: customer.email && customer.email.trim() !== '' ? customer.email : null,
           streetAddress: customer.address.street,
           city: customer.address.city,
           state: customer.address.state,

@@ -11,7 +11,7 @@ export const createCustomerSchema = z.object({
   firstName: z.string().min(1, 'First name is required').max(100),
   lastName: z.string().min(1, 'Last name is required').max(100),
   mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits'),
-  email: z.string().email('Invalid email format'),
+  email: z.union([z.string().email('Invalid email format'), z.literal('')]).optional(),
   address: addressSchema
 });
 

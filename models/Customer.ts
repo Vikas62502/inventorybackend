@@ -6,7 +6,7 @@ interface CustomerAttributes {
   firstName: string;
   lastName: string;
   mobile: string;
-  email: string;
+  email: string | null;
   streetAddress: string;
   city: string;
   state: string;
@@ -23,7 +23,7 @@ class Customer extends Model<CustomerAttributes, CustomerCreationAttributes> imp
   public firstName!: string;
   public lastName!: string;
   public mobile!: string;
-  public email!: string;
+  public email!: string | null;
   public streetAddress!: string;
   public city!: string;
   public state!: string;
@@ -54,7 +54,7 @@ Customer.init(
     },
     email: {
       type: DataTypes.STRING(255),
-      allowNull: false
+      allowNull: true
     },
     streetAddress: {
       type: DataTypes.TEXT,
