@@ -90,8 +90,36 @@ export const createQuotationSchema = z.object({
   message: 'Either customerId or customer object is required'
 });
 
+// Accept number or string that can be converted to number
+const numberOrStringNumber = z.union([
+  z.number(),
+  z.string().transform((val) => {
+    const num = Number(val);
+    if (isNaN(num)) throw new Error('Invalid number');
+    return num;
+  })
+]);
+
 export const updateDiscountSchema = z.object({
-  discount: z.number().min(0).max(100)
+  discount: numberOrStringNumber.pipe(z.number().min(0).max(100))
+});
+
+export const updateProductsSchema = z.object({
+  products: productsSchema
+});
+
+export const updatePricingSchema = z.object({
+  subtotal: z.number().nonnegative().optional(),
+  stateSubsidy: z.number().nonnegative().optional(),
+  centralSubsidy: z.number().nonnegative().optional(),
+  discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
+  finalAmount: z.number().nonnegative().optional()
+}).refine((data) => {
+  // At least one field must be provided and not undefined
+  const hasValue = Object.keys(data).some(key => data[key as keyof typeof data] !== undefined);
+  return hasValue;
+}, {
+  message: 'At least one pricing field must be provided'
 });
 
 

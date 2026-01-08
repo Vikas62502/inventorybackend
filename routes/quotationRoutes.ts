@@ -4,6 +4,8 @@ import {
   getQuotations,
   getQuotationById,
   updateQuotationDiscount,
+  updateQuotationProducts,
+  updateQuotationPricing,
   downloadQuotationPDF,
   getProductCatalog
 } from '../controllers/quotationController';
@@ -11,7 +13,7 @@ import { getVisitsForQuotation } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
-import { createQuotationSchema, updateDiscountSchema } from '../validations/quotationValidations';
+import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema } from '../validations/quotationValidations';
 
 const router: Router = express.Router();
 
@@ -298,6 +300,207 @@ router.get('/:quotationId', authorizeDealerAdminOrVisitor, getQuotationById);
  *         description: Unauthorized
  */
 router.patch('/:quotationId/discount', authorizeDealer, validate(updateDiscountSchema), updateQuotationDiscount);
+
+/**
+ * @swagger
+ * /api/quotations/{quotationId}/products:
+ *   patch:
+ *     summary: Update quotation products/system configuration
+ *     description: Update the system configuration and product details for a quotation
+ *     tags: [Quotations]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: quotationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Quotation ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - products
+ *             properties:
+ *               products:
+ *                 type: object
+ *                 description: Updated products/system configuration
+ *                 properties:
+ *                   systemType:
+ *                     type: string
+ *                     enum: [on-grid, off-grid, hybrid, dcr, non-dcr, both, customize]
+ *                   panelBrand:
+ *                     type: string
+ *                   panelSize:
+ *                     type: string
+ *                   panelQuantity:
+ *                     type: integer
+ *                   dcrPanelBrand:
+ *                     type: string
+ *                   dcrPanelSize:
+ *                     type: string
+ *                   dcrPanelQuantity:
+ *                     type: integer
+ *                   nonDcrPanelBrand:
+ *                     type: string
+ *                   nonDcrPanelSize:
+ *                     type: string
+ *                   nonDcrPanelQuantity:
+ *                     type: integer
+ *                   inverterType:
+ *                     type: string
+ *                   inverterBrand:
+ *                     type: string
+ *                   inverterSize:
+ *                     type: string
+ *                   structureType:
+ *                     type: string
+ *                   structureSize:
+ *                     type: string
+ *                   meterBrand:
+ *                     type: string
+ *                   customPanels:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         brand:
+ *                           type: string
+ *                         size:
+ *                           type: string
+ *                         quantity:
+ *                           type: integer
+ *                         type:
+ *                           type: string
+ *                           enum: [dcr, non-dcr]
+ *     responses:
+ *       200:
+ *         description: Products updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     products:
+ *                       type: object
+ *                     updatedAt:
+ *                       type: string
+ *                       format: date-time
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Quotation not found
+ *       401:
+ *         description: Unauthorized
+ */
+router.patch('/:quotationId/products', authorizeDealer, validate(updateProductsSchema), updateQuotationProducts);
+
+/**
+ * @swagger
+ * /api/quotations/{quotationId}/pricing:
+ *   patch:
+ *     summary: Update quotation pricing
+ *     description: Update pricing fields including subtotal, subsidies, discount, and final amount
+ *     tags: [Quotations]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: quotationId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Quotation ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               subtotal:
+ *                 type: number
+ *                 description: Manual override of subtotal
+ *               stateSubsidy:
+ *                 type: number
+ *                 description: State subsidy amount
+ *               centralSubsidy:
+ *                 type: number
+ *                 description: Central subsidy amount
+ *               discount:
+ *                 type: number
+ *                 minimum: 0
+ *                 maximum: 100
+ *                 description: Discount percentage
+ *               finalAmount:
+ *                 type: number
+ *                 description: Manual override of final amount
+ *     responses:
+ *       200:
+ *         description: Pricing updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     pricing:
+ *                       type: object
+ *                       properties:
+ *                         subtotal:
+ *                           type: number
+ *                         totalSubsidy:
+ *                           type: number
+ *                         stateSubsidy:
+ *                           type: number
+ *                         centralSubsidy:
+ *                           type: number
+ *                         amountAfterSubsidy:
+ *                           type: number
+ *                         discount:
+ *                           type: number
+ *                         discountAmount:
+ *                           type: number
+ *                         totalAmount:
+ *                           type: number
+ *                         finalAmount:
+ *                           type: number
+ *                     updatedAt:
+ *                       type: string
+ *                       format: date-time
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Quotation not found
+ *       401:
+ *         description: Unauthorized
+ */
+router.patch('/:quotationId/pricing', authorizeDealer, validate(updatePricingSchema), updateQuotationPricing);
 
 /**
  * @swagger

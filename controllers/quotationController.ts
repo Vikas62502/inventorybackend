@@ -1069,9 +1069,12 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
     }
 
     const { quotationId } = req.params;
-    const { discount } = req.body;
+    // Handle both number and string inputs (frontend may send string)
+    const discount = typeof req.body.discount === 'string' 
+      ? parseFloat(req.body.discount) 
+      : req.body.discount;
 
-    if (discount < 0 || discount > 100) {
+    if (isNaN(discount) || discount < 0 || discount > 100) {
       res.status(400).json({
         success: false,
         error: {
@@ -1151,6 +1154,323 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
     });
   } catch (error) {
     logError('Update quotation discount error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Update quotation products/system configuration
+export const updateQuotationProducts = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const { products } = req.body;
+
+    // Admins can update all quotations, dealers only their own
+    const where: any = { id: quotationId };
+    if (req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+    const quotation = await Quotation.findOne({
+      where,
+      include: [
+        { model: QuotationProduct, as: 'products' },
+        { model: CustomPanel, as: 'customPanels' }
+      ]
+    });
+
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    // Validate product selection against catalog
+    const catalog = await getProductCatalogData();
+    const validation = validateProductSelection(products, catalog);
+    if (!validation.isValid) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_003',
+          message: 'Invalid product selection',
+          details: validation.errors.map(error => ({ message: error }))
+        }
+      });
+      return;
+    }
+
+    // Update quotation system type if provided
+    if (products.systemType) {
+      await quotation.update({ systemType: products.systemType });
+    }
+
+    // Get or create quotation products record
+    const quotationAny = quotation as any;
+    let quotationProduct = quotationAny.products || await QuotationProduct.findOne({ 
+      where: { quotationId: quotation.id } 
+    });
+
+    if (!quotationProduct) {
+      // Ensure required fields are present
+      quotationProduct = await QuotationProduct.create({
+        id: uuidv4(),
+        quotationId: quotation.id,
+        systemType: products.systemType || quotation.systemType,
+        subtotal: Number(quotation.subtotal || 0),
+        totalAmount: Number(quotation.totalAmount || 0),
+        ...products
+      });
+    } else {
+      await quotationProduct.update(products);
+    }
+
+    // Handle custom panels if systemType is 'customize'
+    if (products.systemType === 'customize' && products.customPanels) {
+      // Delete existing custom panels
+      await CustomPanel.destroy({ where: { quotationId: quotation.id } });
+      
+      // Create new custom panels
+      if (Array.isArray(products.customPanels) && products.customPanels.length > 0) {
+        await CustomPanel.bulkCreate(
+          products.customPanels.map((panel: any) => ({
+            id: uuidv4(),
+            quotationId: quotation.id,
+            brand: panel.brand,
+            size: panel.size,
+            quantity: panel.quantity,
+            type: panel.type,
+            price: panel.price
+          }))
+        );
+      }
+    } else {
+      // If system type changed from customize, remove custom panels
+      await CustomPanel.destroy({ where: { quotationId: quotation.id } });
+    }
+
+    // Recalculate pricing if needed (optional - can be done separately via pricing endpoint)
+    // For now, we'll just update the products without recalculating pricing
+
+    // Refresh quotation to get updated timestamp
+    await quotation.reload();
+
+    // Fetch updated quotation with all relations
+    const updatedQuotation = await Quotation.findByPk(quotation.id, {
+      include: [
+        { model: QuotationProduct, as: 'products' },
+        { model: CustomPanel, as: 'customPanels' }
+      ]
+    });
+
+    const updatedQuotationAny = updatedQuotation as any;
+    const productsData = updatedQuotationAny?.products?.toJSON();
+    const customPanelsData = updatedQuotationAny?.customPanels?.map((cp: any) => cp.toJSON()) || [];
+
+    res.json({
+      success: true,
+      data: {
+        id: updatedQuotation?.id,
+        systemType: updatedQuotation?.systemType,
+        products: productsData ? {
+          ...productsData,
+          customPanels: customPanelsData.length > 0 ? customPanelsData : undefined
+        } : null,
+        updatedAt: updatedQuotation?.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation products error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+// Update quotation pricing
+export const updateQuotationPricing = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.dealer) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const { 
+      subtotal, 
+      stateSubsidy, 
+      centralSubsidy, 
+      discount,
+      finalAmount 
+    } = req.body;
+
+    // Admins can update all quotations, dealers only their own
+    const where: any = { id: quotationId };
+    if (req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+    const quotation = await Quotation.findOne({
+      where,
+      include: [{ model: QuotationProduct, as: 'products' }]
+    });
+
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const quotationAny = quotation as any;
+    const currentProducts = quotationAny.products || {};
+
+    // Get current values or use provided values
+    const newSubtotal = subtotal !== undefined ? Number(subtotal) : Number(quotation.subtotal || 0);
+    const newStateSubsidy = stateSubsidy !== undefined ? Number(stateSubsidy) : Number(currentProducts.stateSubsidy || 0);
+    const newCentralSubsidy = centralSubsidy !== undefined ? Number(centralSubsidy) : Number(currentProducts.centralSubsidy || 0);
+    const newDiscount = discount !== undefined 
+      ? (typeof discount === 'string' ? parseFloat(discount) : Number(discount))
+      : Number(quotation.discount || 0);
+    const newFinalAmount = finalAmount !== undefined ? Number(finalAmount) : undefined;
+
+    // Validate discount range
+    if (discount !== undefined && (isNaN(newDiscount) || newDiscount < 0 || newDiscount > 100)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Discount must be between 0 and 100',
+          details: [{ field: 'discount', message: 'Discount must be between 0 and 100' }]
+        }
+      });
+      return;
+    }
+
+    // Validate subtotal
+    if (subtotal !== undefined && (isNaN(newSubtotal) || newSubtotal <= 0)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Subtotal must be greater than 0',
+          details: [{ field: 'subtotal', message: 'Subtotal must be greater than 0' }]
+        }
+      });
+      return;
+    }
+
+    // Validate subsidies don't exceed subtotal
+    const totalSubsidy = newStateSubsidy + newCentralSubsidy;
+    if (totalSubsidy > newSubtotal) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Total subsidy cannot exceed subtotal',
+          details: [{ field: 'subsidy', message: `Total subsidy (${totalSubsidy}) cannot exceed subtotal (${newSubtotal})` }]
+        }
+      });
+      return;
+    }
+
+    // Calculate amounts
+    const amountAfterSubsidy = newSubtotal - totalSubsidy;
+    const discountAmount = (amountAfterSubsidy * newDiscount) / 100;
+    const calculatedTotalAmount = amountAfterSubsidy - discountAmount;
+    
+    // Use provided finalAmount or calculate it (subtotal - subsidy, no discount)
+    const calculatedFinalAmount = newSubtotal - totalSubsidy;
+    const finalFinalAmount = newFinalAmount !== undefined ? newFinalAmount : calculatedFinalAmount;
+
+    // Validate finalAmount is reasonable
+    if (newFinalAmount !== undefined && (isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > newSubtotal)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Final amount must be between 0 and subtotal',
+          details: [{ field: 'finalAmount', message: `Final amount must be between 0 and ${newSubtotal}` }]
+        }
+      });
+      return;
+    }
+
+    // Update quotation
+    await quotation.update({
+      subtotal: newSubtotal,
+      discount: newDiscount,
+      totalAmount: calculatedTotalAmount,
+      finalAmount: finalFinalAmount
+    });
+
+    // Update products with subsidies if provided
+    if (stateSubsidy !== undefined || centralSubsidy !== undefined) {
+      let quotationProduct = quotationAny.products || await QuotationProduct.findOne({ 
+        where: { quotationId: quotation.id } 
+      });
+
+      if (!quotationProduct) {
+        // Get systemType and pricing from quotation
+        quotationProduct = await QuotationProduct.create({
+          id: uuidv4(),
+          quotationId: quotation.id,
+          systemType: quotation.systemType,
+          subtotal: Number(quotation.subtotal || 0),
+          totalAmount: Number(quotation.totalAmount || 0),
+          stateSubsidy: newStateSubsidy,
+          centralSubsidy: newCentralSubsidy
+        });
+      } else {
+        await quotationProduct.update({
+          stateSubsidy: newStateSubsidy,
+          centralSubsidy: newCentralSubsidy
+        });
+      }
+    }
+
+    // Refresh quotation to get updated timestamp
+    await quotation.reload();
+
+    res.json({
+      success: true,
+      data: {
+        id: quotation.id,
+        pricing: {
+          subtotal: newSubtotal,
+          totalSubsidy: totalSubsidy,
+          stateSubsidy: newStateSubsidy,
+          centralSubsidy: newCentralSubsidy,
+          amountAfterSubsidy: amountAfterSubsidy,
+          discount: newDiscount,
+          discountAmount: discountAmount,
+          totalAmount: calculatedTotalAmount,
+          finalAmount: finalFinalAmount
+        },
+        discount: newDiscount,
+        subtotal: newSubtotal,
+        totalAmount: calculatedTotalAmount,
+        finalAmount: finalFinalAmount,
+        updatedAt: quotation.updatedAt
+      }
+    });
+  } catch (error) {
+    logError('Update quotation pricing error', error, { quotationId: req.params.quotationId });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }
