@@ -2,8 +2,9 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { Dealer, Visitor } from '../models/index-quotation';
-import { User } from '../models';
+import { User, AccountManager, AccountManagerHistory } from '../models';
 import { logError, logInfo } from '../utils/loggerHelper';
+import { v4 as uuidv4 } from 'uuid';
 
 // Login - for dealers and visitors
 export const login = async (req: Request, res: Response): Promise<void> => {
@@ -152,6 +153,104 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Try Account Manager
+    const accountManager = await AccountManager.findOne({ where: { username } });
+    if (accountManager) {
+      if (!accountManager.isActive) {
+        logError('Login attempt - account manager inactive', new Error('Account manager inactive'), { username, accountManagerId: accountManager.id });
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'AUTH_005',
+            message: 'Account is deactivated'
+          }
+        });
+        return;
+      }
+
+      const isValidPassword = await bcrypt.compare(password, accountManager.password);
+      if (!isValidPassword) {
+        logError('Login attempt - invalid password', new Error('Invalid password'), { username, accountManagerId: accountManager.id });
+        res.status(401).json({
+          success: false,
+          error: {
+            code: 'AUTH_001',
+            message: 'Invalid username or password'
+          }
+        });
+        return;
+      }
+
+      // Update login count and last login
+      const updatedLoginCount = (accountManager.loginCount || 0) + 1;
+      await accountManager.update({
+        loginCount: updatedLoginCount,
+        lastLogin: new Date()
+      });
+
+      // Log login history
+      try {
+        await AccountManagerHistory.create({
+          id: uuidv4(),
+          accountManagerId: accountManager.id,
+          action: 'login',
+          details: 'User logged in successfully',
+          ipAddress: req.headers['x-forwarded-for']?.toString().split(',')[0] 
+            || req.headers['x-real-ip']?.toString()
+            || req.ip 
+            || req.socket?.remoteAddress 
+            || 'unknown',
+          userAgent: req.headers['user-agent'] || null,
+          timestamp: new Date()
+        });
+      } catch (historyError) {
+        // Log error but don't fail login
+        logError('Failed to log account manager login history', historyError, { accountManagerId: accountManager.id });
+      }
+
+      const expiresIn: string = process.env.JWT_EXPIRE || '7d';
+      const token = jwt.sign(
+        { id: accountManager.id, role: 'account-management' },
+        jwtSecret,
+        { expiresIn } as SignOptions
+      );
+
+      const refreshToken = jwt.sign(
+        { id: accountManager.id, role: 'account-management', type: 'refresh' },
+        jwtSecret,
+        { expiresIn: '30d' } as SignOptions
+      );
+
+      // Reload account manager to get updated loginCount and lastLogin
+      const updatedAccountManager = await AccountManager.findByPk(accountManager.id, {
+        attributes: { exclude: ['password'] }
+      });
+
+      res.json({
+        success: true,
+        data: {
+          token,
+          refreshToken,
+          user: {
+            id: updatedAccountManager!.id,
+            username: updatedAccountManager!.username,
+            firstName: updatedAccountManager!.firstName,
+            lastName: updatedAccountManager!.lastName,
+            email: updatedAccountManager!.email,
+            mobile: updatedAccountManager!.mobile || '',
+            role: 'account-management',
+            isActive: updatedAccountManager!.isActive,
+            emailVerified: updatedAccountManager!.emailVerified || false,
+            loginCount: updatedAccountManager!.loginCount,
+            lastLogin: updatedAccountManager!.lastLogin,
+            createdAt: updatedAccountManager!.createdAt
+          },
+          expiresIn: 3600
+        }
+      });
+      return;
+    }
+
     // Try User model (Inventory System) as fallback
     const user = await User.findOne({ where: { username } });
     if (user) {
@@ -213,7 +312,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     // User not found in any system
-    logError('Login attempt - user not found', new Error('User not found in dealers, visitors, or users'), { username });
+    logError('Login attempt - user not found', new Error('User not found in dealers, visitors, account managers, or users'), { username });
     res.status(401).json({
       success: false,
       error: {
@@ -322,11 +421,41 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
 };
 
 // Logout
-export const logout = async (_req: Request, res: Response): Promise<void> => {
-  res.json({
-    success: true,
-    message: 'Logged out successfully'
-  });
+export const logout = async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Log logout history for account managers
+    if (req.user && req.user.role === 'account-management') {
+      try {
+        await AccountManagerHistory.create({
+          id: uuidv4(),
+          accountManagerId: req.user.id,
+          action: 'logout',
+          details: 'User logged out',
+          ipAddress: req.headers['x-forwarded-for']?.toString().split(',')[0] 
+            || req.headers['x-real-ip']?.toString()
+            || req.ip 
+            || req.socket?.remoteAddress 
+            || 'unknown',
+          userAgent: req.headers['user-agent'] || null,
+          timestamp: new Date()
+        });
+      } catch (historyError) {
+        // Log error but don't fail logout
+        logError('Failed to log account manager logout history', historyError, { accountManagerId: req.user.id });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    logError('Logout error', error);
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  }
 };
 
 // Change password

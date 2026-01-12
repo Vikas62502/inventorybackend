@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig } from '../models/index-quotation';
+import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 
@@ -708,14 +708,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
 // Get quotations with pagination
 export const getQuotations = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer && !req.visitor) {
-      res.status(401).json({
-        success: false,
-        error: { code: 'AUTH_003', message: 'User not authenticated' }
-      });
-      return;
-    }
-
+    // Authorization is handled by middleware (authorizeDealerAdminOrVisitor)
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
     const offset = (page - 1) * limit;
@@ -726,9 +719,16 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
 
+    // Check if user is account manager
+    const isAccountManager = req.user && req.user.role === 'account-management';
+
     // Admins can see all quotations, dealers only see their own, visitors see quotations from their visits
+    // Account managers only see approved quotations
     let where: any = {};
-    if (req.visitor) {
+    if (isAccountManager) {
+      // Account managers can only see approved quotations
+      where.status = 'approved';
+    } else if (req.visitor) {
       // Visitors can only see quotations from their assigned visits
       const visitorAssignments = await VisitAssignment.findAll({
         where: { visitorId: req.visitor.id },
@@ -781,7 +781,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       where = req.dealer.role === 'admin' ? {} : { dealerId: req.dealer.id };
     }
 
-    if (status) {
+    // Account managers cannot override status filter - they only see approved
+    // For others, allow status filter from query params
+    if (!isAccountManager && status) {
       where.status = status;
     }
 
@@ -813,6 +815,12 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             model: QuotationProduct,
             as: 'products',
             required: false
+          },
+          {
+            model: Dealer,
+            as: 'dealer',
+            attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
+            required: false
           }
         ],
         limit,
@@ -832,6 +840,12 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             model: QuotationProduct,
             as: 'products',
             required: false
+          },
+          {
+            model: Dealer,
+            as: 'dealer',
+            attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
+            required: false
           }
         ],
         limit,
@@ -843,6 +857,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
     const formattedQuotations = quotations.rows.map(q => {
       const customer = (q as any).customer;
       const products = (q as any).products;
+      const dealer = (q as any).dealer;
       
       // Calculate pricing if products exist
       const pricing = products 
@@ -851,6 +866,16 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       
       return {
         id: q.id,
+        dealerId: q.dealerId,
+        dealer: dealer ? {
+          id: dealer.id,
+          firstName: dealer.firstName,
+          lastName: dealer.lastName,
+          email: dealer.email,
+          mobile: dealer.mobile,
+          username: dealer.username,
+          role: dealer.role
+        } : null,
         customer: customer ? {
           firstName: customer.firstName,
           lastName: customer.lastName,
@@ -910,19 +935,18 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
 // Get quotation by ID
 export const getQuotationById = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer && !req.visitor) {
-      res.status(401).json({
-        success: false,
-        error: { code: 'AUTH_003', message: 'User not authenticated' }
-      });
-      return;
-    }
-
+    // Authorization is handled by middleware (authorizeDealerAdminOrVisitor)
     const { quotationId } = req.params;
     const where: any = { id: quotationId };
     
+    // Check if user is account manager
+    const isAccountManager = req.user && req.user.role === 'account-management';
+    
     // Check permissions
-    if (req.visitor) {
+    if (isAccountManager) {
+      // Account managers can only see approved quotations
+      where.status = 'approved';
+    } else if (req.visitor) {
       // Visitors can only see quotations from their assigned visits
       const visitorAssignments = await VisitAssignment.findAll({
         where: { visitorId: req.visitor.id },
@@ -968,6 +992,11 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         {
           model: CustomPanel,
           as: 'customPanels'
+        },
+        {
+          model: Dealer,
+          as: 'dealer',
+          attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
         }
       ]
     });
@@ -983,6 +1012,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const quotationAny = quotation as any;
     const products = quotationAny.products;
     const customer = quotationAny.customer;
+    const dealer = quotationAny.dealer;
     
     // Calculate pricing breakdown (component prices for display)
     const pricing = calculatePricing(products || {}, quotation.discount);
@@ -1000,6 +1030,15 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       data: {
         id: quotation.id,
         dealerId: quotation.dealerId,
+        dealer: dealer ? {
+          id: dealer.id,
+          firstName: dealer.firstName,
+          lastName: dealer.lastName,
+          email: dealer.email,
+          mobile: dealer.mobile,
+          username: dealer.username,
+          role: dealer.role
+        } : null,
         customer: customer ? {
           id: customer.id,
           firstName: customer.firstName,

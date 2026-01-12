@@ -11,6 +11,8 @@ import Sale from './Sale';
 import SaleItem from './SaleItem';
 import InventoryTransaction from './InventoryTransaction';
 import StockReturn from './StockReturn';
+import AccountManager from './AccountManager';
+import AccountManagerHistory from './AccountManagerHistory';
 
 // Define all associations
 // User associations
@@ -68,6 +70,10 @@ StockReturn.belongsTo(User, { foreignKey: 'admin_id', as: 'admin' });
 StockReturn.belongsTo(User, { foreignKey: 'processed_by', as: 'processor' });
 StockReturn.belongsTo(Product, { foreignKey: 'product_id', as: 'product' });
 
+// AccountManager associations
+AccountManager.hasMany(AccountManagerHistory, { foreignKey: 'accountManagerId', as: 'history', onDelete: 'CASCADE' });
+AccountManagerHistory.belongsTo(AccountManager, { foreignKey: 'accountManagerId', as: 'accountManager' });
+
 // Sync database (use with caution in production)
 export const syncDatabase = async (force: boolean = false): Promise<void> => {
   try {
@@ -89,7 +95,9 @@ export {
   Sale,
   SaleItem,
   InventoryTransaction,
-  StockReturn
+  StockReturn,
+  AccountManager,
+  AccountManagerHistory
 };
 
 

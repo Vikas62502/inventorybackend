@@ -28,6 +28,7 @@ import visitRoutes from './routes/visitRoutes';
 import visitorRoutes from './routes/visitorRoutes';
 import adminRoutes from './routes/adminRoutes';
 import configRoutes from './routes/configRoutes';
+import accountManagerRoutes from './routes/accountManagerRoutes';
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -82,6 +83,7 @@ app.use('/api/quotations', quotationRoutes);
 app.use('/api/visits', visitRoutes);
 app.use('/api/visitors', visitorRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/account-managers', accountManagerRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/categories', categoryRoutes);

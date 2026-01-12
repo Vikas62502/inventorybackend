@@ -18,7 +18,7 @@ interface UserAttributes {
 interface QuotationUserAttributes {
   id: string;
   username: string;
-  role: 'dealer' | 'admin' | 'visitor';
+  role: 'dealer' | 'admin' | 'visitor' | 'account-management';
 }
 
 declare global {
@@ -35,6 +35,12 @@ declare global {
       visitor?: {
         id: string;
         username: string;
+      };
+      // Account manager (can be part of QuotationUserAttributes but keeping for clarity)
+      accountManager?: {
+        id: string;
+        username: string;
+        role: 'account-management';
       };
     }
   }

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { Dealer, Visitor } from '../models/index-quotation';
+import { AccountManager, User } from '../models';
 
 // Authenticate dealer or admin
 export const authenticate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -90,6 +91,52 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         return;
       }
 
+      // Check if it's an account manager
+      if (decoded.role === 'account-management') {
+        const accountManager = await AccountManager.findByPk(decoded.id);
+        if (!accountManager || !accountManager.isActive) {
+          res.status(401).json({
+            success: false,
+            error: {
+              code: 'AUTH_005',
+              message: 'Account suspended'
+            }
+          });
+          return;
+        }
+
+        req.user = {
+          id: accountManager.id,
+          username: accountManager.username,
+          role: 'account-management'
+        };
+        next();
+        return;
+      }
+
+      // Check if it's an Inventory System user (super-admin, admin, agent, account)
+      if (decoded.role === 'super-admin' || decoded.role === 'admin' || decoded.role === 'agent' || decoded.role === 'account') {
+        const user = await User.findByPk(decoded.id);
+        if (!user || !user.is_active) {
+          res.status(401).json({
+            success: false,
+            error: {
+              code: 'AUTH_005',
+              message: 'Account suspended'
+            }
+          });
+          return;
+        }
+
+        req.user = {
+          id: user.id,
+          username: user.username,
+          role: user.role as 'admin' | 'super-admin'
+        } as any; // Type assertion needed due to union type differences
+        next();
+        return;
+      }
+
       res.status(401).json({
         success: false,
         error: {
@@ -158,9 +205,18 @@ export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFu
   next();
 };
 
-// Authorize admin only
+// Authorize admin only (Quotation System admin OR Inventory System admin/super-admin)
 export const authorizeAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.dealer || req.dealer.role !== 'admin') {
+  // Check Quotation System admin (dealer with role 'admin')
+  const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
+  
+  // Check Inventory System admin/super-admin
+  const isInventoryAdmin = req.user && (
+    req.user.role === 'admin' || 
+    req.user.role === 'super-admin'
+  );
+  
+  if (!isQuotationAdmin && !isInventoryAdmin) {
     res.status(403).json({
       success: false,
       error: {
@@ -188,9 +244,14 @@ export const authorizeVisitor = (req: Request, res: Response, next: NextFunction
   next();
 };
 
-// Authorize dealer, admin, or visitor (for read operations)
+// Authorize dealer, admin, visitor, or account manager (for read operations)
 export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.dealer && !req.visitor) {
+  // Allow dealers/admins, visitors, or account managers
+  const isDealerOrAdmin = req.dealer !== undefined;
+  const isVisitor = req.visitor !== undefined;
+  const isAccountManager = req.user && req.user.role === 'account-management';
+  
+  if (!isDealerOrAdmin && !isVisitor && !isAccountManager) {
     res.status(401).json({
       success: false,
       error: {
