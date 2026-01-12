@@ -5,13 +5,14 @@ interface QuotationProductAttributes {
   id: string;
   quotationId: string;
   systemType: string;
-  
+  phase?: string | null;
+
   // Panel Configuration
   panelBrand?: string | null;
   panelSize?: string | null;
   panelQuantity?: number | null;
   panelPrice?: number | null;
-  
+
   // DCR/Non-DCR Configuration
   dcrPanelBrand?: string | null;
   dcrPanelSize?: string | null;
@@ -19,18 +20,18 @@ interface QuotationProductAttributes {
   nonDcrPanelBrand?: string | null;
   nonDcrPanelSize?: string | null;
   nonDcrPanelQuantity?: number | null;
-  
+
   // Inverter Configuration
   inverterType?: string | null;
   inverterBrand?: string | null;
   inverterSize?: string | null;
   inverterPrice?: number | null;
-  
+
   // Structure & Mounting
   structureType?: string | null;
   structureSize?: string | null;
   structurePrice?: number | null;
-  
+
   // Electrical Components
   meterBrand?: string | null;
   meterPrice?: number | null;
@@ -44,28 +45,29 @@ interface QuotationProductAttributes {
   acdbPrice?: number | null;
   dcdb?: string | null;
   dcdbPrice?: number | null;
-  
+
   // Battery (for hybrid/off-grid)
   hybridInverter?: string | null;
   batteryCapacity?: string | null;
   batteryPrice?: number | null;
-  
+
   // Subsidies
   centralSubsidy: number;
   stateSubsidy: number;
-  
+
   // Totals
   subtotal: number;        // Set price (complete package price)
   totalAmount: number;      // Amount after discount (Subtotal - Subsidy - Discount)
   finalAmount?: number | null;     // Final amount (Subtotal - Subsidy, discount NOT applied)
 }
 
-interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'finalAmount'> {}
+interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'finalAmount'> { }
 
 class QuotationProduct extends Model<QuotationProductAttributes, QuotationProductCreationAttributes> implements QuotationProductAttributes {
   public id!: string;
   public quotationId!: string;
   public systemType!: string;
+  public phase!: string | null;
   public panelBrand!: string | null;
   public panelSize!: string | null;
   public panelQuantity!: number | null;
@@ -119,6 +121,10 @@ QuotationProduct.init(
     systemType: {
       type: DataTypes.STRING(50),
       allowNull: false
+    },
+    phase: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
     },
     panelBrand: {
       type: DataTypes.STRING(100),
