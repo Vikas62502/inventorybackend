@@ -16,12 +16,19 @@ interface QuotationAttributes {
   totalSubsidy: number;    // Total subsidy (central + state)
   amountAfterSubsidy: number; // Amount after subsidy
   discountAmount: number;  // Discount amount
+  paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | null;
+  paidAmount?: number | null;
+  paymentDate?: Date | null;
+  paymentStatus?: 'pending' | 'partial' | 'completed' | null;
   createdAt?: Date;
   updatedAt?: Date;
   validUntil: Date;
 }
 
-interface QuotationCreationAttributes extends Optional<QuotationAttributes, 'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount'> {}
+interface QuotationCreationAttributes extends Optional<
+  QuotationAttributes,
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'paymentMode' | 'paidAmount' | 'paymentDate' | 'paymentStatus'
+> {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
   public id!: string;
@@ -38,6 +45,10 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public totalSubsidy!: number;    // Total subsidy (central + state)
   public amountAfterSubsidy!: number; // Amount after subsidy
   public discountAmount!: number;  // Discount amount
+  public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | null;
+  public paidAmount!: number | null;
+  public paymentDate!: Date | null;
+  public paymentStatus!: 'pending' | 'partial' | 'completed' | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
   public validUntil!: Date;
@@ -107,6 +118,23 @@ Quotation.init(
       type: DataTypes.DECIMAL(12, 2),
       allowNull: false,
       defaultValue: 0
+    },
+    paymentMode: {
+      type: DataTypes.STRING(30),
+      allowNull: true
+    },
+    paidAmount: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: true
+    },
+    paymentDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true
+    },
+    paymentStatus: {
+      type: DataTypes.ENUM('pending', 'partial', 'completed'),
+      allowNull: true,
+      defaultValue: 'pending'
     },
     validUntil: {
       type: DataTypes.DATEONLY,

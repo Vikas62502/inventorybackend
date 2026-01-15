@@ -10,7 +10,7 @@ import {
   getProductCatalog
 } from '../controllers/quotationController';
 import { getVisitsForQuotation } from '../controllers/visitController';
-import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor } from '../middleware/authQuotation';
+import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor, authorizeDealerOrAccountManager, rejectAccountManager } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema } from '../validations/quotationValidations';
@@ -162,7 +162,7 @@ router.post('/',
  *                 code: "SYS_001"
  *                 message: "Internal server error"
  */
-router.get('/product-catalog', authorizeDealerAdminOrVisitor, getProductCatalog);
+router.get('/product-catalog', rejectAccountManager, authorizeDealerAdminOrVisitor, getProductCatalog);
 
 /**
  * @swagger
@@ -408,7 +408,7 @@ router.patch('/:quotationId/discount', authorizeDealer, validate(updateDiscountS
  *       401:
  *         description: Unauthorized
  */
-router.patch('/:quotationId/products', authorizeDealer, validate(updateProductsSchema), updateQuotationProducts);
+router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate(updateProductsSchema), updateQuotationProducts);
 
 /**
  * @swagger
@@ -500,7 +500,7 @@ router.patch('/:quotationId/products', authorizeDealer, validate(updateProductsS
  *       401:
  *         description: Unauthorized
  */
-router.patch('/:quotationId/pricing', authorizeDealer, validate(updatePricingSchema), updateQuotationPricing);
+router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(updatePricingSchema), updateQuotationPricing);
 
 /**
  * @swagger
@@ -535,7 +535,7 @@ router.patch('/:quotationId/pricing', authorizeDealer, validate(updatePricingSch
  *       401:
  *         description: Unauthorized
  */
-router.get('/:quotationId/pdf', authorizeDealerAdminOrVisitor, downloadQuotationPDF);
+router.get('/:quotationId/pdf', rejectAccountManager, authorizeDealerAdminOrVisitor, downloadQuotationPDF);
 
 /**
  * @swagger
@@ -571,7 +571,7 @@ router.get('/:quotationId/pdf', authorizeDealerAdminOrVisitor, downloadQuotation
  *       401:
  *         description: Unauthorized
  */
-router.get('/:quotationId/visits', authorizeDealerAdminOrVisitor, getVisitsForQuotation);
+router.get('/:quotationId/visits', rejectAccountManager, authorizeDealerAdminOrVisitor, getVisitsForQuotation);
 
 export default router;
 

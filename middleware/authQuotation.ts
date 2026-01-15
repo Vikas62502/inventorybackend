@@ -176,6 +176,16 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
 
 // Authorize dealer only
 export const authorizeDealer = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && req.user.role === 'account-management') {
+    res.status(403).json({
+      success: false,
+      error: {
+        code: 'AUTH_004',
+        message: 'Insufficient permissions'
+      }
+    });
+    return;
+  }
   if (!req.dealer) {
     res.status(401).json({
       success: false,
@@ -191,6 +201,16 @@ export const authorizeDealer = (req: Request, res: Response, next: NextFunction)
 
 // Authorize dealer or admin (both can access)
 export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && req.user.role === 'account-management') {
+    res.status(403).json({
+      success: false,
+      error: {
+        code: 'AUTH_004',
+        message: 'Insufficient permissions'
+      }
+    });
+    return;
+  }
   if (!req.dealer) {
     res.status(401).json({
       success: false,
@@ -262,6 +282,59 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
     return;
   }
   next();
+};
+
+// Allow dealer/admin or account manager
+export const authorizeDealerOrAccountManager = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.dealer) {
+    next();
+    return;
+  }
+  if (req.user && req.user.role === 'account-management') {
+    next();
+    return;
+  }
+  res.status(401).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions'
+    }
+  });
+};
+
+// Reject account managers (used to hard-block read endpoints beyond approved list)
+export const rejectAccountManager = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && req.user.role === 'account-management') {
+    res.status(403).json({
+      success: false,
+      error: {
+        code: 'AUTH_004',
+        message: 'Insufficient permissions'
+      }
+    });
+    return;
+  }
+  next();
+};
+
+// Allow dealer/admin or account manager for payment updates
+export const authorizeDealerOrAccountManagerPayment = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.dealer) {
+    next();
+    return;
+  }
+  if (req.user && req.user.role === 'account-management') {
+    next();
+    return;
+  }
+  res.status(401).json({
+    success: false,
+    error: {
+      code: 'AUTH_004',
+      message: 'Insufficient permissions'
+    }
+  });
 };
 
 

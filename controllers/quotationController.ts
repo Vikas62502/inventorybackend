@@ -245,6 +245,17 @@ const calculatePricing = (products: any, discount: number = 0) => {
   };
 };
 
+const calculatePaymentStatus = (paidAmount: number | null | undefined, totalAmount: number) => {
+  const paid = Number(paidAmount);
+  if (isNaN(paid) || paid <= 0) {
+    return 'pending';
+  }
+  if (paid >= totalAmount) {
+    return 'completed';
+  }
+  return 'partial';
+};
+
 // Create quotation
 export const createQuotation = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -269,7 +280,11 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       discountAmount,      // Discount amount
       totalAmount,         // Amount after discount (Subtotal - Subsidy - Discount) - MUST BE SAVED
       finalAmount,         // Final amount (Subtotal - Subsidy, discount NOT applied) - MUST BE SAVED
-      pricing: bodyPricing
+      pricing: bodyPricing,
+      paymentMode,
+      paidAmount,
+      paymentDate,
+      paymentStatus
     } = req.body;
     
     // Log entire request body for debugging (excluding sensitive data)
@@ -295,7 +310,11 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       rawSubtotal: req.body.subtotal,
       rawTotalAmount: req.body.totalAmount,
       rawFinalAmount: req.body.finalAmount,
-      rawProductsSystemPrice: req.body.products?.systemPrice
+      rawProductsSystemPrice: req.body.products?.systemPrice,
+      paymentMode,
+      paidAmount,
+      paymentDate,
+      paymentStatus
     });
 
     // Handle customer creation if customer object is provided
@@ -586,6 +605,13 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
     const validUntil = new Date();
     validUntil.setDate(validUntil.getDate() + 5);
 
+    const normalizedPaidAmount = paidAmount !== undefined && paidAmount !== null
+      ? Number(paidAmount)
+      : null;
+    const normalizedPaymentStatus = normalizedPaidAmount !== null
+      ? calculatePaymentStatus(normalizedPaidAmount, validatedTotalAmount)
+      : (paymentStatus ?? null);
+
     // Create quotation - MUST save all pricing fields from frontend
     const quotation = await Quotation.create({
       id: quotationId,
@@ -602,19 +628,25 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       totalSubsidy: finalPricing.totalSubsidy,           // Total subsidy (central + state)
       amountAfterSubsidy: finalPricing.amountAfterSubsidy, // Amount after subsidy
       discountAmount: finalPricing.discountAmount,       // Discount amount
+      paymentMode: paymentMode ?? null,
+      paidAmount: normalizedPaidAmount,
+      paymentDate: paymentDate ?? null,
+      paymentStatus: normalizedPaymentStatus,
       validUntil
     });
+
+    const normalizedPhase = products.phase || '1-Phase';
 
     // Create quotation products
     logInfo('Saving quotation products phase', {
       quotationId: quotation.id,
-      phase: products.phase
+      phase: normalizedPhase
     });
     await QuotationProduct.create({
       id: uuidv4(),
       quotationId: quotation.id,
       systemType: products.systemType,
-      phase: products.phase,
+      phase: normalizedPhase,
       panelBrand: products.panelBrand,
       panelSize: products.panelSize,
       panelQuantity: products.panelQuantity,
@@ -680,6 +712,10 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
         systemType: quotation.systemType,
         status: quotation.status,
         discount: quotation.discount,
+        paymentMode: quotation.paymentMode,
+        paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
+        paymentDate: quotation.paymentDate,
+        paymentStatus: quotation.paymentStatus,
         pricing: {
           subtotal: Number(quotation.subtotal),              // Set price (complete package price)
           totalAmount: Number(quotation.totalAmount),       // Amount after discount (Subtotal - Subsidy - Discount)
@@ -726,6 +762,16 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
 
     // Check if user is account manager
     const isAccountManager = req.user && req.user.role === 'account-management';
+    if (isAccountManager && status && status !== 'approved') {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'AUTH_004',
+          message: 'Insufficient permissions. Only approved quotations are available.'
+        }
+      });
+      return;
+    }
 
     // Admins can see all quotations, dealers only see their own, visitors see quotations from their visits
     // Account managers only see approved quotations
@@ -891,6 +937,10 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           phase: products.phase
         } : null,
         systemType: q.systemType,
+        paymentMode: q.paymentMode,
+        paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
+        paymentDate: q.paymentDate,
+        paymentStatus: q.paymentStatus,
         finalAmount: Number(q.finalAmount),
         pricing: pricing ? {
           subtotal: (q as any).subtotal !== undefined && (q as any).subtotal !== null 
@@ -1090,6 +1140,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         pricing: finalPricing,
         status: quotation.status,
         discount: quotation.discount,
+        paymentMode: quotation.paymentMode,
+        paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
+        paymentDate: quotation.paymentDate,
+        paymentStatus: quotation.paymentStatus,
         createdAt: quotation.createdAt,
         validUntil: quotation.validUntil
       }
@@ -1210,7 +1264,8 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
 // Update quotation products/system configuration
 export const updateQuotationProducts = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer) {
+    const isAccountManager = req.user && req.user.role === 'account-management';
+    if (!req.dealer && !isAccountManager) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -1221,9 +1276,11 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
     const { quotationId } = req.params;
     const { products } = req.body;
 
-    // Admins can update all quotations, dealers only their own
+    // Admins can update all quotations, dealers only their own, account managers only approved
     const where: any = { id: quotationId };
-    if (req.dealer.role !== 'admin') {
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
       where.dealerId = req.dealer.id;
     }
     const quotation = await Quotation.findOne({
@@ -1270,9 +1327,10 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
 
     if (!quotationProduct) {
       // Ensure required fields are present
+      const phaseToSave = products.phase || '1-Phase';
       logInfo('Creating quotation products with phase', {
         quotationId: quotation.id,
-        phase: products.phase
+        phase: phaseToSave
       });
       quotationProduct = await QuotationProduct.create({
         id: uuidv4(),
@@ -1280,14 +1338,18 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         systemType: products.systemType || quotation.systemType,
         subtotal: Number(quotation.subtotal || 0),
         totalAmount: Number(quotation.totalAmount || 0),
-        ...products
+        ...products,
+        phase: phaseToSave
       });
     } else {
       logInfo('Updating quotation products phase', {
         quotationId: quotation.id,
-        phase: products.phase
+        phase: products.phase || quotationProduct.phase || '1-Phase'
       });
-      await quotationProduct.update(products);
+      await quotationProduct.update({
+        ...products,
+        phase: products.phase || quotationProduct.phase || '1-Phase'
+      });
     }
 
     // Handle custom panels if systemType is 'customize'
@@ -1356,7 +1418,8 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
 // Update quotation pricing
 export const updateQuotationPricing = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer) {
+    const isAccountManager = req.user && req.user.role === 'account-management';
+    if (!req.dealer && !isAccountManager) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -1370,12 +1433,20 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       stateSubsidy, 
       centralSubsidy, 
       discount,
-      finalAmount 
+      finalAmount,
+      paymentMode,
+      paidAmount,
+      paymentDate,
+      paymentStatus
     } = req.body;
+
+    // Account managers are allowed to edit pricing for approved quotations
 
     // Admins can update all quotations, dealers only their own
     const where: any = { id: quotationId };
-    if (req.dealer.role !== 'admin') {
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
       where.dealerId = req.dealer.id;
     }
     const quotation = await Quotation.findOne({
@@ -1465,12 +1536,23 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       return;
     }
 
+    const normalizedPaidAmount = paidAmount !== undefined && paidAmount !== null
+      ? Number(paidAmount)
+      : undefined;
+    const normalizedPaymentStatus = normalizedPaidAmount !== undefined
+      ? calculatePaymentStatus(normalizedPaidAmount, calculatedTotalAmount)
+      : (paymentStatus ?? undefined);
+
     // Update quotation
     await quotation.update({
       subtotal: newSubtotal,
       discount: newDiscount,
       totalAmount: calculatedTotalAmount,
-      finalAmount: finalFinalAmount
+      finalAmount: finalFinalAmount,
+      paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+      paidAmount: normalizedPaidAmount !== undefined ? normalizedPaidAmount : quotation.paidAmount,
+      paymentDate: paymentDate !== undefined ? paymentDate : quotation.paymentDate,
+      paymentStatus: normalizedPaymentStatus !== undefined ? normalizedPaymentStatus : quotation.paymentStatus
     });
 
     // Update products with subsidies if provided
@@ -1505,6 +1587,10 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       success: true,
       data: {
         id: quotation.id,
+        paymentMode: quotation.paymentMode,
+        paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
+        paymentDate: quotation.paymentDate,
+        paymentStatus: quotation.paymentStatus,
         pricing: {
           subtotal: newSubtotal,
           totalSubsidy: totalSubsidy,

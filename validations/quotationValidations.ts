@@ -17,7 +17,7 @@ const customerSchema = z.object({
 
 const productsSchema = z.object({
   systemType: z.enum(['on-grid', 'off-grid', 'hybrid', 'dcr', 'non-dcr', 'both', 'customize']),
-  phase: z.enum(['1-Phase', '3-Phase'], 'Phase must be 1-Phase or 3-Phase'),
+  phase: z.enum(['1-Phase', '3-Phase'], 'Phase must be 1-Phase or 3-Phase').optional(),
   panelBrand: z.string().nullish(),
   panelSize: z.string().nullish(),
   panelQuantity: z.number().int().positive().nullish(),
@@ -61,6 +61,15 @@ const productsSchema = z.object({
   })).nullish()
 });
 
+const paymentModeEnum = z.enum(
+  ['cash', 'upi', 'loan', 'netbanking', 'bank_transfer', 'cheque', 'card'],
+  { message: 'Invalid payment mode' }
+);
+
+const paymentStatusEnum = z.enum(['pending', 'partial', 'completed'], {
+  message: 'Invalid payment status'
+});
+
 // Accept number or string that can be converted to number (disallow empty string)
 const numberOrStringNumber = z.union([
   z.number(),
@@ -83,6 +92,11 @@ export const createQuotationSchema = z.object({
   subtotal: numberOrStringNumber.pipe(z.number().positive('Subtotal must be greater than 0')).optional(),
   totalAmount: numberOrStringNumber.pipe(z.number().nonnegative('Total amount must be a valid number')).optional(),
   finalAmount: numberOrStringNumber.pipe(z.number().nonnegative('Final amount must be a valid number')).optional(),
+  // Optional payment fields (single payment)
+  paymentMode: paymentModeEnum.optional(),
+  paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Payment date must be in YYYY-MM-DD format').optional(),
+  paymentStatus: paymentStatusEnum.optional(),
   // Optional pricing fields
   centralSubsidy: z.number().nonnegative().default(0).nullish(),
   stateSubsidy: z.number().nonnegative().default(0).nullish(),
@@ -130,7 +144,11 @@ export const updatePricingSchema = z.object({
   stateSubsidy: z.number().nonnegative().optional(),
   centralSubsidy: z.number().nonnegative().optional(),
   discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
-  finalAmount: z.number().nonnegative().optional()
+  finalAmount: z.number().nonnegative().optional(),
+  paymentMode: paymentModeEnum.optional(),
+  paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Payment date must be in YYYY-MM-DD format').optional(),
+  paymentStatus: paymentStatusEnum.optional()
 }).refine((data) => {
   // At least one field must be provided and not undefined
   const hasValue = Object.keys(data).some(key => data[key as keyof typeof data] !== undefined);
