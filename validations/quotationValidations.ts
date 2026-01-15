@@ -17,6 +17,7 @@ const customerSchema = z.object({
 
 const productsSchema = z.object({
   systemType: z.enum(['on-grid', 'off-grid', 'hybrid', 'dcr', 'non-dcr', 'both', 'customize']),
+  phase: z.enum(['1-Phase', '3-Phase'], 'Phase must be 1-Phase or 3-Phase'),
   panelBrand: z.string().nullish(),
   panelSize: z.string().nullish(),
   panelQuantity: z.number().int().positive().nullish(),
@@ -60,15 +61,28 @@ const productsSchema = z.object({
   })).nullish()
 });
 
+// Accept number or string that can be converted to number (disallow empty string)
+const numberOrStringNumber = z.union([
+  z.number(),
+  z.string().transform((val) => {
+    if (val.trim() === '') {
+      throw new Error('Invalid number');
+    }
+    const num = Number(val);
+    if (isNaN(num)) throw new Error('Invalid number');
+    return num;
+  })
+]);
+
 export const createQuotationSchema = z.object({
   customerId: z.string().nullish(),
   customer: customerSchema.nullish(),
   products: productsSchema,
   discount: z.number().min(0).max(100).default(0),
   // Pricing fields - required at root level
-  subtotal: z.number().positive('Subtotal must be greater than 0'),
-  totalAmount: z.number().nonnegative('Total amount must be a valid number'),
-  finalAmount: z.number().nonnegative('Final amount must be a valid number'),
+  subtotal: numberOrStringNumber.pipe(z.number().positive('Subtotal must be greater than 0')).optional(),
+  totalAmount: numberOrStringNumber.pipe(z.number().nonnegative('Total amount must be a valid number')).optional(),
+  finalAmount: numberOrStringNumber.pipe(z.number().nonnegative('Final amount must be a valid number')).optional(),
   // Optional pricing fields
   centralSubsidy: z.number().nonnegative().default(0).nullish(),
   stateSubsidy: z.number().nonnegative().default(0).nullish(),
@@ -77,28 +91,31 @@ export const createQuotationSchema = z.object({
   discountAmount: z.number().nonnegative().default(0).nullish(),
   // Optional nested pricing object (for backward compatibility)
   pricing: z.object({
-    subtotal: z.number().positive().nullish(),
-    totalAmount: z.number().nonnegative().nullish(),
-    finalAmount: z.number().nonnegative().nullish(),
-    centralSubsidy: z.number().nonnegative().nullish(),
-    stateSubsidy: z.number().nonnegative().nullish(),
-    totalSubsidy: z.number().nonnegative().nullish(),
-    amountAfterSubsidy: z.number().nonnegative().nullish(),
-    discountAmount: z.number().nonnegative().nullish()
+    subtotal: numberOrStringNumber.pipe(z.number().positive()).nullish(),
+    totalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    finalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    centralSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    stateSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    totalSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    amountAfterSubsidy: numberOrStringNumber.pipe(z.number().nonnegative()).nullish(),
+    discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).nullish()
   }).nullish()
-}).refine((data) => data.customerId || data.customer, {
+})
+  .refine((data) => data.customerId || data.customer, {
   message: 'Either customerId or customer object is required'
-});
-
-// Accept number or string that can be converted to number
-const numberOrStringNumber = z.union([
-  z.number(),
-  z.string().transform((val) => {
-    const num = Number(val);
-    if (isNaN(num)) throw new Error('Invalid number');
-    return num;
+})
+  .refine((data) => data.subtotal !== undefined || data.pricing?.subtotal !== undefined, {
+    path: ['subtotal'],
+    message: 'Subtotal is required and must be greater than 0'
   })
-]);
+  .refine((data) => data.totalAmount !== undefined || data.pricing?.totalAmount !== undefined, {
+    path: ['totalAmount'],
+    message: 'Total amount is required'
+  })
+  .refine((data) => data.finalAmount !== undefined || data.pricing?.finalAmount !== undefined, {
+    path: ['finalAmount'],
+    message: 'Final amount is required'
+  });
 
 export const updateDiscountSchema = z.object({
   discount: numberOrStringNumber.pipe(z.number().min(0).max(100))

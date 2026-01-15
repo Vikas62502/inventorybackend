@@ -606,10 +606,15 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
     });
 
     // Create quotation products
+    logInfo('Saving quotation products phase', {
+      quotationId: quotation.id,
+      phase: products.phase
+    });
     await QuotationProduct.create({
       id: uuidv4(),
       quotationId: quotation.id,
       systemType: products.systemType,
+      phase: products.phase,
       panelBrand: products.panelBrand,
       panelSize: products.panelSize,
       panelQuantity: products.panelQuantity,
@@ -882,7 +887,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           mobile: customer.mobile
         } : null,
         products: products ? {
-          systemType: products.systemType
+          systemType: products.systemType,
+          phase: products.phase
         } : null,
         systemType: q.systemType,
         finalAmount: Number(q.finalAmount),
@@ -1054,6 +1060,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         } : null,
         products: products ? {
           systemType: products.systemType,
+          phase: products.phase,
           panelBrand: products.panelBrand,
           panelSize: products.panelSize,
           panelQuantity: products.panelQuantity,
@@ -1263,6 +1270,10 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
 
     if (!quotationProduct) {
       // Ensure required fields are present
+      logInfo('Creating quotation products with phase', {
+        quotationId: quotation.id,
+        phase: products.phase
+      });
       quotationProduct = await QuotationProduct.create({
         id: uuidv4(),
         quotationId: quotation.id,
@@ -1272,6 +1283,10 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
         ...products
       });
     } else {
+      logInfo('Updating quotation products phase', {
+        quotationId: quotation.id,
+        phase: products.phase
+      });
       await quotationProduct.update(products);
     }
 
