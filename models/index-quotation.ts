@@ -7,6 +7,7 @@ import Customer from './Customer';
 import Quotation from './Quotation';
 import QuotationProduct from './QuotationProduct';
 import CustomPanel from './CustomPanel';
+import QuotationDocument from './QuotationDocument';
 import Visit from './Visit';
 import VisitAssignment from './VisitAssignment';
 import ProductCatalog from './ProductCatalog';
@@ -41,6 +42,10 @@ Quotation.belongsTo(Customer, { foreignKey: 'customerId', as: 'customer' });
 // Quotations have one product configuration (1:1)
 Quotation.hasOne(QuotationProduct, { foreignKey: 'quotationId', as: 'products', onDelete: 'CASCADE' });
 QuotationProduct.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
+
+// Quotations have one documents record (1:1)
+Quotation.hasOne(QuotationDocument, { foreignKey: 'quotationId', as: 'documents', onDelete: 'CASCADE' });
+QuotationDocument.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
 
 // Quotations can have multiple custom panels (1:N)
 Quotation.hasMany(CustomPanel, { foreignKey: 'quotationId', as: 'customPanels', onDelete: 'CASCADE' });
@@ -86,6 +91,7 @@ export {
   Quotation,
   QuotationProduct,
   CustomPanel,
+  QuotationDocument,
   Visit,
   VisitAssignment,
   ProductCatalog,

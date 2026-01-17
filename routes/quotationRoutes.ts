@@ -1,4 +1,5 @@
 import express, { Router } from 'express';
+import multer from 'multer';
 import {
   createQuotation,
   getQuotations,
@@ -7,7 +8,8 @@ import {
   updateQuotationProducts,
   updateQuotationPricing,
   downloadQuotationPDF,
-  getProductCatalog
+  getProductCatalog,
+  saveQuotationDocuments
 } from '../controllers/quotationController';
 import { getVisitsForQuotation } from '../controllers/visitController';
 import { authenticate, authorizeDealer, authorizeDealerAdminOrVisitor, authorizeDealerOrAccountManager, rejectAccountManager } from '../middleware/authQuotation';
@@ -16,6 +18,18 @@ import { logRequestBeforeValidation, logRequestAfterValidation } from '../middle
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema } from '../validations/quotationValidations';
 
 const router: Router = express.Router();
+
+const documentsUpload = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('Only image uploads are allowed'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 // All routes require authentication
 router.use(authenticate);
@@ -501,6 +515,36 @@ router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate
  *         description: Unauthorized
  */
 router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(updatePricingSchema), updateQuotationPricing);
+
+router.post(
+  '/:quotationId/documents',
+  authorizeDealerOrAccountManager,
+  documentsUpload.fields([
+    { name: 'aadharFront', maxCount: 1 },
+    { name: 'aadharBack', maxCount: 1 },
+    { name: 'panImage', maxCount: 1 },
+    { name: 'electricityBillImage', maxCount: 1 },
+    { name: 'bankPassbookImage', maxCount: 1 },
+    { name: 'compliantAadharFront', maxCount: 1 },
+    { name: 'compliantAadharBack', maxCount: 1 }
+  ]),
+  saveQuotationDocuments
+);
+
+router.patch(
+  '/:quotationId/documents',
+  authorizeDealerOrAccountManager,
+  documentsUpload.fields([
+    { name: 'aadharFront', maxCount: 1 },
+    { name: 'aadharBack', maxCount: 1 },
+    { name: 'panImage', maxCount: 1 },
+    { name: 'electricityBillImage', maxCount: 1 },
+    { name: 'bankPassbookImage', maxCount: 1 },
+    { name: 'compliantAadharFront', maxCount: 1 },
+    { name: 'compliantAadharBack', maxCount: 1 }
+  ]),
+  saveQuotationDocuments
+);
 
 /**
  * @swagger

@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
+import AWS from 'aws-sdk';
+import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer } from '../models/index-quotation';
+import { Quotation, QuotationProduct, CustomPanel, Customer, Visit, VisitAssignment, SystemConfig, Dealer, QuotationDocument } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
 
@@ -868,6 +870,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
+            model: QuotationDocument,
+            as: 'documents',
+            required: false
+          },
+          {
             model: Dealer,
             as: 'dealer',
             attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
@@ -893,6 +900,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
             required: false
           },
           {
+            model: QuotationDocument,
+            as: 'documents',
+            required: false
+          },
+          {
             model: Dealer,
             as: 'dealer',
             attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role'],
@@ -909,6 +921,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       const customer = (q as any).customer;
       const products = (q as any).products;
       const dealer = (q as any).dealer;
+      const documents = (q as any).documents;
       
       // Calculate pricing if products exist
       const pricing = products 
@@ -942,6 +955,30 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         paymentDate: q.paymentDate,
         paymentStatus: q.paymentStatus,
         finalAmount: Number(q.finalAmount),
+        documents: documents ? {
+          id: documents.id,
+          aadharNumber: documents.aadharNumber,
+          aadharFront: documents.aadharFront,
+          aadharBack: documents.aadharBack,
+          phoneNumber: documents.phoneNumber,
+          emailId: documents.emailId,
+          panNumber: documents.panNumber,
+          panImage: documents.panImage,
+          electricityKno: documents.electricityKno,
+          electricityBillImage: documents.electricityBillImage,
+          bankAccountNumber: documents.bankAccountNumber,
+          bankIfsc: documents.bankIfsc,
+          bankName: documents.bankName,
+          bankBranch: documents.bankBranch,
+          bankPassbookImage: documents.bankPassbookImage,
+          isCompliantSenior: documents.isCompliantSenior,
+          compliantAadharNumber: documents.compliantAadharNumber,
+          compliantAadharFront: documents.compliantAadharFront,
+          compliantAadharBack: documents.compliantAadharBack,
+          compliantContactPhone: documents.compliantContactPhone,
+          createdAt: documents.createdAt,
+          updatedAt: documents.updatedAt
+        } : null,
         pricing: pricing ? {
           subtotal: (q as any).subtotal !== undefined && (q as any).subtotal !== null 
             ? Number((q as any).subtotal) 
@@ -1050,6 +1087,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           as: 'customPanels'
         },
         {
+          model: QuotationDocument,
+          as: 'documents'
+        },
+        {
           model: Dealer,
           as: 'dealer',
           attributes: ['id', 'firstName', 'lastName', 'email', 'mobile', 'username', 'role']
@@ -1069,6 +1110,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const products = quotationAny.products;
     const customer = quotationAny.customer;
     const dealer = quotationAny.dealer;
+    const documents = quotationAny.documents;
     
     // Calculate pricing breakdown (component prices for display)
     const pricing = calculatePricing(products || {}, quotation.discount);
@@ -1140,6 +1182,30 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         pricing: finalPricing,
         status: quotation.status,
         discount: quotation.discount,
+        documents: documents ? {
+          id: documents.id,
+          aadharNumber: documents.aadharNumber,
+          aadharFront: documents.aadharFront,
+          aadharBack: documents.aadharBack,
+          phoneNumber: documents.phoneNumber,
+          emailId: documents.emailId,
+          panNumber: documents.panNumber,
+          panImage: documents.panImage,
+          electricityKno: documents.electricityKno,
+          electricityBillImage: documents.electricityBillImage,
+          bankAccountNumber: documents.bankAccountNumber,
+          bankIfsc: documents.bankIfsc,
+          bankName: documents.bankName,
+          bankBranch: documents.bankBranch,
+          bankPassbookImage: documents.bankPassbookImage,
+          isCompliantSenior: documents.isCompliantSenior,
+          compliantAadharNumber: documents.compliantAadharNumber,
+          compliantAadharFront: documents.compliantAadharFront,
+          compliantAadharBack: documents.compliantAadharBack,
+          compliantContactPhone: documents.compliantContactPhone,
+          createdAt: documents.createdAt,
+          updatedAt: documents.updatedAt
+        } : null,
         paymentMode: quotation.paymentMode,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         paymentDate: quotation.paymentDate,
@@ -1611,6 +1677,177 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     });
   } catch (error) {
     logError('Update quotation pricing error', error, { quotationId: req.params.quotationId });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+const getS3Client = () => {
+  const region = process.env.AWS_REGION;
+  const accessKeyId = process.env.AWS_ACCESS_KEY;
+  const secretAccessKey = process.env.AWS_SECRET_KEY;
+
+  if (region && accessKeyId && secretAccessKey) {
+    return new AWS.S3({ region, accessKeyId, secretAccessKey });
+  }
+  return new AWS.S3();
+};
+
+const buildS3Url = (key: string) => {
+  const publicBase = process.env.AWS_S3_PUBLIC_URL;
+  if (publicBase) {
+    return `${publicBase.replace(/\/$/, '')}/${key}`;
+  }
+  const bucket = process.env.AWS_BUCKET_NAME;
+  const region = process.env.AWS_REGION || 'us-east-1';
+  const host = region === 'us-east-1' ? 's3.amazonaws.com' : `s3.${region}.amazonaws.com`;
+  return `https://${bucket}.${host}/${key}`;
+};
+
+const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, fieldName: string) => {
+  const bucket = process.env.AWS_BUCKET_NAME;
+  if (!bucket) {
+    throw new Error('AWS_BUCKET_NAME is not configured');
+  }
+  const ext = path.extname(file.originalname || '');
+  const key = `quotation-documents/${quotationId}/${fieldName}-${Date.now()}${ext}`;
+
+  const s3 = getS3Client();
+  await s3
+    .putObject({
+      Bucket: bucket,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype
+    })
+    .promise();
+
+  return buildS3Url(key);
+};
+
+const getUploadedFileUrl = async (req: Request, fieldName: string, quotationId: string): Promise<string | undefined> => {
+  const files = (req as any).files;
+  const fieldFiles = files?.[fieldName];
+  if (Array.isArray(fieldFiles) && fieldFiles.length > 0) {
+    const file = fieldFiles[0] as Express.Multer.File;
+    return uploadFileToS3(file, quotationId, fieldName);
+  }
+  return undefined;
+};
+
+// Save quotation documents (upsert)
+export const saveQuotationDocuments = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const isAccountManager = req.user && req.user.role === 'account-management';
+    if (!req.dealer && !isAccountManager) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'User not authenticated' }
+      });
+      return;
+    }
+
+    const { quotationId } = req.params;
+    const where: any = { id: quotationId };
+    if (isAccountManager) {
+      where.status = 'approved';
+    } else if (req.dealer && req.dealer.role !== 'admin') {
+      where.dealerId = req.dealer.id;
+    }
+
+    const quotation = await Quotation.findOne({ where });
+    if (!quotation) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Quotation not found' }
+      });
+      return;
+    }
+
+    const body: any = req.body || {};
+    const isCompliantSenior =
+      body.isCompliantSenior === true ||
+      body.isCompliantSenior === 'true' ||
+      body.isCompliantSenior === 1 ||
+      body.isCompliantSenior === '1';
+
+    const aadharFrontUrl = await getUploadedFileUrl(req, 'aadharFront', quotation.id);
+    const aadharBackUrl = await getUploadedFileUrl(req, 'aadharBack', quotation.id);
+    const panImageUrl = await getUploadedFileUrl(req, 'panImage', quotation.id);
+    const electricityBillImageUrl = await getUploadedFileUrl(req, 'electricityBillImage', quotation.id);
+    const bankPassbookImageUrl = await getUploadedFileUrl(req, 'bankPassbookImage', quotation.id);
+    const compliantAadharFrontUrl = await getUploadedFileUrl(req, 'compliantAadharFront', quotation.id);
+    const compliantAadharBackUrl = await getUploadedFileUrl(req, 'compliantAadharBack', quotation.id);
+
+    logInfo('Quotation document uploads processed', {
+      quotationId: quotation.id,
+      aadharFrontUrl,
+      aadharBackUrl,
+      panImageUrl,
+      electricityBillImageUrl,
+      bankPassbookImageUrl,
+      compliantAadharFrontUrl,
+      compliantAadharBackUrl
+    });
+
+    const payload = {
+      quotationId: quotation.id,
+      aadharNumber: body.aadharNumber || null,
+      aadharFront: aadharFrontUrl || body.aadharFront || null,
+      aadharBack: aadharBackUrl || body.aadharBack || null,
+      phoneNumber: body.phoneNumber || null,
+      emailId: body.emailId || null,
+      panNumber: body.panNumber || null,
+      panImage: panImageUrl || body.panImage || null,
+      electricityKno: body.electricityKno || null,
+      electricityBillImage: electricityBillImageUrl || body.electricityBillImage || null,
+      bankAccountNumber: body.bankAccountNumber || null,
+      bankIfsc: body.bankIfsc || null,
+      bankName: body.bankName || null,
+      bankBranch: body.bankBranch || null,
+      bankPassbookImage: bankPassbookImageUrl || body.bankPassbookImage || null,
+      isCompliantSenior: isCompliantSenior ? true : false,
+      compliantAadharNumber: body.compliantAadharNumber || null,
+      compliantAadharFront: compliantAadharFrontUrl || body.compliantAadharFront || null,
+      compliantAadharBack: compliantAadharBackUrl || body.compliantAadharBack || null,
+      compliantContactPhone: body.compliantContactPhone || null
+    };
+
+    if (payload.isCompliantSenior) {
+      if (!payload.compliantAadharFront || !payload.compliantAadharBack || !payload.compliantContactPhone) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'VAL_001',
+            message: 'Compliant Aadhar front/back and contact phone are required when isCompliantSenior is true'
+          }
+        });
+        return;
+      }
+    }
+
+    const existing = await QuotationDocument.findOne({ where: { quotationId: quotation.id } });
+    let documents;
+    if (existing) {
+      documents = await existing.update(payload);
+    } else {
+      documents = await QuotationDocument.create({
+        id: uuidv4(),
+        ...payload
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        quotationId: quotation.id,
+        documents
+      }
+    });
+  } catch (error) {
+    logError('Save quotation documents error', error, { quotationId: req.params.quotationId });
     res.status(500).json({
       success: false,
       error: { code: 'SYS_001', message: 'Internal server error' }

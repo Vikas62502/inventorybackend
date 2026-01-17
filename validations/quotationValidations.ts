@@ -70,6 +70,15 @@ const paymentStatusEnum = z.enum(['pending', 'partial', 'completed'], {
   message: 'Invalid payment status'
 });
 
+const booleanOrString = z.union([
+  z.boolean(),
+  z.string().transform((val) => {
+    if (val.toLowerCase() === 'true') return true;
+    if (val.toLowerCase() === 'false') return false;
+    throw new Error('Invalid boolean');
+  })
+]);
+
 // Accept number or string that can be converted to number (disallow empty string)
 const numberOrStringNumber = z.union([
   z.number(),
@@ -155,6 +164,34 @@ export const updatePricingSchema = z.object({
   return hasValue;
 }, {
   message: 'At least one pricing field must be provided'
+});
+
+export const quotationDocumentsSchema = z.object({
+  aadharNumber: z.string().min(1).optional(),
+  aadharFront: z.string().min(1).optional(),
+  aadharBack: z.string().min(1).optional(),
+  phoneNumber: z.string().min(1).optional(),
+  emailId: z.string().email().optional(),
+  panNumber: z.string().min(1).optional(),
+  panImage: z.string().min(1).optional(),
+  electricityKno: z.string().min(1).optional(),
+  electricityBillImage: z.string().min(1).optional(),
+  bankAccountNumber: z.string().min(1).optional(),
+  bankIfsc: z.string().min(1).optional(),
+  bankName: z.string().min(1).optional(),
+  bankBranch: z.string().min(1).optional(),
+  bankPassbookImage: z.string().min(1).optional(),
+  isCompliantSenior: booleanOrString.optional(),
+  compliantAadharNumber: z.string().min(1).optional(),
+  compliantAadharFront: z.string().min(1).optional(),
+  compliantAadharBack: z.string().min(1).optional(),
+  compliantContactPhone: z.string().min(1).optional()
+}).refine((data) => {
+  const isCompliant = data.isCompliantSenior === true;
+  if (!isCompliant) return true;
+  return !!data.compliantAadharFront && !!data.compliantAadharBack && !!data.compliantContactPhone;
+}, {
+  message: 'Compliant Aadhar front/back and contact phone are required when isCompliantSenior is true'
 });
 
 
