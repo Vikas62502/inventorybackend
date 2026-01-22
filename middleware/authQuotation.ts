@@ -115,7 +115,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       }
 
       // Check if it's an Inventory System user (super-admin, admin, agent, account)
-      if (decoded.role === 'super-admin' || decoded.role === 'admin' || decoded.role === 'agent' || decoded.role === 'account') {
+      if (decoded.role === 'super-admin' || decoded.role === 'super-admin-manager' || decoded.role === 'admin' || decoded.role === 'agent' || decoded.role === 'account') {
         const user = await User.findByPk(decoded.id);
         if (!user || !user.is_active) {
           res.status(401).json({

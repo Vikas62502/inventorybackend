@@ -7,7 +7,7 @@ import {
   deleteProduct,
   getInventoryLevels
 } from '../controllers/productController';
-import { authenticate, authorize } from '../middleware/auth';
+import { authenticate, authorizeProductManagement } from '../middleware/auth';
 import upload, { uploadToS3 } from '../middleware/upload';
 import { validate } from '../middleware/validate';
 import { createProductSchema, updateProductSchema } from '../validations/productValidations';
@@ -113,7 +113,7 @@ router.get('/inventory/levels', authenticate, getInventoryLevels);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorize('super-admin'), upload.single('image'), uploadToS3('products'), validate(createProductSchema), createProduct);
+router.post('/', authorizeProductManagement, upload.single('image'), uploadToS3('products'), validate(createProductSchema), createProduct);
 
 /**
  * @swagger
@@ -157,7 +157,7 @@ router.post('/', authorize('super-admin'), upload.single('image'), uploadToS3('p
  *       404:
  *         description: Product not found
  */
-router.put('/:id', authorize('super-admin'), upload.single('image'), validate(updateProductSchema), updateProduct);
+router.put('/:id', authorizeProductManagement, upload.single('image'), validate(updateProductSchema), updateProduct);
 
 /**
  * @swagger
@@ -179,7 +179,7 @@ router.put('/:id', authorize('super-admin'), upload.single('image'), validate(up
  *       404:
  *         description: Product not found
  */
-router.delete('/:id', authorize('super-admin'), deleteProduct);
+router.delete('/:id', authorizeProductManagement, deleteProduct);
 
 export default router;
 

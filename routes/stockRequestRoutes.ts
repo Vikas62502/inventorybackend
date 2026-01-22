@@ -95,6 +95,9 @@ router.get('/:id', getStockRequestById);
  *                 type: string
  *               notes:
  *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [pending]
  *     responses:
  *       201:
  *         description: Stock request created successfully

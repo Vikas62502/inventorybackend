@@ -99,7 +99,7 @@ router.get('/:id', authorize('super-admin', 'admin', 'account'), getUserById);
  *                 type: string
  *               role:
  *                 type: string
- *                 enum: [super-admin, admin, agent, account]
+ *                 enum: [super-admin, super-admin-manager, admin, agent, account]
  *     responses:
  *       201:
  *         description: User created successfully
@@ -140,7 +140,7 @@ router.post('/', authorize('super-admin', 'admin'), validate(createUserSchema), 
  *                 type: string
  *               role:
  *                 type: string
- *                 enum: [super-admin, admin, agent, account]
+ *                 enum: [super-admin, super-admin-manager, admin, agent, account]
  *               is_active:
  *                 type: boolean
  *     responses:

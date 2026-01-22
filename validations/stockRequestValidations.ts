@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 const stockRequestItemSchema = z.object({
   product_id: z.string().optional(),
-  product_name: z.string().min(1, 'Product name is required'),
-  model: z.string().min(1, 'Model is required'),
+  product_name: z.string().min(1, 'Product name is required').optional(),
+  model: z.string().min(1, 'Model is required').optional(),
   quantity: z.number().int().positive('Quantity must be greater than 0')
 }).refine((data) => data.product_id || (data.product_name && data.model), {
   message: 'Either product_id or both product_name and model must be provided'
@@ -19,7 +19,8 @@ export const createStockRequestSchema = z.object({
   model: z.string().optional(), // Legacy support
   quantity: z.number().int().positive().optional(), // Legacy support
   requested_from: z.string().min(1, 'Requested from is required'),
-  notes: z.string().nullable().optional()
+  notes: z.string().nullable().optional(),
+  status: z.string().optional()
 }).refine((data) => {
   // Either items array/string is provided, or legacy single-item fields are provided
   return data.items !== undefined || (data.product_id !== undefined || (data.product_name !== undefined && data.model !== undefined));

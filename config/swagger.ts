@@ -114,7 +114,7 @@ const swaggerDefinition = {
           id: { type: 'string' },
           username: { type: 'string' },
           name: { type: 'string' },
-          role: { type: 'string', enum: ['super-admin', 'admin', 'agent', 'account'] },
+          role: { type: 'string', enum: ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account'] },
           is_active: { type: 'boolean' },
           created_by_id: { type: 'string', nullable: true },
           created_by_name: { type: 'string', nullable: true },

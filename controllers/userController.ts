@@ -113,9 +113,14 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    const validRoles = ['super-admin', 'admin', 'agent', 'account'];
+    const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account'];
     if (!validRoles.includes(role)) {
       res.status(400).json({ error: 'Invalid role' });
+      return;
+    }
+
+    if (role === 'super-admin-manager' && req.user.role !== 'super-admin') {
+      res.status(403).json({ error: 'Only super-admin can create super-admin-manager accounts' });
       return;
     }
 
@@ -207,7 +212,7 @@ export const updateUser = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (role) {
-      const validRoles = ['super-admin', 'admin', 'agent', 'account'];
+      const validRoles = ['super-admin', 'super-admin-manager', 'admin', 'agent', 'account'];
       if (!validRoles.includes(role)) {
         res.status(400).json({ error: 'Invalid role' });
         return;

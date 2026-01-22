@@ -6,7 +6,7 @@ interface UserAttributes {
   username: string;
   password: string;
   name: string;
-  role: 'super-admin' | 'admin' | 'agent' | 'account';
+  role: 'super-admin' | 'super-admin-manager' | 'admin' | 'agent' | 'account';
   is_active: boolean;
   created_by_id?: string | null;
   created_by_name?: string | null;
