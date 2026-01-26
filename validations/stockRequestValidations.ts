@@ -4,7 +4,7 @@ const stockRequestItemSchema = z.object({
   product_id: z.string().optional(),
   product_name: z.string().min(1, 'Product name is required').optional(),
   model: z.string().min(1, 'Model is required').optional(),
-  quantity: z.number().int().positive('Quantity must be greater than 0')
+  quantity: z.coerce.number().int().positive('Quantity must be greater than 0')
 }).refine((data) => data.product_id || (data.product_name && data.model), {
   message: 'Either product_id or both product_name and model must be provided'
 });
@@ -17,7 +17,7 @@ export const createStockRequestSchema = z.object({
   product_id: z.string().optional(), // Legacy support
   product_name: z.string().optional(), // Legacy support
   model: z.string().optional(), // Legacy support
-  quantity: z.number().int().positive().optional(), // Legacy support
+  quantity: z.coerce.number().int().positive().optional(), // Legacy support
   requested_from: z.string().min(1, 'Requested from is required'),
   notes: z.string().nullable().optional(),
   status: z.string().optional()
