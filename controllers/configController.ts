@@ -17,7 +17,8 @@ const normalizeCatalog = (catalog: any): any => {
     },
     structures: {
       types: Array.isArray(catalog?.structures?.types) ? catalog.structures.types : [],
-      sizes: Array.isArray(catalog?.structures?.sizes) ? catalog.structures.sizes : []
+      // Return empty sizes so UI doesn't enforce a fixed list
+      sizes: []
     },
     meters: {
       brands: Array.isArray(catalog?.meters?.brands) ? catalog.meters.brands : []

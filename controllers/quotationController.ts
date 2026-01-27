@@ -20,7 +20,8 @@ const normalizeCatalog = (catalog: any): any => {
     },
     structures: {
       types: Array.isArray(catalog?.structures?.types) ? catalog.structures.types : [],
-      sizes: Array.isArray(catalog?.structures?.sizes) ? catalog.structures.sizes : []
+      // Allow any structure size on the frontend by returning an empty list
+      sizes: []
     },
     meters: {
       brands: Array.isArray(catalog?.meters?.brands) ? catalog.meters.brands : []
@@ -134,9 +135,10 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   if (products.structureType && catalog.structures?.types && !catalog.structures.types.includes(products.structureType)) {
     errors.push(`Invalid structure type: ${products.structureType}`);
   }
-  if (products.structureSize && catalog.structures?.sizes && !catalog.structures.sizes.includes(products.structureSize)) {
-    errors.push(`Invalid structure size: ${products.structureSize}`);
-  }
+  // Allow custom structure sizes even if not in catalog
+  // if (products.structureSize && catalog.structures?.sizes && !catalog.structures.sizes.includes(products.structureSize)) {
+  //   errors.push(`Invalid structure size: ${products.structureSize}`);
+  // }
 
   // Validate meter selection
   if (products.meterBrand && catalog.meters?.brands && !catalog.meters.brands.includes(products.meterBrand)) {
