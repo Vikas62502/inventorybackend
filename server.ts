@@ -8,7 +8,7 @@ import logger from './config/logger';
 
 dotenv.config();
 
-// Import routes (Inventory System)
+// Import route (Inventory System)
 import authRoutes from './routes/authRoutes';
 import userRoutes from './routes/userRoutes';
 import categoryRoutes from './routes/categoryRoutes';
