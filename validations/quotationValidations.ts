@@ -141,7 +141,10 @@ export const createQuotationSchema = z.object({
   });
 
 export const updateDiscountSchema = z.object({
-  discount: numberOrStringNumber.pipe(z.number().min(0).max(100))
+  discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
+  discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional()
+}).refine((data) => data.discount !== undefined || data.discountAmount !== undefined, {
+  message: 'Either discount or discountAmount must be provided'
 });
 
 export const updateProductsSchema = z.object({
@@ -153,6 +156,7 @@ export const updatePricingSchema = z.object({
   stateSubsidy: z.number().nonnegative().optional(),
   centralSubsidy: z.number().nonnegative().optional(),
   discount: numberOrStringNumber.pipe(z.number().min(0).max(100)).optional(),
+  discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   finalAmount: z.number().nonnegative().optional(),
   paymentMode: paymentModeEnum.optional(),
   paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),

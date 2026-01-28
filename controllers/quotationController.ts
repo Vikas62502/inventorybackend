@@ -200,7 +200,7 @@ const generateQuotationId = (): string => {
 };
 
 // Helper function to calculate pricing
-const calculatePricing = (products: any, discount: number = 0) => {
+const calculatePricing = (products: any, discount: number = 0, discountAmountOverride?: number) => {
   const panelPrice = Number(products.panelPrice || 0);
   const inverterPrice = Number(products.inverterPrice || 0);
   const structurePrice = Number(products.structurePrice || 0);
@@ -221,15 +221,18 @@ const calculatePricing = (products: any, discount: number = 0) => {
   const stateSubsidy = Number(products.stateSubsidy || 0);
   const totalSubsidy = centralSubsidy + stateSubsidy;
 
-  // totalAmount = total project cost (subtotal)
-  const totalAmount = subtotal;
   // Total subsidies
   const totalSubsidyAmount = totalSubsidy;
   // Amount after subsidies
   const amountAfterSubsidy = subtotal - totalSubsidy;
   // Discount is applied to amount after subsidy
-  const discountAmount = (amountAfterSubsidy * discount) / 100;
-  const finalAmount = amountAfterSubsidy - discountAmount;
+  const hasDiscountAmountOverride =
+    discountAmountOverride !== undefined && discountAmountOverride !== null && !isNaN(Number(discountAmountOverride));
+  const discountAmount = hasDiscountAmountOverride
+    ? Number(discountAmountOverride)
+    : (amountAfterSubsidy * discount) / 100;
+  const totalAmount = amountAfterSubsidy - discountAmount;
+  const finalAmount = totalAmount;
 
   return {
     panelPrice,
@@ -384,8 +387,9 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       return;
     }
 
+    const discountAmountInput = discountAmount ?? req.body.pricing?.discountAmount;
     // Calculate pricing breakdown first (needed for fallback calculation)
-    const pricing = calculatePricing(products, discount);
+    const pricing = calculatePricing(products, discount, discountAmountInput);
     
     // Check multiple possible locations for pricing fields
     // Priority: frontend value (root level) > pricing object > products.systemPrice > products.subtotal > calculated value
@@ -544,58 +548,52 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    // Validate totalAmount (Amount after discount: Subtotal - Subsidy - Discount)
-    const validatedTotalAmount = totalAmountValue !== undefined && totalAmountValue !== null 
-      ? Number(totalAmountValue) 
-      : null;
-    
-    if (validatedTotalAmount === null || isNaN(validatedTotalAmount)) {
+    const normalizedCentralSubsidy = Number(centralSubsidy ?? req.body.pricing?.centralSubsidy ?? products?.centralSubsidy ?? 0);
+    const normalizedStateSubsidy = Number(stateSubsidy ?? req.body.pricing?.stateSubsidy ?? products?.stateSubsidy ?? 0);
+    const normalizedTotalSubsidy = Number(totalSubsidy ?? req.body.pricing?.totalSubsidy ?? (normalizedCentralSubsidy + normalizedStateSubsidy));
+    const normalizedAmountAfterSubsidy = Number(amountAfterSubsidy ?? req.body.pricing?.amountAfterSubsidy ?? (validatedSubtotal - normalizedTotalSubsidy));
+    const parsedDiscountAmount = discountAmountInput !== undefined && discountAmountInput !== null && discountAmountInput !== ''
+      ? Number(discountAmountInput)
+      : NaN;
+    const computedDiscountAmount = !isNaN(parsedDiscountAmount)
+      ? parsedDiscountAmount
+      : (normalizedAmountAfterSubsidy * Number(discount || 0)) / 100;
+    const computedTotalAmount = normalizedAmountAfterSubsidy - computedDiscountAmount;
+    const computedFinalAmount = computedTotalAmount;
+
+    const validatedTotalAmount = totalAmountValue !== undefined && totalAmountValue !== null
+      ? Number(totalAmountValue)
+      : computedTotalAmount;
+    const validatedFinalAmount = finalAmountValue !== undefined && finalAmountValue !== null
+      ? Number(finalAmountValue)
+      : computedFinalAmount;
+
+    if (isNaN(validatedTotalAmount) || isNaN(validatedFinalAmount)) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_002',
-          message: 'Total amount is required',
+          message: 'Total amount or final amount is invalid',
           details: [{
-            field: 'totalAmount',
-            message: 'Total amount (amount after discount) is required in request body'
+            field: 'pricing',
+            message: 'Total amount and final amount must be valid numbers'
           }]
         }
       });
       return;
     }
-    
-    // Validate finalAmount (Final amount: Subtotal - Subsidy, discount NOT applied)
-    // finalAmount can be 0 (if subsidy equals subtotal), so check for null/undefined only
-    const validatedFinalAmount = finalAmountValue !== undefined && finalAmountValue !== null 
-      ? Number(finalAmountValue) 
-      : null;
-    
-    if (validatedFinalAmount === null || isNaN(validatedFinalAmount)) {
-      res.status(400).json({
-        success: false,
-        error: {
-          code: 'VAL_003',
-          message: 'Final amount is required',
-          details: [{
-            field: 'finalAmount',
-            message: 'Final amount (subtotal - subsidy) is required in request body'
-          }]
-        }
-      });
-      return;
-    }
-    
-    // Use frontend-provided values (these are the source of truth)
+
+    // Use computed values so discountAmount always applies
     const finalPricing = {
       ...pricing,
       subtotal: validatedSubtotal,                    // Set price (complete package price)
       totalAmount: validatedTotalAmount,             // Amount after discount (Subtotal - Subsidy - Discount)
-      finalAmount: validatedFinalAmount,              // Final amount (Subtotal - Subsidy, discount NOT applied)
-      centralSubsidy: Number(centralSubsidy || req.body.pricing?.centralSubsidy || products?.centralSubsidy || 0),
-      stateSubsidy: Number(stateSubsidy || req.body.pricing?.stateSubsidy || products?.stateSubsidy || 0),
-      totalSubsidy: Number(totalSubsidy || req.body.pricing?.totalSubsidy || (Number(centralSubsidy || 0) + Number(stateSubsidy || 0))),
-      amountAfterSubsidy: Number(amountAfterSubsidy || req.body.pricing?.amountAfterSubsidy || validatedFinalAmount),
-      discountAmount: Number(discountAmount || req.body.pricing?.discountAmount || 0)
+      finalAmount: validatedFinalAmount,              // Final amount after discount
+      centralSubsidy: normalizedCentralSubsidy,
+      stateSubsidy: normalizedStateSubsidy,
+      totalSubsidy: normalizedTotalSubsidy,
+      amountAfterSubsidy: normalizedAmountAfterSubsidy,
+      discountAmount: computedDiscountAmount
     };
 
     // Generate quotation ID
@@ -927,7 +925,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       
       // Calculate pricing if products exist
       const pricing = products 
-        ? calculatePricing(products, q.discount)
+        ? calculatePricing(products, q.discount, (q as any).discountAmount)
         : null;
       
       return {
@@ -1115,7 +1113,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const documents = quotationAny.documents;
     
     // Calculate pricing breakdown (component prices for display)
-    const pricing = calculatePricing(products || {}, quotation.discount);
+    const pricing = calculatePricing(products || {}, quotation.discount, (quotation as any).discountAmount);
     
     // Use saved subtotal, totalAmount, and finalAmount from database (not recalculated)
     const finalPricing = {
@@ -1237,12 +1235,27 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
     }
 
     const { quotationId } = req.params;
+    const discountAmount = req.body.discountAmount !== undefined && req.body.discountAmount !== null && req.body.discountAmount !== ''
+      ? Number(req.body.discountAmount)
+      : null;
     // Handle both number and string inputs (frontend may send string)
     const discount = typeof req.body.discount === 'string' 
       ? parseFloat(req.body.discount) 
       : req.body.discount;
 
-    if (isNaN(discount) || discount < 0 || discount > 100) {
+    if (discountAmount !== null && (isNaN(discountAmount) || discountAmount < 0)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Discount amount must be a non-negative number',
+          details: [{ field: 'discountAmount', message: 'Discount amount must be a non-negative number' }]
+        }
+      });
+      return;
+    }
+
+    if (discountAmount === null && (isNaN(discount) || discount < 0 || discount > 100)) {
       res.status(400).json({
         success: false,
         error: {
@@ -1275,7 +1288,7 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
     // Recalculate pricing with new discount
     // Use saved subtotal from database, not recalculated
     const quotationAny = quotation as any;
-    const pricing = calculatePricing(quotationAny.products || {}, discount);
+    const pricing = calculatePricing(quotationAny.products || {}, discount, discountAmount ?? undefined);
     
     // Use saved subtotal from database
     const savedSubtotal = Number(quotation.subtotal || pricing.subtotal);
@@ -1284,18 +1297,16 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
     const totalSubsidy = centralSubsidy + stateSubsidy;
     const amountAfterSubsidy = savedSubtotal - totalSubsidy;
     
-    // finalAmount = subtotal - subsidy (discount NOT applied) - should remain unchanged
-    const savedFinalAmount = Number(quotation.finalAmount || amountAfterSubsidy);
-    
-    // totalAmount = subtotal - subsidy - discount (amount after discount) - recalculate with new discount
-    const discountAmount = (amountAfterSubsidy * discount) / 100;
-    const newTotalAmount = amountAfterSubsidy - discountAmount;
+    // totalAmount = subtotal - subsidy - discount amount
+    const computedDiscountAmount = discountAmount !== null ? discountAmount : (amountAfterSubsidy * discount) / 100;
+    const newTotalAmount = amountAfterSubsidy - computedDiscountAmount;
+    const newFinalAmount = newTotalAmount;
     
     await quotation.update({
-      discount,
+      discount: discountAmount !== null ? quotation.discount : discount,
       totalAmount: newTotalAmount,
-      // finalAmount remains unchanged (subtotal - subsidy, no discount)
-      finalAmount: savedFinalAmount
+      finalAmount: newFinalAmount,
+      discountAmount: computedDiscountAmount
     });
 
     // Refresh quotation to get updated timestamp
@@ -1310,9 +1321,9 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
         pricing: {
           subtotal: savedSubtotal,              // Set price (complete package price)
           totalAmount: newTotalAmount,          // Amount after discount (Subtotal - Subsidy - Discount)
-          finalAmount: savedFinalAmount,        // Final amount (Subtotal - Subsidy, discount NOT applied)
+          finalAmount: newFinalAmount,          // Final amount after discount
           amountAfterSubsidy: amountAfterSubsidy,
-          discountAmount: discountAmount,
+          discountAmount: computedDiscountAmount,
           totalSubsidy: totalSubsidy,
           centralSubsidy: centralSubsidy,
           stateSubsidy: stateSubsidy
@@ -1501,6 +1512,7 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       stateSubsidy, 
       centralSubsidy, 
       discount,
+      discountAmount,
       finalAmount,
       paymentMode,
       paidAmount,
@@ -1541,9 +1553,24 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       ? (typeof discount === 'string' ? parseFloat(discount) : Number(discount))
       : Number(quotation.discount || 0);
     const newFinalAmount = finalAmount !== undefined ? Number(finalAmount) : undefined;
+    const newDiscountAmount = discountAmount !== undefined && discountAmount !== null && discountAmount !== ''
+      ? Number(discountAmount)
+      : undefined;
 
     // Validate discount range
-    if (discount !== undefined && (isNaN(newDiscount) || newDiscount < 0 || newDiscount > 100)) {
+    if (newDiscountAmount !== undefined && (isNaN(newDiscountAmount) || newDiscountAmount < 0)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Discount amount must be a non-negative number',
+          details: [{ field: 'discountAmount', message: 'Discount amount must be a non-negative number' }]
+        }
+      });
+      return;
+    }
+
+    if (newDiscountAmount === undefined && discount !== undefined && (isNaN(newDiscount) || newDiscount < 0 || newDiscount > 100)) {
       res.status(400).json({
         success: false,
         error: {
@@ -1584,12 +1611,12 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
 
     // Calculate amounts
     const amountAfterSubsidy = newSubtotal - totalSubsidy;
-    const discountAmount = (amountAfterSubsidy * newDiscount) / 100;
-    const calculatedTotalAmount = amountAfterSubsidy - discountAmount;
-    
-    // Use provided finalAmount or calculate it (subtotal - subsidy, no discount)
-    const calculatedFinalAmount = newSubtotal - totalSubsidy;
-    const finalFinalAmount = newFinalAmount !== undefined ? newFinalAmount : calculatedFinalAmount;
+    const effectiveDiscountAmount = newDiscountAmount !== undefined
+      ? newDiscountAmount
+      : (amountAfterSubsidy * newDiscount) / 100;
+    const calculatedTotalAmount = amountAfterSubsidy - effectiveDiscountAmount;
+    const calculatedFinalAmount = calculatedTotalAmount;
+    const finalFinalAmount = calculatedFinalAmount;
 
     // Validate finalAmount is reasonable
     if (newFinalAmount !== undefined && (isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > newSubtotal)) {
@@ -1617,6 +1644,7 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       discount: newDiscount,
       totalAmount: calculatedTotalAmount,
       finalAmount: finalFinalAmount,
+      discountAmount: effectiveDiscountAmount,
       paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
       paidAmount: normalizedPaidAmount !== undefined ? normalizedPaidAmount : quotation.paidAmount,
       paymentDate: paymentDate !== undefined ? paymentDate : quotation.paymentDate,
@@ -1666,7 +1694,7 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
           centralSubsidy: newCentralSubsidy,
           amountAfterSubsidy: amountAfterSubsidy,
           discount: newDiscount,
-          discountAmount: discountAmount,
+          discountAmount: effectiveDiscountAmount,
           totalAmount: calculatedTotalAmount,
           finalAmount: finalFinalAmount
         },
