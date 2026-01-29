@@ -18,6 +18,15 @@ const router: Router = express.Router();
 // All routes require authentication
 router.use(authenticate);
 
+// Block agents from all stock request operations
+router.use((req, res, next) => {
+  if (req.user?.role === 'agent') {
+    res.status(403).json({ error: 'Agents cannot access stock requests' });
+    return;
+  }
+  next();
+});
+
 /**
  * @swagger
  * /api/stock-requests:
@@ -104,7 +113,7 @@ router.get('/:id', getStockRequestById);
  *       400:
  *         description: Validation error
  */
-router.post('/', authorize('admin', 'agent'), validateWithJsonParse(createStockRequestSchema, ['items']), createStockRequest);
+router.post('/', authorize('admin'), validateWithJsonParse(createStockRequestSchema, ['items']), createStockRequest);
 
 // Dispatch - super-admin and admins can dispatch
 router.post('/:id/dispatch', authorize('super-admin', 'admin'), upload.single('dispatch_image'), uploadToS3('stock-requests'), dispatchStockRequest);

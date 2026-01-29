@@ -135,31 +135,14 @@ export const getAllStockRequests = async (req: Request, res: Response): Promise<
     const userId = req.user.id;
 
     if (userRole === 'agent') {
-      // Agents only see their own requests
-      andConditions.push({ requested_by_id: userId });
+      res.status(403).json({ error: 'Agents cannot access stock requests' });
+      return;
     } else if (userRole === 'admin') {
-      // Admins see:
-      // 1. Requests from their agents
-      // 2. Their own requests (to super-admin or other admins)
-      // 3. Incoming admin-to-admin transfers (requested_from = admin's ID)
-      const agents = await User.findAll({
-        where: {
-          role: 'agent',
-          created_by_id: userId
-        },
-        attributes: ['id']
+      // Admins only see their own requests to super-admin
+      andConditions.push({
+        requested_by_id: userId,
+        requested_from: 'super-admin'
       });
-      const agentIds = agents.map((agent) => agent.id);
-
-      const roleCondition: any = {
-        [Op.or]: [
-          { requested_by_id: { [Op.in]: agentIds } },
-          { requested_by_id: userId },
-          { requested_from: userId }
-        ]
-      };
-
-      andConditions.push(roleCondition);
     } else if (userRole === 'super-admin') {
       // Super-admin sees requests from admins (requested_from = 'super-admin')
       andConditions.push({ requested_from: 'super-admin' });
@@ -225,6 +208,12 @@ export const createStockRequest = async (req: Request, res: Response): Promise<v
     if (!req.user) {
       await transaction.rollback();
       res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    if (req.user.role === 'agent') {
+      await transaction.rollback();
+      res.status(403).json({ error: 'Agents cannot create stock requests' });
       return;
     }
 

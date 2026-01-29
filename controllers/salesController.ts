@@ -511,19 +511,33 @@ export const createSale = async (req: Request, res: Response): Promise<void> => 
       }, { transaction });
     }
 
+    let adminInventoryOwnerId: string | null = null;
+    if (req.user.role === 'agent') {
+      const agentRecord = await User.findByPk(req.user.id, {
+        attributes: ['id', 'created_by_id']
+      });
+      adminInventoryOwnerId = agentRecord?.created_by_id || null;
+      if (!adminInventoryOwnerId) {
+        throw new Error('Admin mapping not found for agent');
+      }
+    } else if (req.user.role === 'admin') {
+      adminInventoryOwnerId = req.user.id;
+    }
+
     for (const item of normalizedItems) {
       if (!item.product_id) {
         continue;
       }
 
-      let reduced = false;
-
-      if (req.user.role === 'admin') {
-        reduced = await tryReduceAdminInventory(req.user.id, item.product_id, item.quantity, transaction);
-      }
-
-      if (!reduced) {
+      if (adminInventoryOwnerId) {
+        const reduced = await tryReduceAdminInventory(adminInventoryOwnerId, item.product_id, item.quantity, transaction);
+        if (!reduced) {
+          throw new Error(`Insufficient admin inventory for product ${item.product_id}`);
+        }
+      } else if (req.user.role === 'super-admin') {
         await reduceCentralInventory(item.product_id, item.quantity, transaction);
+      } else {
+        throw new Error('Insufficient permissions to deduct inventory');
       }
 
       await logSaleTransaction({
