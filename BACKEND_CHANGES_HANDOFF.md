@@ -73,6 +73,17 @@
 | 61 | High | Retrieve from Metering (Meter Pending → installer_approved) | **Done** | §40 / `BACKEND_RETRIEVE_FROM_METERING.ts` / §AN |
 | 62 | High | Retrieve from Installation (undo Send to Installer) | **Done** | §41 / `BACKEND_RETRIEVE_FROM_INSTALLATION.ts` / §AM |
 | 63 | High | Google Sheets → HR Social Media leads | **Done** | §42 / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` / §AO |
+| 64 | High | Social Media sheet socket (`calling:uploads-updated` → stream:hr + dealers) | **Done** | §42 / REQUIRED §AP |
+| 65 | High | Google Sheet write-back (Assigned Dealer + calling status) | **Done** | §42 / REQUIRED §AQ / `utils/hrSheetWriteBack.ts` |
+| 66 | High | Admin Users — Update 403 + Active-only + read/write | **Done** | §46 / REQUIRED §AR / `BACKEND_USER_ACCESS.ts` |
+| 67 | High | Admin Users — Address save + echo on Edit | **Done** | §47 / REQUIRED §AS / `normalizeDealerAddress` |
+| 68 | High | Calling queue priority — in_progress → Social Media | **Done** | §4.5.3 / REQUIRED §AT / `BACKEND_CALLING_QUEUE_CURRENT.ts` |
+| 69 | High | Update User Zod — `visitor_reports` + `calling_reports` | **Done** | §46 / REQUIRED §AU / `ACCESS_KEYS` |
+| 70 | High | Field access round-trip — `moduleFieldPermissions` | **Done** | §46 / REQUIRED §AV / `publicDealerForApi` |
+| 71 | High | Workspace report cards — login echo report keys | **Done** | §46 / REQUIRED §AW |
+| 72 | High | Calling/Visitor Reports API auth (`AUTH_004`) | **Done** | §46 / REQUIRED §AX / `requireAnyAccess` |
+| 73 | High | Dealer Call Analytics live (`calling:actions-updated`) | **Done** | §48 / REQUIRED §AY |
+| 74 | High | Sheet auto-sync cron every **30 min** | **Done** | §48 / REQUIRED §AZ / `sheetAutoSyncCron` |
 
 **Deploy before QA:**
 
@@ -171,7 +182,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 | `pdfDcrPanelRangeKey` | BOTH — DCR line |
 | `pdfNonDcrPanelRangeKey` | BOTH — Non-DCR line |
 
-**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, **`waaree_580_630`**, `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, **`adani_600_630`**, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR), **`renew_energy_600_630`** (`600W - 630W`, Non-DCR 80kW Renew Energy), **`premier_energy_600_610`** (`600W - 610W Topcon Bifacial`, Crompton DCR set — §27). Unknown keys stored as `null`.
+**Allowed values:** `waaree_540_560_bifacial`, `waaree_580_700_bifacial_topcon`, **`waaree_580_620`** (legacy alias **`waaree_580_630`** → maps to `waaree_580_620` on save), `adani_540_580_bifacial`, `adani_610_625_bifacial_topcon`, **`adani_600_630`**, `premier_600_625_bifacial_topcon`, **`tata_530_570`** (`530W - 570W`, Tata DCR packages only), **`ina_500_600_bifacial`** (`500W - 600W`, INA DCR), **`renew_energy_600_630`** (`600W - 630W`, Non-DCR 80kW Renew Energy), **`premier_energy_600_610`** (`600W - 610W Topcon Bifacial`, Crompton DCR set — §27). Unknown keys stored as `null`.
 
 **PDF display (client-generated; keys must round-trip on GET):**
 
@@ -668,6 +679,33 @@ LIMIT 1;
 ```
 
 **Code:** `resolveDealerQueueHead()` + `promoteQueuedLeadIfSlotAvailable` early return in `controllers/callingLeadController.ts`.
+
+### 4.5.3 Queue priority — Social before raw when Start Call not done (§AT) — Sep 2026
+
+**Status: implemented** — REQUIRED §AT · `BACKEND_CALLING_QUEUE_CURRENT.ts`
+
+**Product:**
+1. `in_progress` stays Current until Submit (§E.1).
+2. **Start Call not done** → Current / `nextLead` = Social / Google Sheet when any exist (assigned or pool) — not older raw CSV.
+3. After Submit → same social-before-raw priority.
+
+| Priority | Rule |
+|----------|------|
+| 1 | `status = in_progress` |
+| 2 | Social / sheet (`sheetSourceId` / `sourceType` / Meta `platform`) |
+| 3 | Raw CSV |
+| 4 | FIFO `COALESCE(assignedAt, createdAt)` |
+
+Pool claim uses the same social CASE. When nothing is `in_progress` and only raw is at slot cap, still claim one social from the pool.
+
+Echo `sheet_source_id`, `source_type`, `platform` on every lead row.
+
+#### QA
+
+1. `in_progress` raw + social assigned → Current = in-progress until Submit.
+2. **Start Call not done** + social assigned/pool → `/current` + `/next` return social (not raw).
+3. After Submit → next = social if any remain.
+4. No social → oldest assigned / pool as before.
 
 ### 4.5.2 Reschedule / Decision Pending Submit (§E.2)
 
@@ -2387,7 +2425,7 @@ On `PATCH /api/quotations/{quotationId}/documents` (KYC / customer documents):
 | Brand | Key | Label |
 |-------|-----|-------|
 | Renew Energy | `renew_energy_600_630` | 600W - 630W |
-| Waaree | `waaree_580_630` | 580W - 630W |
+| Waaree | `waaree_580_620` (legacy `waaree_580_630`) | 580W - 620W N-Type Bifacial Topcon |
 | Adani | `adani_600_630` | 600W - 630W |
 
 ### Other
@@ -2926,12 +2964,13 @@ Structured `installationImageCaptureMetaJson` persist (§AJ) — optional follow
 | Sync mapper (P0) | Meta: `phone_number`→`mobile` (last 10), `id`→`external_id`, `full_name`→`name`, `lead_status`→`lead_status`; optional `platform`/`campaign_name`/`ad_name`/`created_time`; ignore `ad_id`/`adset_*`/`campaign_id`/`form_id`/`is_organic` (raw OK) |
 | Assign | `dealer_ids` + `active_cap` on source — **not** sheet columns |
 | Lead API echo | `mobile`, `name`, `leadStatus`, `finalDecision`, `remarks`, `platform`, `campaignName`, `adName`, `assignedDealerId`, `assignedDealerName`, `externalId` |
-| Auto-sync | Cron 15 min → `POST /hr/sheet-sources/sync-all` + `calling:uploads-updated` |
-| Socket | `calling:uploads-updated` after sync / sync-all (`reason: sheet_auto_sync`) |
+| Auto-sync | Cron **30 min** → `POST /hr/sheet-sources/sync-all` + `calling:uploads-updated` (§AZ) |
+| Socket (P0) | After assign: `io.to("stream:hr").to("stream:dealers").emit("calling:uploads-updated", { reason: sheet_sync \| sheet_auto_sync, spreadsheetId, sourceId?, syncedAt })` + optional `backend:mutation` → `stream:backend`. See REQUIRED **§AP**. |
+| Write-back (P0) | After assign + calling → `writeBackHrLeadToSheet`: Assigned Dealer, Assignment Status (truncated OK), Remarks, call responses, Final Decision, **Address** (create col if missing). See REQUIRED **§AQ**. |
 
 **Live tabs (current sheet):** `Jaipur Leads`, `Ajmer Leads`, `Crompton Leads` (+ `Ajmer Solar Lead Form New` when present)
 
-**Code:** `controllers/hrSheetSourceController.ts`, `utils/hrSheetSourceSync.ts` (`rowToLeadObject`), `utils/hrSheetSourceApi.ts`, `routes/hrLeadRoutes.ts`
+**Code:** `controllers/hrSheetSourceController.ts`, `utils/hrSheetSourceSync.ts`, `utils/hrSheetWriteBack.ts`, `utils/hrSheetGoogleAuth.ts`, `utils/hrSheetSourceApi.ts`, `utils/realtime.ts` (`emitSheetSyncUploadsUpdated`), `routes/hrLeadRoutes.ts`
 
 ### Migration
 
@@ -2946,4 +2985,96 @@ Structured `installationImageCaptureMetaJson` persist (§AJ) — optional follow
 5. `POST …/sync` imports valid mobiles; re-sync skips duplicates.
 6. `POST /hr/sheet-sources/sync-all` with `x-cron-secret` syncs all enabled tabs + emits socket.
 7. Dealer Calling Data shows assigned leads.
+
+
+## 46. Admin Users — Active-only + Update User 403 + read/write — Sep 2026
+
+**Status: implemented** — FE REQUIRED §AR / `BACKEND_USER_ACCESS.ts` / `BACKEND_USER_FIELD_PERMISSIONS.ts`
+
+| Item | Detail |
+|------|--------|
+| Auth | `authorizeAdmin` / `requireAccess("admin")` / `hasAdminPanelAccess` — not `role === "admin"` only |
+| Visitors | All admin visitor handlers use `hasAdminPanelAccess` |
+| Persist | `access`, `officeLocation`, `moduleFieldPermissions` on dealer / AM / visitor PUT |
+| List | Default Active only; `?includeInactive=true` optional |
+| Dealer GET echo | `publicDealerForApi` includes office + moduleFieldPermissions |
+| Read/write | `enforceWorkflowFieldWriteOrRespond` — read → 403 on mutations |
+| Scope | `resolveWorkflowListScopeFilter` on admin quotation lists (`selected_users` / `office_only`) |
+| Accounts read | `moduleFieldPermissions.accounts.level: "read"` → GET payment list OK; installments / site-cost / release / retrieve / settlement / approved pricing → **403** |
+| **§AU** | Zod `ACCESS_KEYS` includes **`visitor_reports`** + **`calling_reports`** |
+| **§AV** | Persist + echo Field access for `accounts\|installation\|metering\|final_confirmation\|visitor_reports\|calling_reports` |
+| **§AW** | Login/GET echo report keys; **do not** elevate primary `role` to admin from reports |
+| **§AX** | `GET /admin/calling-actions*` → `requireAnyAccess([admin, calling_reports, hr])`; visits → `[admin, visitor_reports]` |
+
+### Routes (explicit)
+
+- `PUT /api/admin/dealers/:dealerId` → `authenticate` → `authorizeAdmin`/`requireAdminAccess()` → `updateDealer`
+- Same for AM `PUT /api/account-managers/:id` and visitors `PUT /api/admin/visitors/:id`
+
+### FE until deploy
+
+On AUTH_004, Update User may soft-save Metering read-only in browser localStorage (“Saved on this browser”). That does **not** replace server persist — other devices / fresh logins need this backend shipped.
+
+### QA
+
+1. Update User as Admin (role or `access` includes admin) succeeds — no Admin-access toast.
+2. `GET /admin/dealers` default = Active only; `includeInactive=true` shows inactive.
+3. Metering/Installation user with **read** can open dashboard but cannot mutate.
+4. Same user with **write** can mutate.
+5. `selected_users` / `office_only` scopes filter list GETs.
+6. Accounts **read** → login echoes `accounts.level: "read"`; Payment mutations 403; **write** → Manage + site cost work.
+
+---
+
+## 47. Admin Users — Address save + echo on Edit — Sep 2026
+
+**Status: implemented** — FE REQUIRED §AS / `BACKEND_USER_ACCESS.ts` (`normalizeDealerAddress`)
+
+| Item | Detail |
+|------|--------|
+| Persist | PUT dealers / AM / visitors accept nested `address` **or** flat `address_street`… / `street` / `streetAddress` |
+| Echo | GET + PUT always return `address: { street, city, state, pincode }` via `normalizeDealerAddress` |
+| Dealers | `publicDealerForApi` nests address from flat columns (was the Edit-empty bug) |
+| AM / visitors | Same nested echo via `publicAccountManagerForApi` / `publicVisitorForApi` |
+
+**Code:** `utils/userAddress.ts`, `utils/userAccess.ts`, `controllers/adminController.ts`
+
+### QA
+
+1. PUT nested address → persists; GET list shows nested `address`.
+2. PUT flat `address_street`… → persists.
+3. Re-open Update User → Street / City / State / Pincode prefilled.
+
+---
+
+## 48. Dealer Call Analytics live + HR sheet auto-sync 30 min — Sep 2026
+
+**Status: implemented** — REQUIRED **§AY** / **§AZ** · FE HANDOFF §47
+
+### 48.1 Call Analytics after Current Lead action (§AY)
+
+| Item | Detail |
+|------|--------|
+| PATCH `…/calling-queue/{leadId}/action` | Persist one `CallingActionHistory` row; echo as `callingAction` / `actionRow` |
+| Socket | `emitCallingActionsUpdated` → `stream:dealers` + `stream:hr` + optional `backend:mutation` |
+| Payload | `{ reason: "dealer_action", dealerId, leadId, action, actionAt }` |
+| GET `…/calling-actions` | `range=all` default limit **2000**; ISO `actionAt`; social fields on rows |
+
+### 48.2 HR Social Media auto-sync (§AZ / §AP)
+
+| Item | Detail |
+|------|--------|
+| Route | `POST /hr/sheet-sources/sync-all` (HR JWT or `x-cron-secret`) |
+| In-process cron | `utils/sheetAutoSyncCron.ts` every **30 min** → `runHrSheetSourcesSyncAll` |
+| Socket | `calling:uploads-updated` `{ reason: "sheet_auto_sync" }` to stream:hr + stream:dealers |
+| Manual | `POST …/:id/sync` still emits `sheet_sync` |
+| Disable | `SHEET_AUTO_SYNC_CRON=false` |
+
+**Code:** `utils/realtime.ts` (`emitCallingActionsUpdated`), `controllers/callingLeadController.ts`, `controllers/hrSheetSourceController.ts` (`runHrSheetSourcesSyncAll`), `utils/sheetAutoSyncCron.ts`, `server.ts`
+
+### QA
+
+1. Submit Connected/Not Connected → PATCH 200 + action row; GET calling-actions includes it; second tab updates via socket.
+2. Wait ~30 min (or trigger sync-all) → sheet tabs refresh + `calling:uploads-updated`.
+3. Manual Sync now still works.
 

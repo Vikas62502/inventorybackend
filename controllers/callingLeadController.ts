@@ -22,7 +22,7 @@ import {
   quotationEligibilityHttpError
 } from '../utils/accessLists';
 import { canAccessSection } from '../utils/userAccess';
-import { emitRealtime, realtimeEvents } from '../utils/realtime';
+import { emitRealtime, realtimeEvents, emitCallingActionsUpdated } from '../utils/realtime';
 import {
   buildCallingReportsCountSummary,
   classifyCallingConnection,
@@ -33,6 +33,23 @@ import {
   buildDealerQueueSocialFields,
   loadUploadBatchMapByIds
 } from '../utils/callingQueueSocialFields';
+
+/** Non-blocking Google Sheet write-back for social/sheet leads (P0 §AQ). */
+const scheduleSheetWriteBack = (leadId: string | null | undefined): void => {
+  const id = String(leadId || '').trim();
+  if (!id) return;
+  void import('../utils/hrSheetWriteBack')
+    .then((m) => m.scheduleHrLeadSheetWriteBack(id))
+    .catch((error) => logError('scheduleSheetWriteBack import failed', error, { leadId: id }));
+};
+
+const scheduleSheetWriteBackForBatch = (batchId: string | null | undefined): void => {
+  const id = String(batchId || '').trim();
+  if (!id) return;
+  void import('../utils/hrSheetWriteBack')
+    .then((m) => m.scheduleHrLeadSheetWriteBackForBatch(id))
+    .catch((error) => logError('scheduleSheetWriteBackForBatch import failed', error, { batchId: id }));
+};
 
 const MOBILE_KEYS = ['mobile', 'phone', 'contact', 'contact no', 'contact no.', 'contactnumber', 'phone_number', 'phone number', 'mobile number'];
 const NAME_KEYS = ['name', 'customername', 'customer name', 'full name'];
@@ -538,6 +555,32 @@ const batchDealerEligibilityPredicate = (dealerId: string, batchAlias: string) =
   `;
 };
 
+/** §AT — Social / Google Sheet lead predicate (alias = calling_leads table alias). */
+const socialCallingLeadSqlPredicate = (leadAlias: string) => `
+  (
+    ${leadAlias}."sheetSourceId" IS NOT NULL
+    OR LOWER(COALESCE(${leadAlias}."platform", '')) IN (
+      'ig', 'fb', 'meta', 'instagram', 'facebook'
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM "calling_lead_upload_batches" AS b_social
+      WHERE b_social."id" = ${leadAlias}."batchId"
+        AND LOWER(COALESCE(b_social."sourceType", '')) IN (
+          'google_sheet', 'social_media', 'social', 'meta'
+        )
+    )
+  )
+`;
+
+/** §AT — CASE 0 = social/sheet, 1 = raw CSV (for ORDER BY). */
+const socialCallingLeadOrderCaseSql = (leadAlias: string) => `
+  CASE
+    WHEN ${socialCallingLeadSqlPredicate(leadAlias)} THEN 0
+    ELSE 1
+  END
+`;
+
 const dealerBatchEligibilityClause = (dealerId: string) =>
   Sequelize.literal(`
     EXISTS (
@@ -550,7 +593,7 @@ const dealerBatchEligibilityClause = (dealerId: string) =>
           cl."batchId" IS NULL
           OR ${batchDealerEligibilityPredicate(dealerId, 'b')}
         )
-    )
+      )
   `);
 
 const normalizeMobile = (value: unknown): string | null => {
@@ -899,7 +942,7 @@ export const assignUploadBatchWithActiveCap = async ({
 }): Promise<{ assigned: number; released: number }> => {
   if (!dealerIds.length) return { assigned: 0, released: 0 };
   await ensureCallingPoolDealerExists();
-  return sequelize.transaction(async (transaction) => {
+  const result = await sequelize.transaction(async (transaction) => {
     await reclaimStuckCallingAssignments(transaction);
     return activeCapAssignUnassignedLeadsForBatch({
       batchId,
@@ -910,6 +953,8 @@ export const assignUploadBatchWithActiveCap = async ({
       transaction
     });
   });
+  scheduleSheetWriteBackForBatch(batchId);
+  return result;
 };
 
 /**
@@ -1357,7 +1402,17 @@ const callingActionToApiJson = (row: any) => {
     customerNote: row.lead?.customerNote ?? row.customerNote ?? null,
     customer_note: row.lead?.customerNote ?? row.customerNote ?? null,
     city: row.lead?.city ?? row.city ?? null,
-    state: row.lead?.state ?? row.state ?? null
+    state: row.lead?.state ?? row.state ?? null,
+    // §AY / §AN — social identity so analytics can tag sheet leads
+    sheetSourceId: row.lead?.sheetSourceId ?? row.sheetSourceId ?? null,
+    sheet_source_id: row.lead?.sheetSourceId ?? row.sheet_source_id ?? null,
+    sourceType: row.lead?.sheetSourceId
+      ? 'google_sheet'
+      : row.sourceType ?? row.source_type ?? null,
+    source_type: row.lead?.sheetSourceId
+      ? 'google_sheet'
+      : row.sourceType ?? row.source_type ?? null,
+    platform: row.lead?.platform ?? row.platform ?? null
   };
 };
 
@@ -1755,7 +1810,19 @@ const buildCallingActionsResponse = async (req: Request) => {
   const leadInclude = {
     model: CallingLead,
     as: 'lead',
-    attributes: ['id', 'mobile', 'mobileNormalized', 'name'],
+    attributes: [
+      'id',
+      'mobile',
+      'mobileNormalized',
+      'name',
+      'sheetSourceId',
+      'platform',
+      'customerNote',
+      'city',
+      'state',
+      'address',
+      'kNumber'
+    ],
     required: false
   };
 
@@ -2060,10 +2127,12 @@ export const resolveAssignedByUserId = async (req: Request, transaction: any): P
 const promoteQueuedLeadIfSlotAvailable = async (
   dealerId: string,
   activeLimitPerDealer: number,
-  transaction: any
+  transaction: any,
+  options?: { preferSocialOverAssignedRaw?: boolean }
 ): Promise<void> => {
   try {
     const limit = normalizeActiveLimitPerDealer(activeLimitPerDealer);
+    const preferSocialOverAssignedRaw = options?.preferSocialOverAssignedRaw === true;
 
     // §15 — free stuck work back into the pool before allocating.
     await reclaimStuckCallingAssignments(transaction);
@@ -2081,20 +2150,70 @@ const promoteQueuedLeadIfSlotAvailable = async (
     });
     if (openCallCount > 0) return;
 
-    // Cap: do not hand out another lead while dealer already holds assigned/active slots.
     const openSlots = await countDealerOpenCallingSlots(dealerId, transaction);
-    if (openSlots >= limit) return;
+    const atSlotCap = openSlots >= limit;
 
-    // 1) Dealer's own queued row (oldest first)
+    // §AT — at cap with only raw assigned: still claim one social from pool so it becomes head.
+    let onlyClaimSocial = false;
+    if (atSlotCap) {
+      if (!preferSocialOverAssignedRaw) return;
+      const socialAssignedCount = await DealerLeadAssignment.count({
+        where: {
+          [Op.and]: [
+            {
+              dealerId,
+              status: { [Op.in]: ['queued', 'assigned', 'active', 'in_progress'] }
+            },
+            LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+            Sequelize.literal(`
+              EXISTS (
+                SELECT 1 FROM "calling_leads" AS cl
+                WHERE cl."id" = "DealerLeadAssignment"."leadId"
+                  AND ${socialCallingLeadSqlPredicate('cl')}
+              )
+            `)
+          ]
+        },
+        transaction
+      });
+      if (socialAssignedCount > 0) return;
+      onlyClaimSocial = true;
+    }
+
+    // 1) Dealer's own queued row — social before raw, then FIFO
     const queued = await DealerLeadAssignment.findOne({
       where: {
         [Op.and]: [
           { dealerId, status: 'queued' },
           LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-          dealerBatchEligibilityClause(dealerId)
+          dealerBatchEligibilityClause(dealerId),
+          ...(onlyClaimSocial
+            ? [
+                Sequelize.literal(`
+                  EXISTS (
+                    SELECT 1 FROM "calling_leads" AS cl
+                    WHERE cl."id" = "DealerLeadAssignment"."leadId"
+                      AND ${socialCallingLeadSqlPredicate('cl')}
+                  )
+                `)
+              ]
+            : [])
         ]
       },
-      order: [['assignedAt', 'ASC'], ['createdAt', 'ASC']],
+      order: [
+        [
+          Sequelize.literal(`
+            (
+              SELECT ${socialCallingLeadOrderCaseSql('cl')}
+              FROM "calling_leads" AS cl
+              WHERE cl."id" = "DealerLeadAssignment"."leadId"
+            )
+          `),
+          'ASC'
+        ],
+        ['assignedAt', 'ASC'],
+        ['createdAt', 'ASC']
+      ],
       transaction,
       lock: transaction.LOCK.UPDATE
     });
@@ -2112,18 +2231,20 @@ const promoteQueuedLeadIfSlotAvailable = async (
         },
         { transaction }
       );
+      scheduleSheetWriteBack(queued.leadId);
       return;
     }
 
-    // 2) Pool / sentinel assignee (unassigned, pool, open, …) — FCFS claim with SKIP LOCKED via raw SQL
+    // 2) Pool / sentinel assignee — social before raw (§AT findOldestUnassignedForDealer)
+    const sentinelList = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+      .map((value) => `'${value.replace(/'/g, "''")}'`)
+      .join(', ');
     const [poolRows] = await sequelize.query(
       `
       SELECT dla."id"
       FROM "dealer_lead_assignments" AS dla
       WHERE dla."status" IN ('queued', 'assigned', 'active')
-        AND LOWER(TRIM(dla."dealerId")) IN (${Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
-          .map((value) => `'${value.replace(/'/g, "''")}'`)
-          .join(', ')})
+        AND LOWER(TRIM(dla."dealerId")) IN (${sentinelList})
         AND NOT EXISTS (
           SELECT 1
           FROM "dealer_lead_assignments" AS newer
@@ -2149,8 +2270,15 @@ const promoteQueuedLeadIfSlotAvailable = async (
                   AND ${batchDealerEligibilityPredicate(dealerId, 'b')}
               )
             )
+            ${onlyClaimSocial ? `AND ${socialCallingLeadSqlPredicate('cl')}` : ''}
         )
-      ORDER BY COALESCE(dla."assignedAt", dla."createdAt") ASC, dla."id" ASC
+      ORDER BY (
+        SELECT ${socialCallingLeadOrderCaseSql('cl')}
+        FROM "calling_leads" AS cl
+        WHERE cl."id" = dla."leadId"
+      ) ASC,
+      COALESCE(dla."assignedAt", dla."createdAt") ASC,
+      dla."id" ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
       `,
@@ -2159,6 +2287,7 @@ const promoteQueuedLeadIfSlotAvailable = async (
 
     const poolId = Array.isArray(poolRows) && poolRows[0] ? String((poolRows[0] as any).id || '') : '';
     if (poolId) {
+      const poolAssignment = await DealerLeadAssignment.findByPk(poolId, { transaction });
       await DealerLeadAssignment.update(
         {
           dealerId,
@@ -2171,10 +2300,11 @@ const promoteQueuedLeadIfSlotAvailable = async (
         },
         { where: { id: poolId }, transaction }
       );
+      if (poolAssignment?.leadId) scheduleSheetWriteBack(poolAssignment.leadId);
       return;
     }
 
-    // 3) Leads with no assignment row yet — create assignment (legacy / edge)
+    // 3) Leads with no assignment row yet — social before oldest createdAt
     const unassignedLead = await CallingLead.findOne({
       where: {
         [Op.and]: [
@@ -2194,10 +2324,16 @@ const promoteQueuedLeadIfSlotAvailable = async (
                   AND ${batchDealerEligibilityPredicate(dealerId, 'b')}
               )
             )
-          `)
+          `),
+          ...(onlyClaimSocial
+            ? [Sequelize.literal(socialCallingLeadSqlPredicate('"CallingLead"'))]
+            : [])
         ]
       },
-      order: [['createdAt', 'ASC']],
+      order: [
+        [Sequelize.literal(socialCallingLeadOrderCaseSql('"CallingLead"')), 'ASC'],
+        ['createdAt', 'ASC']
+      ],
       transaction,
       lock: transaction.LOCK.UPDATE
     });
@@ -2221,6 +2357,7 @@ const promoteQueuedLeadIfSlotAvailable = async (
         },
         { transaction }
       );
+      scheduleSheetWriteBack(unassignedLead.id);
     }
 
     // Do NOT steal assigned leads from other dealers — that fights FCFS (§15).
@@ -2570,6 +2707,7 @@ const patchDealerCallingLeadCustomerNote = async (req: Request, res: Response): 
         currentLead: leadPayload
       }
     });
+    scheduleSheetWriteBack(leadId);
   } catch (error) {
     const errorCode = (error as any)?.code;
     if (errorCode === 'LEAD_004') {
@@ -2634,6 +2772,8 @@ const assignCallingLeadToDealerFromRequest = async (
       }
       assignmentPayload = await buildCallingLeadQueuePayload(assignment, transaction);
     });
+
+    scheduleSheetWriteBack(leadId);
 
     const snapshot = await buildDealerQueueSnapshot(dealerId, 1000);
     applyNoCacheHeaders(res);
@@ -3235,6 +3375,12 @@ const CALLABLE_QUEUE_STATUSES = ['queued', 'assigned', 'active', 'in_progress'] 
  * §15 — Harshita empty Current Lead fix:
  * If a lead is already assigned to THIS dealer, return it regardless of batch pool JSON.
  * (Eligibility only gates claiming from the unassigned pool.)
+ *
+ * §AT / HANDOFF §4.5.3 — queue head order (must match SPA dealerAssignedQueue):
+ *   1) in_progress (finish started call; §E.1)
+ *   2) Social / sheet (sheetSourceId OR batch sourceType google_sheet|social_media|social|meta)
+ *   3) other assigned / queued
+ *   4) FIFO COALESCE(assignedAt, createdAt)
  */
 const findOpenAssignedLeadsForDealer = async (dealerId: string, limit = 500) => {
   const now = new Date();
@@ -3253,20 +3399,31 @@ const findOpenAssignedLeadsForDealer = async (dealerId: string, limit = 500) => 
     },
     include: [{ model: CallingLead, as: 'lead', required: false }],
     order: [
-      // Prefer in_progress first, then oldest assigned
       [
         Sequelize.literal(`
-          CASE "DealerLeadAssignment"."status"
-            WHEN 'in_progress' THEN 0
-            WHEN 'assigned' THEN 1
-            WHEN 'active' THEN 2
-            WHEN 'queued' THEN 3
-            ELSE 4
+          CASE
+            WHEN "DealerLeadAssignment"."status" = 'in_progress' THEN 0
+            ELSE 1
           END
         `),
         'ASC'
       ],
-      [Sequelize.literal('COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'), 'ASC'],
+      [
+        Sequelize.literal(`
+          (
+            SELECT ${socialCallingLeadOrderCaseSql('cl')}
+            FROM "calling_leads" AS cl
+            WHERE cl."id" = "DealerLeadAssignment"."leadId"
+          )
+        `),
+        'ASC'
+      ],
+      [
+        Sequelize.literal(
+          'COALESCE("DealerLeadAssignment"."assignedAt", "DealerLeadAssignment"."createdAt")'
+        ),
+        'ASC'
+      ],
       ['id', 'ASC']
     ],
     limit
@@ -3329,7 +3486,8 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
         address: lead.address,
         city: lead.city,
         state: lead.state,
-        customerNote: lead.customerNote,
+        customerNote: lead.customerNote ?? null,
+        customer_note: lead.customerNote ?? null,
         uploadBatchId: lead.batchId || null,
         queuedAt: toIsoStringOrNull(row.assignedAt || row.createdAt),
         dealerId: null,
@@ -3355,23 +3513,62 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
     .filter(Boolean) as any[];
 };
 
+/** §AT — detect social/sheet row from API echo fields (SPA isSocialMediaCallingLead). */
+const isSocialQueueLead = (row: any): boolean => {
+  if (row?.sheetSourceId || row?.sheet_source_id) return true;
+  const sourceType = String(row?.sourceType || row?.source_type || '')
+    .trim()
+    .toLowerCase();
+  if (['google_sheet', 'social_media', 'social', 'meta'].includes(sourceType)) return true;
+  const platform = String(row?.platform || '')
+    .trim()
+    .toLowerCase();
+  return ['ig', 'fb', 'meta', 'instagram', 'facebook'].includes(platform);
+};
+
+/** §AT — in_progress → social → raw → FIFO (matches SPA dealerAssignedQueue). */
+const sortCallableQueueLeads = (queue: any[]): any[] => {
+  const queuedAtMs = (row: any) => {
+    const raw = row?.queuedAt || row?.assignedAt || row?.actionAt || null;
+    const ms = raw ? new Date(raw).getTime() : NaN;
+    return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER;
+  };
+  return [...queue].sort((a, b) => {
+    const aIn = a?.status === 'in_progress' ? 0 : 1;
+    const bIn = b?.status === 'in_progress' ? 0 : 1;
+    if (aIn !== bIn) return aIn - bIn;
+    const aSoc = isSocialQueueLead(a) ? 0 : 1;
+    const bSoc = isSocialQueueLead(b) ? 0 : 1;
+    if (aSoc !== bSoc) return aSoc - bSoc;
+    return queuedAtMs(a) - queuedAtMs(b);
+  });
+};
+
 const buildCallableQueue = async (dealerId: string, limit = 500, allocate = true) => {
   // 1) Always surface leads already assigned to this dealer (no batch-pool eligibility filter).
   let rows = await findOpenAssignedLeadsForDealer(dealerId, limit);
 
-  // 2) If free, claim oldest unassigned from eligible pools (FCFS).
-  if (allocate && !rows.length) {
-    try {
-      await sequelize.transaction(async (transaction) => {
-        await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
-      });
-    } catch (error) {
-      logError('buildCallableQueue promote failed (non-fatal)', error, { dealerId });
+  // 2) Claim from pool when empty, or pull social ahead of raw when Start Call not done (§AT).
+  if (allocate) {
+    const hasInProgress = rows.some((row: any) => row?.status === 'in_progress');
+    const needsPromote = !rows.length || !hasInProgress;
+    if (needsPromote) {
+      try {
+        await sequelize.transaction(async (transaction) => {
+          await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction, {
+            // Before Start Call: claim social from pool even if older raw is already assigned.
+            preferSocialOverAssignedRaw: !hasInProgress
+          });
+        });
+      } catch (error) {
+        logError('buildCallableQueue promote failed (non-fatal)', error, { dealerId });
+      }
+      rows = await findOpenAssignedLeadsForDealer(dealerId, limit);
     }
-    rows = await findOpenAssignedLeadsForDealer(dealerId, limit);
   }
 
-  return mapAssignmentRowsToQueueLeads(dealerId, rows as any[]);
+  const mapped = await mapAssignmentRowsToQueueLeads(dealerId, rows as any[]);
+  return sortCallableQueueLeads(mapped);
 };
 
 const buildDealerQueueCounts = async (dealerId: string) => {
@@ -3431,7 +3628,8 @@ const mapAssignmentToScheduledLead = (
     mobile: row.lead?.mobile || '',
     altMobile: row.lead?.altMobile || null,
     kNumber: row.lead?.kNumber || null,
-    customerNote: row.lead?.customerNote || null,
+    customerNote: row.lead?.customerNote ?? null,
+    customer_note: row.lead?.customerNote ?? null,
     address: row.lead?.address || null,
     city: row.lead?.city || null,
     state: row.lead?.state || null,
@@ -3840,19 +4038,17 @@ const buildRecentActions = async (dealerId: string, limit = 1000) => {
   return out;
 };
 
-/** §4.5.1 / §E.1 — open in_progress row is currentLead; omit nextLead until Submit. */
+/** §4.5.1 / §E.1 — open in_progress row is currentLead; omit nextLead until Submit.
+ *  §AT — when Start Call not done, head is social/sheet if any (queue already sorted). */
 const resolveDealerQueueHead = (queue: any[]) => {
-  const inProgressRows = queue.filter((row) => row?.status === 'in_progress');
+  const ordered = sortCallableQueueLeads(queue);
+  const inProgressRows = ordered.filter((row) => row?.status === 'in_progress');
   if (inProgressRows.length) {
-    const openCall = inProgressRows.sort((a, b) => {
-      const aAt = a?.actionAt ? new Date(a.actionAt).getTime() : 0;
-      const bAt = b?.actionAt ? new Date(b.actionAt).getTime() : 0;
-      return aAt - bAt;
-    })[0];
+    const openCall = inProgressRows[0];
     return { lead: openCall, currentLead: openCall, nextLead: null };
   }
 
-  const head = queue.length ? queue[0] : null;
+  const head = ordered.length ? ordered[0] : null;
   return { lead: head, currentLead: head, nextLead: head };
 };
 
@@ -4328,6 +4524,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       new Date(row.nextFollowUpAt as Date).getTime() <= now.getTime();
 
     let updatedData: any = null;
+    let persistedActionRow: any = null;
     await sequelize.transaction(async (transaction) => {
       await promoteQueuedLeadIfSlotAvailable(dealerId, DEFAULT_ACTIVE_LIMIT_PER_DEALER, transaction);
 
@@ -4368,7 +4565,17 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             transaction
           }),
           CallingLead.findByPk(assignment.leadId, {
-            attributes: ['name', 'mobile', 'address', 'city', 'state'],
+            attributes: [
+              'name',
+              'mobile',
+              'address',
+              'city',
+              'state',
+              'sheetSourceId',
+              'platform',
+              'customerNote',
+              'kNumber'
+            ],
             transaction
           })
         ]);
@@ -4404,6 +4611,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           customerAddress
         };
 
+        let historyRow: any = null;
         if (opts.isEditLatest) {
           const latest = await CallingActionHistory.findOne({
             where: { leadId: assignment.leadId, dealerId: assignment.dealerId },
@@ -4413,8 +4621,9 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           });
           if (latest) {
             await latest.update(historyPayload, { transaction });
+            historyRow = latest;
           } else {
-            await CallingActionHistory.create(
+            historyRow = await CallingActionHistory.create(
               {
                 id: uuidv4(),
                 leadId: assignment.leadId,
@@ -4426,7 +4635,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             );
           }
         } else {
-          await CallingActionHistory.create(
+          historyRow = await CallingActionHistory.create(
             {
               id: uuidv4(),
               leadId: assignment.leadId,
@@ -4437,6 +4646,14 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
             { transaction }
           );
         }
+
+        const plain =
+          historyRow && typeof historyRow.toJSON === 'function' ? historyRow.toJSON() : historyRow;
+        persistedActionRow = callingActionToApiJson({
+          ...plain,
+          lead: lead ? (typeof lead.toJSON === 'function' ? lead.toJSON() : lead) : null
+        });
+        return persistedActionRow;
       };
 
       // --- Completed assignment: history-only edit (no assignment transition guard) ---
@@ -4596,19 +4813,30 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         success: true,
         data: {
           ...updatedData,
-          ...snapshot
+          ...snapshot,
+          // §AY — echo persisted action row so SPA can merge analytics without waiting on GET
+          callingAction: persistedActionRow,
+          actionRow: persistedActionRow,
+          recentAction: persistedActionRow
         }
       });
     }
 
     if (action !== 'start') {
-      emitRealtime(realtimeEvents.callingActionsUpdated, {
+      emitCallingActionsUpdated({
+        reason: 'dealer_action',
         dealerId,
         leadId,
         action,
-        actionAt: (updatedData?.actionAt || new Date()).toISOString?.() || new Date().toISOString()
+        actionAt:
+          persistedActionRow?.actionAt ||
+          updatedData?.actionAt ||
+          new Date().toISOString()
       });
     }
+
+    // DB → Sheet: assigned dealer + calling status / remarks / final decision
+    scheduleSheetWriteBack(leadId);
   } catch (error) {
     const err = error as any;
     const errorCode = err?.code;

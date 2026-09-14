@@ -17,7 +17,7 @@ import {
 import { mapSheetSourceForApi, mapSocialLeadForApi } from '../utils/hrSheetSourceApi';
 import { fetchHrUploadBatchCounts, isValidHrCallingAssigneeDealerId, resolveAssignedByUserId } from './callingLeadController';
 import { sequelize, User } from '../models';
-import { emitRealtime, realtimeEvents } from '../utils/realtime';
+import { emitSheetSyncUploadsUpdated } from '../utils/realtime';
 
 const parsePositiveInt = (value: unknown, fallback: number): number => {
   const n = Number(value);
@@ -237,6 +237,110 @@ export const postHrSheetSourceSync = async (req: Request, res: Response): Promis
 };
 
 /**
+ * Shared sync-all runner (§AZ / §AP) — used by HTTP + in-process 30‑min cron.
+ */
+export const runHrSheetSourcesSyncAll = async (opts?: {
+  spreadsheetId?: string | null;
+  assignedByUserId?: string | null;
+  req?: Request | null;
+}): Promise<{
+  spreadsheetId: string;
+  syncedAt: string;
+  sources: Array<Record<string, unknown>>;
+}> => {
+  const spreadsheetId = resolveSpreadsheetId(opts?.spreadsheetId);
+
+  try {
+    const sheets = getSheetsClient();
+    const meta = await sheets.spreadsheets.get({ spreadsheetId });
+    const liveTabs = (meta.data.sheets || [])
+      .map((s) => s.properties?.title)
+      .filter((title): title is string => Boolean(title));
+    if (liveTabs.length) {
+      await CallingLeadSheetSource.destroy({
+        where: {
+          spreadsheetId,
+          sheetTabName: { [Op.notIn]: liveTabs }
+        }
+      });
+    }
+  } catch (error) {
+    if (error instanceof GoogleSheetsNotConfiguredError) throw error;
+    logError('sync-all live-tab prune failed (continuing)', error, { spreadsheetId });
+  }
+
+  let assignedByUserId = String(opts?.assignedByUserId || '').trim() || '1';
+  if (opts?.req) {
+    try {
+      assignedByUserId = await sequelize.transaction((transaction) =>
+        resolveAssignedByUserId(opts.req as Request, transaction)
+      );
+    } catch {
+      /* fall through to admin fallback */
+    }
+  }
+  if (!assignedByUserId || assignedByUserId === '1') {
+    const fallback = await User.findOne({
+      where: {
+        role: { [Op.in]: ['super-admin', 'super-admin-manager', 'admin'] },
+        is_active: true
+      },
+      attributes: ['id'],
+      order: [['created_at', 'ASC']]
+    });
+    if (fallback?.id) assignedByUserId = fallback.id;
+  }
+
+  const sources = await CallingLeadSheetSource.findAll({
+    where: { spreadsheetId, enabled: true },
+    order: [['sheetTabName', 'ASC']]
+  });
+
+  const results: Array<Record<string, unknown>> = [];
+  for (const row of sources) {
+    try {
+      const result = await syncSheetTabSource(row, {
+        assignedByUserId,
+        emitSocket: false
+      });
+      results.push({
+        id: row.id,
+        sheetTabName: row.sheetTabName,
+        sheet_tab_name: row.sheetTabName,
+        ok: true,
+        ...result
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Sync failed';
+      await row.update({
+        lastSyncStatus: 'error',
+        lastSyncError: message,
+        lastSyncedAt: new Date()
+      });
+      results.push({
+        id: row.id,
+        sheetTabName: row.sheetTabName,
+        sheet_tab_name: row.sheetTabName,
+        ok: false,
+        error: message
+      });
+    }
+  }
+
+  emitSheetSyncUploadsUpdated({
+    reason: 'sheet_auto_sync',
+    spreadsheetId,
+    path: '/hr/sheet-sources/sync-all'
+  });
+
+  return {
+    spreadsheetId,
+    syncedAt: new Date().toISOString(),
+    sources: results
+  };
+};
+
+/**
  * POST /hr/sheet-sources/sync-all
  * Cron / HR: sync every enabled sheet source for the spreadsheet.
  * Auth: HR JWT (via route middleware) OR x-cron-secret === CRON_SECRET.
@@ -244,94 +348,14 @@ export const postHrSheetSourceSync = async (req: Request, res: Response): Promis
 export const postHrSheetSourcesSyncAll = async (req: Request, res: Response): Promise<void> => {
   try {
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
-    const spreadsheetId = resolveSpreadsheetId(body.spreadsheetId ?? body.spreadsheet_id);
-
-    // Keep DB tabs aligned with Google before syncing (same prune as Discover).
-    try {
-      const sheets = getSheetsClient();
-      const meta = await sheets.spreadsheets.get({ spreadsheetId });
-      const liveTabs = (meta.data.sheets || [])
-        .map((s) => s.properties?.title)
-        .filter((title): title is string => Boolean(title));
-      if (liveTabs.length) {
-        await CallingLeadSheetSource.destroy({
-          where: {
-            spreadsheetId,
-            sheetTabName: { [Op.notIn]: liveTabs }
-          }
-        });
-      }
-    } catch (error) {
-      if (error instanceof GoogleSheetsNotConfiguredError) throw error;
-      logError('sync-all live-tab prune failed (continuing)', error, { spreadsheetId });
-    }
-
-    let assignedByUserId = '1';
-    try {
-      assignedByUserId = await sequelize.transaction((transaction) =>
-        resolveAssignedByUserId(req, transaction)
-      );
-    } catch {
-      const fallback = await User.findOne({
-        where: {
-          role: { [Op.in]: ['super-admin', 'super-admin-manager', 'admin'] },
-          is_active: true
-        },
-        attributes: ['id'],
-        order: [['created_at', 'ASC']]
-      });
-      if (fallback?.id) assignedByUserId = fallback.id;
-    }
-
-    const sources = await CallingLeadSheetSource.findAll({
-      where: { spreadsheetId, enabled: true },
-      order: [['sheetTabName', 'ASC']]
-    });
-
-    const results: Array<Record<string, unknown>> = [];
-    for (const row of sources) {
-      try {
-        const result = await syncSheetTabSource(row, { assignedByUserId });
-        results.push({
-          id: row.id,
-          sheetTabName: row.sheetTabName,
-          sheet_tab_name: row.sheetTabName,
-          ok: true,
-          ...result
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Sync failed';
-        await row.update({
-          lastSyncStatus: 'error',
-          lastSyncError: message,
-          lastSyncedAt: new Date()
-        });
-        results.push({
-          id: row.id,
-          sheetTabName: row.sheetTabName,
-          sheet_tab_name: row.sheetTabName,
-          ok: false,
-          error: message
-        });
-      }
-    }
-
-    const syncedAt = new Date().toISOString();
-    emitRealtime(realtimeEvents.callingUploadsUpdated, {
-      reason: 'sheet_auto_sync',
-      spreadsheetId,
-      syncedAt,
-      count: results.length,
-      source: 'google-sheet-sync-all'
+    const data = await runHrSheetSourcesSyncAll({
+      spreadsheetId: (body.spreadsheetId ?? body.spreadsheet_id) as string | undefined,
+      req
     });
 
     res.json({
       success: true,
-      data: {
-        spreadsheetId,
-        syncedAt,
-        sources: results
-      }
+      data
     });
   } catch (error) {
     if (error instanceof GoogleSheetsNotConfiguredError) {

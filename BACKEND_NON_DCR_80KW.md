@@ -44,7 +44,8 @@ Panel brand string must be **`Renew Energy`** (not `RenewSys`) for this package.
 | Key | Brand | PDF label |
 |-----|--------|-----------|
 | `renew_energy_600_630` | Renew Energy | 600W - 630W |
-| `waaree_580_630` | Waaree | 580W - 630W |
+| `waaree_580_620` | Waaree | 580W - 620W N-Type Bifacial Topcon |
+| `waaree_580_630` | Waaree (legacy) | Same label; mapped → `waaree_580_620` on save |
 | `adani_600_630` | Adani | 600W - 630W |
 
 **Code:** `utils/quotationProductPdfDisplay.ts` → `PDF_PANEL_RANGE_KEYS` / `PDF_PANEL_RANGE_LABELS`  
@@ -126,7 +127,7 @@ Content-Type: application/json
 }
 ```
 
-Same pattern for Waaree (`waaree_580_630`, price **2590000**) and Adani (`adani_600_630`, **2590000**).
+Same pattern for Waaree (`waaree_580_620`, price **2590000**) and Adani (`adani_600_630`, **2590000**).
 
 ---
 

@@ -9,6 +9,36 @@ const addressSchema = z.object({
   pincode: z.string().regex(/^\d{6}$/, 'Pincode must be 6 digits')
 });
 
+/** Admin Update User — partial nested address (+ streetAddress alias). */
+const addressUpdateSchema = z
+  .object({
+    street: z.string().optional(),
+    streetAddress: z.string().optional(),
+    street_address: z.string().optional(),
+    city: z.string().optional(),
+    state: z.string().optional(),
+    pincode: z.string().optional()
+  })
+  .optional();
+
+/** Flat address keys accepted alongside nested `address` (§AS). */
+const flatAddressUpdateFields = {
+  address_street: z.string().optional(),
+  address_city: z.string().optional(),
+  address_state: z.string().optional(),
+  address_pincode: z.string().optional(),
+  addressStreet: z.string().optional(),
+  addressCity: z.string().optional(),
+  addressState: z.string().optional(),
+  addressPincode: z.string().optional(),
+  street: z.string().optional(),
+  streetAddress: z.string().optional(),
+  street_address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  pincode: z.string().optional()
+};
+
 // Indian states list for validation
 const indianStates = [
   'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
@@ -74,32 +104,45 @@ export const adminUpdateDealerSchema = z.object({
   email: z.string().email().optional(),
   mobile: z.string().regex(/^\d{10}$/, 'Mobile must be 10 digits').optional(),
   gender: z.enum(['Male', 'Female', 'Other']).optional(),
-  dateOfBirth: z.string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format')
-    .refine((date) => {
-      const birthDate = new Date(date);
-      const today = new Date();
-      const age = today.getFullYear() - birthDate.getFullYear();
-      const monthDiff = today.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-        return age - 1 >= 18;
-      }
-      return age >= 18;
-    }, 'You must be at least 18 years old')
-    .optional(),
-  fatherName: z.string().min(2).optional(),
-  fatherContact: z.string().regex(/^\d{10}$/, 'Father contact must be 10 digits').optional(),
+  dateOfBirth: z.preprocess(
+    (v) => {
+      if (v == null || v === '') return undefined;
+      const s = String(v).trim();
+      const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+      return m ? m[1] : s;
+    },
+    z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date of birth must be in YYYY-MM-DD format')
+      .refine((date) => {
+        const birthDate = new Date(date);
+        const today = new Date();
+        const age = today.getFullYear() - birthDate.getFullYear();
+        const monthDiff = today.getMonth() - birthDate.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+          return age - 1 >= 18;
+        }
+        return age >= 18;
+      }, 'You must be at least 18 years old')
+      .optional()
+  ),
+  fatherName: z.preprocess((v) => (v === '' || v == null ? undefined : v), z.string().min(2).optional()),
+  fatherContact: z.preprocess(
+    (v) => (v === '' || v == null ? undefined : v),
+    z.string().regex(/^\d{10}$/, 'Father contact must be 10 digits').optional()
+  ),
   governmentIdType: z.enum(['Aadhaar Card', 'PAN Card', 'Voter ID', 'Driving License', 'Passport']).optional(),
   governmentIdNumber: z.string().optional(),
   governmentIdImage: z.string().optional(),
-  address: addressSchema.optional(),
+  address: addressUpdateSchema,
+  ...flatAddressUpdateFields,
   company: z.string().max(255).optional(),
   isActive: z.boolean().optional(),
   emailVerified: z.boolean().optional(),
   access: z.array(z.enum(ACCESS_KEYS)).min(1).optional(),
   permissions: z.array(z.enum(ACCESS_KEYS)).min(1).optional(),
   ...workflowPermissionFieldsSchema
-}).refine((data) => Object.keys(data).length > 0, {
+}).passthrough().refine((data) => Object.keys(data).length > 0, {
   message: 'At least one field must be provided for update'
 });
 

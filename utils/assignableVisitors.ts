@@ -94,9 +94,12 @@ const isSeen = (seen: Set<string>, id: string, username?: string | null, email?:
 export const listAssignableVisitors = async (opts?: {
   search?: string;
   isActive?: boolean;
+  includeInactive?: boolean;
 }): Promise<AssignableVisitor[]> => {
+  const includeInactive = Boolean(opts?.includeInactive);
   const activeWhere: Record<string, unknown> = {};
-  if (opts?.isActive !== undefined) activeWhere.isActive = opts.isActive;
+  if (!includeInactive && opts?.isActive !== undefined) activeWhere.isActive = opts.isActive;
+  if (!includeInactive && opts?.isActive === undefined) activeWhere.isActive = true;
 
   const [visitors, dealers, ops] = await Promise.all([
     Visitor.findAll({
@@ -110,7 +113,7 @@ export const listAssignableVisitors = async (opts?: {
       order: [['firstName', 'ASC'], ['lastName', 'ASC']]
     }),
     AccountManager.findAll({
-      where: opts?.isActive !== undefined ? { isActive: opts.isActive } : {},
+      where: activeWhere,
       attributes: { exclude: ['password'] }
     })
   ]);
@@ -122,7 +125,7 @@ export const listAssignableVisitors = async (opts?: {
   // (e.g. Saurav / aman4119 with access ["quotation","visitor"]).
   for (const dealer of dealers) {
     const json = dealer.toJSON() as typeof dealer;
-    if (!json.isActive && opts?.isActive !== false) continue;
+    if (!includeInactive && !json.isActive) continue;
     if (!hasVisitorAccess({ role: json.role, access: (json as any).access, username: json.username })) continue;
     const row = toAssignable(
       {
@@ -158,7 +161,7 @@ export const listAssignableVisitors = async (opts?: {
 
   for (const am of ops) {
     const json = am.toJSON() as typeof am;
-    if (!json.isActive && opts?.isActive !== false) continue;
+    if (!includeInactive && !json.isActive) continue;
     if (!hasVisitorAccess({ role: json.role, access: (json as any).access, username: json.username })) continue;
     if (isSeen(seen, json.id, json.username, json.email)) continue;
     const linked = visitors.find(

@@ -12,6 +12,7 @@ import {
 import {
   canAccessSection,
   hasAdminPanelAccess,
+  requireAdminAccess,
   resolveAccess,
   type AccessKey
 } from '../utils/userAccess';
@@ -26,7 +27,7 @@ const userAccessFromReq = (req: Request) => ({
 });
 
 const allowByAccess = (req: Request, key: AccessKey): boolean =>
-  canAccessSection(userAccessFromReq(req), key);
+  key === 'admin' ? hasAdminPanelAccess(req) : canAccessSection(userAccessFromReq(req), key);
 
 const AUTH_IDENTITY_TTL_MS = 15_000;
 
@@ -83,10 +84,32 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         access?: string[];
       };
 
-      // Check if it's a dealer/admin
+      // Dealer JWT (role dealer) OR quotation Admin (role admin).
+      // Inventory users / AMs can also use role "admin" — fall through if no dealer row.
       if (decoded.role === 'dealer' || decoded.role === 'admin') {
         const dealer = await loadDealerById(decoded.id);
-        if (!dealer || !dealer.isActive) {
+        if (dealer?.isActive) {
+          req.dealer = {
+            id: dealer.id,
+            username: dealer.username,
+            role: dealer.role,
+            access: resolveAccess({
+              role: dealer.role,
+              access: (dealer as any).access,
+              username: dealer.username
+            })
+          };
+          req.user = {
+            id: dealer.id,
+            username: dealer.username,
+            role: dealer.role,
+            access: req.dealer.access
+          };
+          await attachMultiAccessActors(req);
+          next();
+          return;
+        }
+        if (decoded.role === 'dealer') {
           res.status(401).json({
             success: false,
             error: {
@@ -96,26 +119,7 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
           });
           return;
         }
-
-        req.dealer = {
-          id: dealer.id,
-          username: dealer.username,
-          role: dealer.role,
-          access: resolveAccess({
-            role: dealer.role,
-            access: (dealer as any).access,
-            username: dealer.username
-          })
-        };
-        req.user = {
-          id: dealer.id,
-          username: dealer.username,
-          role: dealer.role,
-          access: req.dealer.access
-        };
-        await attachMultiAccessActors(req);
-        next();
-        return;
+        // role === 'admin' but not a dealer → try AM / inventory user below
       }
 
       // Check if it's a visitor
@@ -186,8 +190,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         return;
       }
 
-      // Account-manager JWT (hr, installer, …). If the row is missing, fall through
-      // so inventory `users` with role hr still authenticate.
+      // Account-manager JWT (hr, installer, …, or role admin with access.admin).
+      // If the row is missing, fall through so inventory `users` with role hr still authenticate.
       if (
         decoded.role === 'account-management' ||
         decoded.role === 'installer' ||
@@ -197,7 +201,8 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
         decoded.role === 'metering' ||
         decoded.role === 'meter' ||
         decoded.role === 'metering-team' ||
-        decoded.role === 'mco'
+        decoded.role === 'mco' ||
+        decoded.role === 'admin'
       ) {
         const accountManager = await loadAccountManagerById(decoded.id);
         if (accountManager && !accountManager.isActive) {
@@ -228,6 +233,10 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
           await attachMultiAccessActors(req);
           next();
           return;
+        }
+        // role admin with no AM row → inventory user below
+        if (decoded.role !== 'admin') {
+          // non-admin AM roles without a row: fall through to inventory
         }
       }
 
@@ -400,17 +409,7 @@ export const authorizeDealerOrAdmin = (req: Request, res: Response, next: NextFu
 
 // Authorize admin only (Quotation System admin OR Inventory System admin/super-admin OR access.admin)
 export const authorizeAdmin = (req: Request, res: Response, next: NextFunction): void => {
-  if (hasAdminPanelAccess(req)) {
-    next();
-    return;
-  }
-  res.status(403).json({
-    success: false,
-    error: {
-      code: 'AUTH_004',
-      message: 'Insufficient permissions. Admin access required.'
-    }
-  });
+  requireAdminAccess()(req, res, next);
 };
 
 // Authorize visitor only
@@ -461,12 +460,17 @@ export const authorizeVisitorOrQuotationsDealer = (req: Request, res: Response, 
 
 // Authorize dealer, admin, visitor, or account manager (for read operations)
 export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next: NextFunction): void => {
-  // Allow dealers/admins, visitors, or account managers
+  // Allow dealers/admins, visitors, account managers, installer/metering ops, installation-team
   const isDealerOrAdmin = req.dealer !== undefined || allowByAccess(req, 'quotation');
   const isVisitor = req.visitor !== undefined || allowByAccess(req, 'visitor');
   const isAccountManager =
     (req.user && req.user.role === 'account-management') ||
     allowByAccess(req, 'accounts');
+  const isWorkflowOps =
+    allowByAccess(req, 'installation') ||
+    allowByAccess(req, 'metering') ||
+    allowByAccess(req, 'final_confirmation') ||
+    (req.user && isInstallationTeamJwtRole(req.user.role));
   const isInventoryUser = req.user && (
     req.user.role === 'agent' ||
     req.user.role === 'admin' ||
@@ -479,7 +483,8 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
     req.user.role === 'metering' ||
     req.user.role === 'meter' ||
     req.user.role === 'metering-team' ||
-    req.user.role === 'mco'
+    req.user.role === 'mco' ||
+    isInstallationTeamJwtRole(req.user.role)
   );
 
   if (isDealerOrAdmin && !req.dealer && allowByAccess(req, 'quotation') && req.user?.id) {
@@ -494,7 +499,7 @@ export const authorizeDealerAdminOrVisitor = (req: Request, res: Response, next:
     req.visitor = { id: req.user.id, username: req.user.username };
   }
   
-  if (!isDealerOrAdmin && !isVisitor && !isAccountManager && !isInventoryUser) {
+  if (!isDealerOrAdmin && !isVisitor && !isAccountManager && !isInventoryUser && !isWorkflowOps) {
     res.status(401).json({
       success: false,
       error: {

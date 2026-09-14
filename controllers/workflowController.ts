@@ -1503,6 +1503,10 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       return;
     }
 
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'metering', quotation))) {
+      return;
+    }
+
     const allowedStatuses = new Set([
       'pending_installer',
       'installer_in_progress',
@@ -1764,6 +1768,10 @@ export const saveMeteringMcoDocuments = async (req: Request, res: Response): Pro
     const quotation = await Quotation.findByPk(quotationId);
     if (!quotation) {
       res.status(404).json({ success: false, error: { code: 'RES_001', message: 'Quotation not found' } });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'metering', quotation))) {
       return;
     }
 

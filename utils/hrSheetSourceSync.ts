@@ -1,22 +1,22 @@
-import { google, sheets_v4 } from 'googleapis';
 import { v4 as uuidv4 } from 'uuid';
 import CallingLeadSheetSource from '../models/CallingLeadSheetSource';
 import CallingLeadUploadBatch from '../models/CallingLeadUploadBatch';
 import CallingLead from '../models/CallingLead';
 import { assignUploadBatchWithActiveCap } from '../controllers/callingLeadController';
-import { emitRealtime, realtimeEvents } from './realtime';
+import {
+  getSheetsClient,
+  resolveSpreadsheetId
+} from './hrSheetGoogleAuth';
+import { emitSheetSyncUploadsUpdated } from './realtime';
+import { scheduleHrLeadSheetWriteBackForBatch } from './hrSheetWriteBack';
 import { logError } from './loggerHelper';
-import fs from 'fs';
-import path from 'path';
 
-export const DEFAULT_SPREADSHEET_ID = '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0';
-
-/** Local/server key file (gitignored). Prefer env override. */
-export const DEFAULT_GOOGLE_SHEETS_CREDENTIALS_PATH = path.join(
-  process.cwd(),
-  'secrets',
-  'google-sheets-service-account.json'
-);
+export {
+  DEFAULT_SPREADSHEET_ID,
+  GoogleSheetsNotConfiguredError,
+  getSheetsClient,
+  resolveSpreadsheetId
+} from './hrSheetGoogleAuth';
 
 export type MappedSheetLead = {
   externalId: string | null;
@@ -156,69 +156,6 @@ export const rowToLeadObject = (
   };
 };
 
-export class GoogleSheetsNotConfiguredError extends Error {
-  code = 'CFG_GOOGLE_SHEETS';
-
-  constructor(
-    message = 'Google Sheets credentials missing: set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS, or place the key at secrets/google-sheets-service-account.json'
-  ) {
-    super(message);
-    this.name = 'GoogleSheetsNotConfiguredError';
-  }
-}
-
-export const resolveSpreadsheetId = (raw?: unknown): string => {
-  const fromEnv = String(process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '').trim();
-  if (fromEnv) return fromEnv;
-  const fromBody = String(raw || '').trim();
-  if (fromBody) return fromBody;
-  return DEFAULT_SPREADSHEET_ID;
-};
-
-const resolveGoogleSheetsKeyFile = (): string | null => {
-  const candidates = [
-    String(process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim(),
-    DEFAULT_GOOGLE_SHEETS_CREDENTIALS_PATH,
-    path.join(__dirname, '..', 'secrets', 'google-sheets-service-account.json')
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-};
-
-export const getSheetsClient = (): sheets_v4.Sheets => {
-  // 1) Inline JSON from .env (never commit the value)
-  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (json && json.trim()) {
-    let credentials: Record<string, unknown>;
-    try {
-      credentials = JSON.parse(json);
-    } catch {
-      throw new GoogleSheetsNotConfiguredError(
-        'GOOGLE_SERVICE_ACCOUNT_JSON is set but is not valid JSON'
-      );
-    }
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly']
-    });
-    return google.sheets({ version: 'v4', auth });
-  }
-
-  // 2) Key file path from .env or secrets/ (gitignored — not in git)
-  const keyFile = resolveGoogleSheetsKeyFile();
-  if (!keyFile) {
-    throw new GoogleSheetsNotConfiguredError();
-  }
-  const auth = new google.auth.GoogleAuth({
-    keyFile,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly']
-  });
-  return google.sheets({ version: 'v4', auth });
-};
-
 export const createOrGetSheetUploadBatch = async (
   sourceRow: CallingLeadSheetSource
 ): Promise<CallingLeadUploadBatch> => {
@@ -258,7 +195,18 @@ const isUniqueConstraintError = (error: unknown): boolean => {
 
 export const syncSheetTabSource = async (
   sourceRow: CallingLeadSheetSource,
-  { assignLeads = true, assignedByUserId = '1' }: { assignLeads?: boolean; assignedByUserId?: string } = {}
+  {
+    assignLeads = true,
+    assignedByUserId = '1',
+    emitSocket = true,
+    syncReason = 'sheet_sync'
+  }: {
+    assignLeads?: boolean;
+    assignedByUserId?: string;
+    /** false when sync-all emits once at the end */
+    emitSocket?: boolean;
+    syncReason?: 'sheet_sync' | 'sheet_auto_sync';
+  } = {}
 ): Promise<{
   imported: number;
   skipped: number;
@@ -283,6 +231,14 @@ export const syncSheetTabSource = async (
       lastSyncStatus: 'ok',
       lastSyncError: null
     });
+    if (emitSocket) {
+      emitSheetSyncUploadsUpdated({
+        reason: syncReason,
+        spreadsheetId,
+        sourceId: sourceRow.id,
+        path: '/hr/sheet-sources/sync'
+      });
+    }
     return {
       imported: 0,
       skipped: 0,
@@ -315,6 +271,8 @@ export const syncSheetTabSource = async (
         where: { sheetSourceId: sourceRow.id, externalId: lead.externalId }
       });
       if (byExternal) {
+        // Pull sync: existing (sheet_source_id, external_id) — do NOT clear CRM
+        // assignment/status/remarks from blank sheet cells. Only import new Meta rows.
         skipped += 1;
         continue;
       }
@@ -397,12 +355,18 @@ export const syncSheetTabSource = async (
     }
   }
 
-  emitRealtime(realtimeEvents.callingUploadsUpdated, {
-    batchId: upload.id,
-    sheetSourceId: sourceRow.id,
-    source: 'google-sheet-sync',
-    at: new Date().toISOString()
-  });
+  // Push Assigned Dealer / status columns for sheet-backed leads (non-fatal)
+  void scheduleHrLeadSheetWriteBackForBatch(upload.id);
+
+  // After assign completes — never before DB work finishes
+  if (emitSocket) {
+    emitSheetSyncUploadsUpdated({
+      reason: syncReason,
+      spreadsheetId,
+      sourceId: sourceRow.id,
+      path: '/hr/sheet-sources/sync'
+    });
+  }
 
   return { imported, skipped, assigned, uploadId: upload.id };
 };

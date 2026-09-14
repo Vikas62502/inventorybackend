@@ -1,5 +1,13 @@
 import { resolveAccess, type AccessKey } from './userAccess';
 import { workflowPermissionFieldsForApi } from './moduleFieldPermissions';
+import {
+  nestedAddressFromRow,
+  parseAddressPatchFromBody,
+  normalizeDealerAddress
+} from './userAddress';
+
+export type { NestedAddress } from './userAddress';
+export { nestedAddressFromRow, parseAddressPatchFromBody, normalizeDealerAddress };
 
 const trimOrNull = (value: unknown): string | null | undefined => {
   if (value === undefined) return undefined;
@@ -39,28 +47,9 @@ export const parseProfilePatchFromBody = (body: Record<string, unknown>): Profil
   const employeeId = trimOrNull(body.employeeId ?? body.employee_id);
   if (employeeId !== undefined) patch.employeeId = employeeId;
 
-  const address = (body.address && typeof body.address === 'object' ? body.address : null) as
-    | Record<string, unknown>
-    | null;
-  if (address) {
-    const street = trimOrNull(address.street);
-    if (street !== undefined) patch.addressStreet = street;
-    const city = trimOrNull(address.city);
-    if (city !== undefined) patch.addressCity = city;
-    const state = trimOrNull(address.state);
-    if (state !== undefined) patch.addressState = state;
-    const pincode = trimOrNull(address.pincode);
-    if (pincode !== undefined) patch.addressPincode = pincode;
-  }
+  Object.assign(patch, parseAddressPatchFromBody(body));
   return patch;
 };
-
-export const nestedAddressFromRow = (row: Record<string, unknown>) => ({
-  street: (row.addressStreet as string) || '',
-  city: (row.addressCity as string) || '',
-  state: (row.addressState as string) || '',
-  pincode: (row.addressPincode as string) || ''
-});
 
 export const publicStaffProfileFields = (row: Record<string, unknown>) => {
   const access = resolveAccess({
@@ -92,8 +81,19 @@ export const publicVisitorForApi = (row: Record<string, unknown>) => {
     username: row.username as string
   });
   const finalAccess: AccessKey[] = access.length ? access : ['visitor'];
+  const {
+    addressStreet: _s,
+    addressCity: _c,
+    addressState: _st,
+    addressPincode: _p,
+    address_street: _ss,
+    address_city: _cc,
+    address_state: _sst,
+    address_pincode: _pp,
+    ...rest
+  } = row;
   return {
-    ...row,
+    ...rest,
     role: 'visitor',
     ...publicStaffProfileFields({ ...row, role: 'visitor', access: finalAccess }),
     access: finalAccess,

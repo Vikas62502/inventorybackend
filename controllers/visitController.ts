@@ -25,7 +25,7 @@ import {
   ensureVisitorRowForAssignment,
   findAssignableVisitor
 } from '../utils/assignableVisitors';
-import { hasAdminPanelAccess } from '../utils/userAccess';
+import { hasAdminPanelAccess, hasVisitorReportsAccess } from '../utils/userAccess';
 
 const timeRangeRegex = /^([01]\d|2[0-3]):([0-5]\d)\s-\s([01]\d|2[0-3]):([0-5]\d)$/;
 const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -590,15 +590,9 @@ export const transferVisit = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-const isAdminVisitorReportsActor = (req: Request): boolean => {
-  const isQuotationAdmin = Boolean(req.dealer && req.dealer.role === 'admin');
-  const role = req.user?.role;
-  const isInventoryAdmin =
-    role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
-  return isQuotationAdmin || isInventoryAdmin;
-};
+const isAdminVisitorReportsActor = (req: Request): boolean => hasVisitorReportsAccess(req);
 
-/** GET /api/admin/visits — all visits for Admin Visitor Reports (admin only). */
+/** GET /api/admin/visits — Admin Visitor Reports (admin or access.visitor_reports). */
 export const getAdminVisits = async (req: Request, res: Response): Promise<void> => {
   try {
     if (!isAdminVisitorReportsActor(req)) {

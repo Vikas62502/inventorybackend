@@ -280,6 +280,7 @@ export const EXAMPLE_LOGIN_USER_FRAGMENT = {
  *
  * | moduleFieldPermissions key | access[] key | Route |
  * |----------------------------|--------------|-------|
+ * | accounts | accounts | /dashboard/account-management |
  * | installation | installation | /dashboard/installer |
  * | metering | metering | /dashboard/metering |
  * | final_confirmation | final_confirmation | /dashboard/baldev |
@@ -294,6 +295,7 @@ export const EXAMPLE_LOGIN_USER_FRAGMENT = {
  *
  * | Module | Example routes | Rule |
  * |--------|----------------|------|
+ * | accounts | PATCH payment-details / site-cost / installments, final-settlement, installation-release, retrieve-from-installation, approved pricing/discount | canWriteWorkflowModule(accounts) + record scope |
  * | installation | POST …/installer/quotations/:id/documents, PATCH operational install stage | canWriteWorkflowModule(installation) + record scope |
  * | metering | PATCH metering stage, meter document upload | canWriteWorkflowModule(metering) + record scope |
  * | final_confirmation | POST …/baldev/quotations/:id/final-confirmation-documents, final approve | canWriteWorkflowModule(final_confirmation) + record scope |

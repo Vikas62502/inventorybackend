@@ -53,6 +53,7 @@ import {
   authorizeAccountManagerOrAdminPayment,
   authorizeMeteringOrAdmin
 } from '../middleware/authQuotation';
+import { requireAdminAccess, requireAnyAccess } from '../utils/userAccess';
 import { validate } from '../middleware/validate';
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { installerUploadDocuments, meteringStatusUpdate, uploadInstallerDocument } from '../controllers/workflowController';
@@ -167,10 +168,40 @@ router.patch(
 );
 
 /**
- * Admin Visitor Reports — all visits (admin / super-admin only).
- * Fallback for frontend: GET /api/visits when quotation dealer JWT has role=admin.
+ * §AX — Visitor Reports + Calling Reports (GET-only for report grants).
+ * Must stay before `router.use(authorizeAdmin)` so report JWTs are not AUTH_004'd.
  */
-router.get('/visits', authorizeAdmin, getAdminVisits);
+router.get(
+  '/visits',
+  requireAnyAccess(['admin', 'visitor_reports']),
+  getAdminVisits
+);
+router.get(
+  '/calling-actions/summary',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getAdminCallingActionsSummary
+);
+router.get(
+  '/calling-actions',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getAdminCallingActions
+);
+router.get(
+  '/calling-queue/actions',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getAdminCallingActions
+);
+router.get(
+  '/leads/actions',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getAdminCallingActions
+);
+/** Employee filter for Calling Reports — read-only dealer directory. */
+router.get(
+  '/dealers',
+  requireAnyAccess(['admin', 'calling_reports']),
+  getAllDealers
+);
 
 // All routes below require admin authorization
 router.use(authorizeAdmin);
@@ -416,7 +447,7 @@ router.post(
  *                     pagination:
  *                       $ref: '#/components/schemas/Pagination'
  */
-router.get('/dealers', getAllDealers);
+// GET /dealers registered before authorizeAdmin (§AX — calling_reports read-only directory).
 
 /**
  * @swagger
@@ -476,7 +507,14 @@ router.get('/dealers', getAllDealers);
  *       404:
  *         description: Dealer not found
  */
-router.put('/dealers/:dealerId', validate(adminUpdateDealerSchema), updateDealer);
+// §46 — Update User: role admin/super-admin OR access includes "admin" (not role===admin only).
+// `router.use(authorizeAdmin)` already covers this; explicit requireAdminAccess matches HANDOFF.
+router.put(
+  '/dealers/:dealerId',
+  requireAdminAccess(),
+  validate(adminUpdateDealerSchema),
+  updateDealer
+);
 
 /**
  * @swagger
@@ -511,10 +549,7 @@ router.patch('/dealers/:dealerId/activate', activateDealer);
  *       - bearerAuth: []
  */
 router.get('/statistics', getSystemStatistics);
-router.get('/calling-actions/summary', getAdminCallingActionsSummary);
-router.get('/calling-actions', getAdminCallingActions);
-router.get('/calling-queue/actions', getAdminCallingActions);
-router.get('/leads/actions', getAdminCallingActions);
+// calling-actions* registered before authorizeAdmin (§AX)
 
 /**
  * @swagger
@@ -558,7 +593,12 @@ router.get('/visitors/:visitorId', getVisitorById);
  *     security:
  *       - bearerAuth: []
  */
-router.put('/visitors/:visitorId', validate(updateVisitorSchema), updateVisitor);
+router.put(
+  '/visitors/:visitorId',
+  requireAdminAccess(),
+  validate(updateVisitorSchema),
+  updateVisitor
+);
 
 /**
  * @swagger

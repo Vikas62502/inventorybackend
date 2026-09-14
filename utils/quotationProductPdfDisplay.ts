@@ -6,6 +6,9 @@
 export const PDF_PANEL_RANGE_KEYS = [
   'waaree_540_560_bifacial',
   'waaree_580_700_bifacial_topcon',
+  /** Canonical Waaree Non-DCR 80kW range (renamed from waaree_580_630). */
+  'waaree_580_620',
+  /** Legacy key — accepted on GET/PATCH; mapped to waaree_580_620 on save. */
   'waaree_580_630',
   'adani_540_580_bifacial',
   'adani_610_625_bifacial_topcon',
@@ -21,11 +24,17 @@ export const PDF_PANEL_RANGE_KEYS = [
 
 export type PdfPanelRangeKey = (typeof PDF_PANEL_RANGE_KEYS)[number];
 
+/** Legacy → canonical keys (prefer new key on create/update). */
+export const PDF_PANEL_RANGE_KEY_ALIASES: Record<string, PdfPanelRangeKey> = {
+  waaree_580_630: 'waaree_580_620'
+};
+
 /** Human-readable panel spec for PDF/overview (client mirrors `lib/quotation-pdf-display.ts`). */
 export const PDF_PANEL_RANGE_LABELS: Record<PdfPanelRangeKey, string> = {
   waaree_540_560_bifacial: '540-560W Bifacial',
   waaree_580_700_bifacial_topcon: '580-700W Bifacial Topcon',
-  waaree_580_630: '580W - 630W',
+  waaree_580_620: '580W - 620W N-Type Bifacial Topcon',
+  waaree_580_630: '580W - 620W N-Type Bifacial Topcon',
   adani_540_580_bifacial: '540-580W Bifacial',
   adani_610_625_bifacial_topcon: '610-625W Bifacial Topcon',
   adani_600_630: '600W - 630W',
@@ -168,10 +177,16 @@ export const parsePdfDisplayFlag = (value: unknown): boolean | undefined => {
   return undefined;
 };
 
-const normalizePanelRangeKey = (value: unknown): string | null => {
+const normalizePanelRangeKey = (
+  value: unknown,
+  { canonicalizeLegacy = false }: { canonicalizeLegacy?: boolean } = {}
+): string | null => {
   if (value === undefined || value === null || value === '') return null;
   const key = String(value).trim();
   if (!key) return null;
+  if (canonicalizeLegacy && PDF_PANEL_RANGE_KEY_ALIASES[key]) {
+    return PDF_PANEL_RANGE_KEY_ALIASES[key];
+  }
   if ((PDF_PANEL_RANGE_KEYS as readonly string[]).includes(key)) return key;
   return null;
 };
@@ -262,18 +277,18 @@ export const buildQuotationProductPdfPersistFieldsForUpdate = (
   }
   if (pdfFieldWasSent(products, 'pdfPanelRangeKey', 'pdf_panel_range_key')) {
     out.pdfPanelRangeKey =
-      normalizePanelRangeKey(products.pdfPanelRangeKey) ??
-      normalizePanelRangeKey(products.pdf_panel_range_key);
+      normalizePanelRangeKey(products.pdfPanelRangeKey, { canonicalizeLegacy: true }) ??
+      normalizePanelRangeKey(products.pdf_panel_range_key, { canonicalizeLegacy: true });
   }
   if (pdfFieldWasSent(products, 'pdfDcrPanelRangeKey', 'pdf_dcr_panel_range_key')) {
     out.pdfDcrPanelRangeKey =
-      normalizePanelRangeKey(products.pdfDcrPanelRangeKey) ??
-      normalizePanelRangeKey(products.pdf_dcr_panel_range_key);
+      normalizePanelRangeKey(products.pdfDcrPanelRangeKey, { canonicalizeLegacy: true }) ??
+      normalizePanelRangeKey(products.pdf_dcr_panel_range_key, { canonicalizeLegacy: true });
   }
   if (pdfFieldWasSent(products, 'pdfNonDcrPanelRangeKey', 'pdf_non_dcr_panel_range_key')) {
     out.pdfNonDcrPanelRangeKey =
-      normalizePanelRangeKey(products.pdfNonDcrPanelRangeKey) ??
-      normalizePanelRangeKey(products.pdf_non_dcr_panel_range_key);
+      normalizePanelRangeKey(products.pdfNonDcrPanelRangeKey, { canonicalizeLegacy: true }) ??
+      normalizePanelRangeKey(products.pdf_non_dcr_panel_range_key, { canonicalizeLegacy: true });
   }
 
   return out;

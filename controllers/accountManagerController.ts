@@ -12,6 +12,7 @@ import {
   primaryRoleFromAccess,
   publicAccountManagerForApi
 } from '../utils/userAccess';
+import { serializeModuleFieldPermissionsForApi } from '../utils/moduleFieldPermissions';
 import { parseProfilePatchFromBody } from '../utils/userProfile';
 import { filterByListAccess, paginateRows, parseAccessQueryFromReq } from '../utils/accessLists';
 
@@ -52,14 +53,25 @@ export const getAllAccountManagers = async (req: Request, res: Response): Promis
     const limit = Math.min(parseInt(req.query.limit as string) || 1000, 1000);
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
+    const includeInactiveRaw = String(
+      req.query.includeInactive ?? req.query.include_inactive ?? ''
+    )
+      .trim()
+      .toLowerCase();
+    const includeInactive = includeInactiveRaw === 'true' || includeInactiveRaw === '1';
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
     const accessKey = parseAccessQueryFromReq(req);
 
     const where: any = {};
 
-    if (isActive !== undefined) {
-      where.isActive = isActive === 'true';
+    // §AR — default Active only
+    if (!includeInactive) {
+      if (isActive !== undefined) {
+        where.isActive = isActive === 'true' || isActive === '1';
+      } else {
+        where.isActive = true;
+      }
     }
 
     if (search) {
@@ -244,7 +256,11 @@ export const createAccountManager = async (req: Request, res: Response): Promise
       ...profile,
       ...(permPatch.officeLocation !== undefined ? { officeLocation: permPatch.officeLocation } : {}),
       ...(permPatch.moduleFieldPermissions !== undefined
-        ? { moduleFieldPermissions: permPatch.moduleFieldPermissions }
+        ? {
+            moduleFieldPermissions: serializeModuleFieldPermissionsForApi(
+              permPatch.moduleFieldPermissions
+            )
+          }
         : {})
     });
 
@@ -322,7 +338,9 @@ export const updateAccountManager = async (req: Request, res: Response): Promise
     }
     if (permPatch.officeLocation !== undefined) updateData.officeLocation = permPatch.officeLocation;
     if (permPatch.moduleFieldPermissions !== undefined) {
-      updateData.moduleFieldPermissions = permPatch.moduleFieldPermissions;
+      updateData.moduleFieldPermissions = serializeModuleFieldPermissionsForApi(
+        permPatch.moduleFieldPermissions
+      );
     }
 
     const accessParse = parseAccessFromBody(req.body || {});

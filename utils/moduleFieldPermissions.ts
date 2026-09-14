@@ -6,7 +6,13 @@ import { AccessKey, canAccessSection, hasAdminPanelAccess } from './userAccess';
 export const OFFICE_LOCATIONS = ['Jaipur', 'Ajmer', 'Chomu'] as const;
 export type OfficeLocation = (typeof OFFICE_LOCATIONS)[number];
 
-export type WorkflowModuleKey = 'accounts' | 'installation' | 'metering' | 'final_confirmation';
+export type WorkflowModuleKey =
+  | 'accounts'
+  | 'installation'
+  | 'metering'
+  | 'final_confirmation'
+  | 'visitor_reports'
+  | 'calling_reports';
 export type ModulePermissionLevel = 'none' | 'read' | 'write';
 export type ModulePermissionScope = 'everyone' | 'selected_users' | 'office_only';
 
@@ -23,6 +29,15 @@ export const DEFAULT_MODULE_PERMISSION: ModulePermissionRule = {
   scope: 'everyone',
   selectedUserIds: []
 };
+
+export const WORKFLOW_MODULE_KEYS: WorkflowModuleKey[] = [
+  'accounts',
+  'installation',
+  'metering',
+  'final_confirmation',
+  'visitor_reports',
+  'calling_reports'
+];
 
 /** Legacy DB/input → canonical scope (§AK: no dealer exclusion for everyone). */
 export const normalizeScope = (raw: unknown): ModulePermissionScope => {
@@ -83,6 +98,10 @@ export const normalizeModuleFieldPermissions = (raw: unknown): ModuleFieldPermis
   if (o.metering != null) out.metering = normalizeModulePermissionRule(o.metering);
   if (o.final_confirmation != null) out.final_confirmation = normalizeModulePermissionRule(o.final_confirmation);
   if (o.finalConfirmation != null) out.final_confirmation = normalizeModulePermissionRule(o.finalConfirmation);
+  if (o.visitor_reports != null) out.visitor_reports = normalizeModulePermissionRule(o.visitor_reports);
+  if (o.visitorReports != null) out.visitor_reports = normalizeModulePermissionRule(o.visitorReports);
+  if (o.calling_reports != null) out.calling_reports = normalizeModulePermissionRule(o.calling_reports);
+  if (o.callingReports != null) out.calling_reports = normalizeModulePermissionRule(o.callingReports);
   return out;
 };
 
@@ -153,7 +172,9 @@ export const WORKFLOW_MODULE_ACCESS_KEYS: Array<{ module: WorkflowModuleKey; acc
   { module: 'accounts', accessKey: 'accounts' },
   { module: 'installation', accessKey: 'installation' },
   { module: 'metering', accessKey: 'metering' },
-  { module: 'final_confirmation', accessKey: 'final_confirmation' }
+  { module: 'final_confirmation', accessKey: 'final_confirmation' },
+  { module: 'visitor_reports', accessKey: 'visitor_reports' },
+  { module: 'calling_reports', accessKey: 'calling_reports' }
 ];
 
 const scopeAllows = (rule: ModulePermissionRule, ctx: ModulePermissionContext): boolean => {
@@ -223,6 +244,92 @@ export const canAccessFullAdminQuotationList = (
     if (normalizeScope(rule.scope) === 'everyone') return true;
   }
   return false;
+};
+
+/** True when user has any workflow module with level ≠ none. */
+export const hasAnyWorkflowModuleAccess = (
+  permissions: ModuleFieldPermissions | undefined,
+  user: { role?: string | null; access?: unknown; username?: string | null }
+): boolean => {
+  for (const { module, accessKey } of WORKFLOW_MODULE_ACCESS_KEYS) {
+    if (
+      !canAccessSection(
+        { role: user.role, access: user.access, username: user.username },
+        accessKey
+      )
+    ) {
+      continue;
+    }
+    if (getModulePermissionRule(permissions, module).level !== 'none') return true;
+  }
+  return false;
+};
+
+export const resolveWorkflowModuleFromOperationalView = (
+  operationalView: string | null | undefined
+): WorkflowModuleKey | null => {
+  const key = String(operationalView || '').trim().toLowerCase();
+  if (key === 'installer' || key === 'installation') return 'installation';
+  if (key === 'metering' || key === 'meter') return 'metering';
+  if (key === 'baldev' || key === 'final_confirmation' || key === 'final-confirmation') {
+    return 'final_confirmation';
+  }
+  if (key === 'accounts' || key === 'account') return 'accounts';
+  return null;
+};
+
+export type WorkflowListScopeFilter =
+  | { kind: 'everyone' }
+  | { kind: 'none' }
+  | { kind: 'dealerIds'; dealerIds: string[] }
+  | { kind: 'office'; officeLocation: OfficeLocation }
+  | { kind: 'self'; dealerId: string };
+
+/**
+ * Resolve SQL-friendly scope for workflow list GETs (selected_users / office_only).
+ */
+export const resolveWorkflowListScopeFilter = (
+  permissions: ModuleFieldPermissions | undefined,
+  user: { role?: string | null; access?: unknown; username?: string | null; viewerIsAdmin?: boolean },
+  ctx: Pick<ModulePermissionContext, 'userId' | 'officeLocation' | 'viewerIsAdmin'>,
+  preferredModule?: WorkflowModuleKey | null
+): WorkflowListScopeFilter => {
+  if (user.viewerIsAdmin || ctx.viewerIsAdmin) return { kind: 'everyone' };
+
+  const candidates: WorkflowModuleKey[] = [];
+  if (preferredModule) candidates.push(preferredModule);
+  for (const { module } of WORKFLOW_MODULE_ACCESS_KEYS) {
+    if (!candidates.includes(module)) candidates.push(module);
+  }
+
+  for (const module of candidates) {
+    const accessKey = WORKFLOW_MODULE_ACCESS_KEYS.find((row) => row.module === module)?.accessKey;
+    if (
+      !accessKey ||
+      !canAccessSection(
+        { role: user.role, access: user.access, username: user.username },
+        accessKey
+      )
+    ) {
+      continue;
+    }
+    const rule = getModulePermissionRule(permissions, module);
+    if (rule.level === 'none') continue;
+    const scope = normalizeScope(rule.scope);
+    if (scope === 'everyone') return { kind: 'everyone' };
+    if (scope === 'selected_users') {
+      if (!rule.selectedUserIds.length) return { kind: 'none' };
+      return { kind: 'dealerIds', dealerIds: rule.selectedUserIds };
+    }
+    if (scope === 'office_only') {
+      if (ctx.officeLocation) return { kind: 'office', officeLocation: ctx.officeLocation };
+      const selfId = String(ctx.userId || '').trim();
+      if (selfId) return { kind: 'self', dealerId: selfId };
+      return { kind: 'none' };
+    }
+  }
+
+  return { kind: 'everyone' };
 };
 
 export const resolveWorkflowModuleForInstallationStatus = (

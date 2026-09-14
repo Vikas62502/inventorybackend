@@ -100,7 +100,50 @@ All paths are under your API prefix (e.g. `/api/hr/...`). Frontend calls without
 
 **Auth:** `hr` role (same as CSV upload). Sync-all also accepts `x-cron-secret: $CRON_SECRET`.
 
-**Socket:** emit `calling:uploads-updated` after sync (HR + dealer queues refresh). Register **`sync-all` before `/:id` routes**.
+**Socket (P0):** after assign completes, emit into **`stream:hr` + `stream:dealers`** (same event as CSV — do not invent `sheet:*`):
+
+```js
+io.to("stream:hr").to("stream:dealers").emit("calling:uploads-updated", {
+  reason: "sheet_sync",        // POST …/:id/sync (manual Sync now)
+  // reason: "sheet_auto_sync", // POST …/sync-all (cron / HR)
+  spreadsheetId,
+  sourceId,                    // optional — single-tab sync only
+  syncedAt: new Date().toISOString(),
+})
+```
+
+Optional companion: `backend:mutation` → `stream:backend` with `domain: "hr"`, `path: "/hr/sheet-sources/sync"` or `…/sync-all`.
+
+Register **`sync-all` before `/:id` routes**.
+
+---
+
+## DB → Google Sheet write-back (P0) — assigned dealer + calling status
+
+When CRM updates assignment or calling status, the **same values must appear in the Google Sheet row**.
+
+| Direction | What |
+|-----------|------|
+| Sheet → DB | Pull **new** Meta leads only |
+| DB → Sheet | Push **Assigned Dealer**, assignment/call status, remarks, final decision |
+
+**Auth scope:** `https://www.googleapis.com/auth/spreadsheets` (not `.readonly`). SA must be spreadsheet **Editor**.
+
+| Sheet column | CRM field |
+|--------------|-----------|
+| `Assigned Dealer` | dealer display name |
+| `Assignment Status` (also `Assignment Stat`) | `queued` / `assigned` / `completed` / … |
+| `lead_status` | CREATED → IN_PROGRESS → COMPLETED |
+| `Remarks` / `1st`–`2nd Call Response` (truncated OK) | call notes |
+| `Final Decision` + reason | final decision |
+| `Address` | lead address (create header if missing) |
+
+Do **not** rewrite Meta columns. Match by `external_id` or `sheet_row_index`. Add write-back headers if missing. Truncated headers matched via prefix (`findHeaderIndex`).
+
+**Hooks:** assign (`active_cap`), dealer calling actions, claim/PATCH, post-sync assign.  
+**Code:** `utils/hrSheetWriteBack.ts` → `writeBackHrLeadToSheet` / `scheduleHrLeadSheetWriteBack`.
+
+**Pull rule:** existing `(sheet_source_id, external_id)` → skip (never clear CRM from blank sheet cells).
 
 ---
 
@@ -111,7 +154,7 @@ Google Sheets **cannot push** into our app. A WebSocket alone cannot replace pol
 | Layer | Role |
 |-------|------|
 | **Backend cron (every 15 min)** | Pulls enabled tabs via `POST /hr/sheet-sources/sync-all` |
-| **Socket `calling:uploads-updated`** | After cron/manual sync → HR + dealer UIs refresh (`reason: sheet_auto_sync`) |
+| **Socket `calling:uploads-updated`** | After cron/manual sync → rooms `stream:hr` + `stream:dealers` (`sheet_sync` / `sheet_auto_sync`) |
 | **Manual Sync now** | Immediate pull when HR needs it now |
 | **SPA 15‑min soft refresh** | Fallback if socket was missed |
 

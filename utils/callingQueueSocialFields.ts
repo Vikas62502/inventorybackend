@@ -21,17 +21,21 @@ export const loadUploadBatchMapByIds = async (
   return new Map(rows.map((row) => [row.id, row]));
 };
 
-/** Echo Meta / Google Sheet fields on dealer calling-queue lead rows. */
+/** Echo Meta / Google Sheet identity fields on dealer calling-queue lead rows (§AT / §AN). */
 export const buildDealerQueueSocialFields = (
   lead: CallingLead | null | undefined,
   batch?: UploadBatchMeta | null
 ): Record<string, unknown> => {
   if (!lead) return {};
 
-  const sourceType = String(batch?.sourceType || '').trim() || (lead.sheetSourceId ? 'google_sheet' : '');
+  const sourceType =
+    String(batch?.sourceType || '').trim() || (lead.sheetSourceId ? 'google_sheet' : 'csv');
   const platform = String(lead.platform || '').trim().toLowerCase();
   const isSocial =
     sourceType === 'google_sheet' ||
+    sourceType === 'social_media' ||
+    sourceType === 'social' ||
+    sourceType === 'meta' ||
     Boolean(lead.sheetSourceId) ||
     platform === 'ig' ||
     platform === 'fb' ||
@@ -39,23 +43,27 @@ export const buildDealerQueueSocialFields = (
     platform === 'instagram' ||
     platform === 'facebook';
 
-  if (!isSocial) return {};
+  const identity = {
+    sourceType,
+    source_type: sourceType,
+    sheetSourceId: lead.sheetSourceId || null,
+    sheet_source_id: lead.sheetSourceId || null,
+    platform: lead.platform || null
+  };
+
+  if (!isSocial) return identity;
 
   const uploadFileName = batch?.fileName || null;
   const leadStatus = lead.sheetLeadStatus || null;
 
   return {
-    sourceType: sourceType || 'google_sheet',
-    source_type: sourceType || 'google_sheet',
+    ...identity,
     uploadFileName,
     upload_file_name: uploadFileName,
     fileName: uploadFileName,
     file_name: uploadFileName,
-    sheetSourceId: lead.sheetSourceId || null,
-    sheet_source_id: lead.sheetSourceId || null,
     sourceSheetTab: batch?.sourceSheetTab || null,
     source_sheet_tab: batch?.sourceSheetTab || null,
-    platform: lead.platform || null,
     leadStatus,
     lead_status: leadStatus,
     sheetLeadStatus: leadStatus,

@@ -2,17 +2,23 @@ import { Request, Response } from 'express';
 import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit, QuotationDocument } from '../models/index-quotation';
 import { Op, fn, col, literal, Sequelize } from 'sequelize';
 import {
+  canAccessSection,
   hasAdminPanelAccess,
+  hasDealerDirectoryReadAccess,
   parseAccessFromBody,
   parseWorkflowPermissionPatchFromBody,
-  publicDealerForApi,
-  resolveAccess
+  publicDealerForApi
 } from '../utils/userAccess';
+import { parseAddressPatchFromBody } from '../utils/userAddress';
 import {
   buildWorkflowPermissionContext,
   canAccessFullAdminQuotationList,
   enforceWorkflowFieldWriteOrRespond,
-  resolveWorkflowModuleForInstallationStatus
+  hasAnyWorkflowModuleAccess,
+  resolveWorkflowListScopeFilter,
+  resolveWorkflowModuleFromOperationalView,
+  resolveWorkflowModuleForInstallationStatus,
+  serializeModuleFieldPermissionsForApi
 } from '../utils/moduleFieldPermissions';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
@@ -101,22 +107,22 @@ import { resolveQuotationDocumentUrls } from './quotationController';
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
   phases.reduce((sum, p) => sum + Number((p as any).paidAmount || 0), 0);
 
-/** Quotation dealer admin or inventory admin — matches `authorizeAdmin` middleware (§L.1). */
-const hasAdminQuotationAccess = (req: Request): boolean => {
-  const isQuotationAdmin = Boolean(req.dealer && req.dealer.role === 'admin');
-  const isInventoryAdmin = Boolean(
-    req.user &&
-    (req.user.role === 'admin' ||
-      req.user.role === 'super-admin' ||
-      req.user.role === 'super-admin-manager')
-  );
-  return isQuotationAdmin || isInventoryAdmin;
-};
+/** Quotation dealer admin or inventory / access-admin — matches `authorizeAdmin` (§AR). */
+const hasAdminQuotationAccess = (req: Request): boolean => hasAdminPanelAccess(req);
 
-/** Admin retrieve-from-installation — admin or account-management (§AM / HANDOFF §40). */
+/** Admin retrieve-from-installation — admin, account-management, or accounts access (§AM / Accounts read-only). */
 const hasRetrieveFromInstallationAccess = (req: Request): boolean => {
   if (hasAdminQuotationAccess(req)) return true;
-  return req.user?.role === 'account-management';
+  if (hasAdminPanelAccess(req)) return true;
+  if (req.user?.role === 'account-management' || req.user?.role === 'hr') return true;
+  return canAccessSection(
+    {
+      role: req.user?.role ?? req.dealer?.role,
+      access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+      username: req.user?.username ?? req.dealer?.username
+    },
+    'accounts'
+  );
 };
 
 const respondWorkflowQuotation = async (quotation: Quotation, res: Response): Promise<void> => {
@@ -300,11 +306,16 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       permCtx.moduleFieldPermissions,
       accessUser
     );
+    const hasWorkflowModuleAccess = hasAnyWorkflowModuleAccess(
+      permCtx.moduleFieldPermissions,
+      accessUser
+    );
 
     if (
       !isQuotationAdmin &&
       !isInventoryAdmin &&
       !hasFullWorkflowList &&
+      !hasWorkflowModuleAccess &&
       !hasAdminPanelAccess(req) &&
       !isInventoryAgent &&
       !isQuotationDealer
@@ -316,7 +327,25 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    const skipDealerScope = hasFullWorkflowList || isQuotationAdmin || isInventoryAdmin || hasAdminPanelAccess(req);
+    const preferredModule =
+      resolveWorkflowModuleFromOperationalView(String(req.query.operationalView || '')) ||
+      resolveWorkflowModuleForInstallationStatus(String(req.query.installationStatus || ''));
+    const listScope = resolveWorkflowListScopeFilter(
+      permCtx.moduleFieldPermissions,
+      accessUser,
+      permCtx,
+      preferredModule
+    );
+
+    const skipDealerScope =
+      hasFullWorkflowList ||
+      isQuotationAdmin ||
+      isInventoryAdmin ||
+      hasAdminPanelAccess(req) ||
+      listScope.kind === 'everyone' ||
+      listScope.kind === 'dealerIds' ||
+      listScope.kind === 'office' ||
+      listScope.kind === 'self';
 
     const page = parseInt(req.query.page as string) || 1;
     const limitParam = req.query.limit as string | undefined;
@@ -425,7 +454,23 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       ];
     }
 
-    if (isQuotationDealer && req.dealer && !skipDealerScope) {
+    if (listScope.kind === 'none') {
+      res.json({
+        success: true,
+        data: {
+          quotations: [],
+          pagination: { page, limit, total: 0, totalPages: 0 }
+        }
+      });
+      return;
+    }
+    if (listScope.kind === 'dealerIds') {
+      where.dealerId = { [Op.in]: listScope.dealerIds };
+    } else if (listScope.kind === 'office') {
+      where.officeLocation = listScope.officeLocation;
+    } else if (listScope.kind === 'self') {
+      where.dealerId = listScope.dealerId;
+    } else if (isQuotationDealer && req.dealer && !skipDealerScope) {
       where.dealerId = req.dealer.id;
     } else if (isInventoryAgent && req.user && !skipDealerScope) {
       const mappedDealerId = await resolveDealerIdForInventoryUser(req.user.id, req.user.username);
@@ -1547,6 +1592,10 @@ export const retrieveQuotationFromInstallation = async (req: Request, res: Respo
       return;
     }
 
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))) {
+      return;
+    }
+
     await applyRetrieveFromInstallation(quotation, { force });
     await respondWorkflowQuotation(quotation, res);
   } catch (error) {
@@ -1599,6 +1648,10 @@ export const updateMeteringWccAfterDiscom = async (req: Request, res: Response):
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'metering', quotation))) {
       return;
     }
 
@@ -1693,6 +1746,10 @@ export const updateQuotationBankProcess = async (req: Request, res: Response): P
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'metering', quotation))) {
       return;
     }
 
@@ -2136,13 +2193,13 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
   }
 };
 
-// Get all dealers (admin)
+// Get all dealers (admin + Calling Reports employee filter §AX)
 export const getAllDealers = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!hasAdminPanelAccess(req) && (!req.dealer || req.dealer.role !== 'admin')) {
+    if (!hasDealerDirectoryReadAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -2151,14 +2208,22 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
     const limit = Math.min(parseInt(req.query.limit as string) || 1000, 1000);
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
-    const includeInactiveRaw = String(req.query.includeInactive ?? '').trim().toLowerCase();
+    const includeInactiveRaw = String(
+      req.query.includeInactive ?? req.query.include_inactive ?? ''
+    )
+      .trim()
+      .toLowerCase();
     const includeInactive = includeInactiveRaw === 'true' || includeInactiveRaw === '1';
 
     const where: any = { role: 'dealer' };
-    
-    // HR dealer-pool selector can request all dealers regardless of active status.
-    if (!includeInactive && isActive !== undefined) {
-      where.isActive = isActive === 'true';
+
+    // §AR — default Active only; ?includeInactive=true shows pending/inactive
+    if (!includeInactive) {
+      if (isActive !== undefined) {
+        where.isActive = isActive === 'true' || isActive === '1';
+      } else {
+        where.isActive = true;
+      }
     }
 
     // Search by name, email, mobile, username
@@ -2182,40 +2247,7 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
 
     const mappedDealers = dealers.map((dealer) => {
       const dealerData = dealer.toJSON() as any;
-      const access = resolveAccess({
-        role: dealerData.role || 'dealer',
-        access: dealerData.access,
-        username: dealerData.username
-      });
-      return {
-        id: dealerData.id,
-        username: dealerData.username,
-        firstName: dealerData.firstName,
-        lastName: dealerData.lastName,
-        email: dealerData.email,
-        mobile: dealerData.mobile,
-        gender: dealerData.gender,
-        dateOfBirth: dealerData.dateOfBirth,
-        fatherName: dealerData.fatherName,
-        fatherContact: dealerData.fatherContact,
-        governmentIdType: dealerData.governmentIdType,
-        governmentIdNumber: dealerData.governmentIdNumber,
-        governmentIdImage: dealerData.governmentIdImage,
-        address: {
-          street: dealerData.addressStreet,
-          city: dealerData.addressCity,
-          state: dealerData.addressState,
-          pincode: dealerData.addressPincode
-        },
-        company: dealerData.company,
-        role: dealerData.role || 'dealer',
-        access,
-        permissions: access,
-        isActive: dealerData.isActive,
-        emailVerified: dealerData.emailVerified,
-        createdAt: dealerData.createdAt,
-        updatedAt: dealerData.updatedAt
-      };
+      return publicDealerForApi(dealerData) as any;
     });
 
     const eligible = filterByListAccess(mappedDealers, accessKey);
@@ -2258,10 +2290,10 @@ export const getAllDealers = async (req: Request, res: Response): Promise<void> 
 // Update dealer (admin)
 export const updateDealer = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!hasAdminPanelAccess(req) && (!req.dealer || req.dealer.role !== 'admin')) {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -2350,16 +2382,13 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
     }
     if (permPatch.officeLocation !== undefined) updateData.officeLocation = permPatch.officeLocation;
     if (permPatch.moduleFieldPermissions !== undefined) {
-      updateData.moduleFieldPermissions = permPatch.moduleFieldPermissions;
+      // §AV — persist normalized Field access object (SPA sends full module map).
+      updateData.moduleFieldPermissions = serializeModuleFieldPermissionsForApi(
+        permPatch.moduleFieldPermissions
+      );
     }
 
-    // Update address fields if provided
-    if (req.body.address) {
-      if (req.body.address.street) updateData.addressStreet = req.body.address.street;
-      if (req.body.address.city) updateData.addressCity = req.body.address.city;
-      if (req.body.address.state) updateData.addressState = req.body.address.state;
-      if (req.body.address.pincode) updateData.addressPincode = req.body.address.pincode;
-    }
+    Object.assign(updateData, parseAddressPatchFromBody(req.body || {}));
 
     await dealer.update(updateData);
 
@@ -2368,21 +2397,7 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
     });
 
     const dealerData = updatedDealer?.toJSON() as any;
-    const responseData: any = {
-      ...publicDealerForApi(dealerData),
-      address: {
-        street: dealerData.addressStreet,
-        city: dealerData.addressCity,
-        state: dealerData.addressState,
-        pincode: dealerData.addressPincode
-      }
-    };
-
-    // Remove individual address fields from response
-    delete responseData.addressStreet;
-    delete responseData.addressCity;
-    delete responseData.addressState;
-    delete responseData.addressPincode;
+    const responseData: any = publicDealerForApi(dealerData);
 
     res.json({
       success: true,
@@ -2410,10 +2425,10 @@ export const updateDealer = async (req: Request, res: Response): Promise<void> =
 // Activate dealer (admin)
 export const activateDealer = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!hasAdminPanelAccess(req) && (!req.dealer || req.dealer.role !== 'admin')) {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }

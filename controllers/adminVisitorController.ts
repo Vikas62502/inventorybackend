@@ -4,7 +4,8 @@ import bcrypt from 'bcryptjs';
 import { Visitor, VisitAssignment, Visit } from '../models/index-quotation';
 import { Op } from 'sequelize';
 import { logError, logInfo } from '../utils/loggerHelper';
-import { parseAccessFromBody, parseWorkflowPermissionPatchFromBody, resolveAccess } from '../utils/userAccess';
+import { parseAccessFromBody, parseWorkflowPermissionPatchFromBody, resolveAccess, hasAdminPanelAccess } from '../utils/userAccess';
+import { serializeModuleFieldPermissionsForApi } from '../utils/moduleFieldPermissions';
 import { parseProfilePatchFromBody, publicVisitorForApi } from '../utils/userProfile';
 import { listAssignableVisitors } from '../utils/assignableVisitors';
 import {
@@ -19,10 +20,10 @@ const visitorRecord = (row: Visitor) => row.toJSON() as unknown as Record<string
 // Create visitor (admin)
 export const createVisitor = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -107,11 +108,18 @@ export const createVisitor = async (req: Request, res: Response): Promise<void> 
       isActive: req.body.isActive !== false,
       ...(permPatch.officeLocation !== undefined ? { officeLocation: permPatch.officeLocation } : {}),
       ...(permPatch.moduleFieldPermissions !== undefined
-        ? { moduleFieldPermissions: permPatch.moduleFieldPermissions }
+        ? {
+            moduleFieldPermissions: serializeModuleFieldPermissionsForApi(
+              permPatch.moduleFieldPermissions
+            )
+          }
         : {})
     });
 
-    logInfo('Visitor created by admin', { visitorId: visitor.id, createdBy: req.dealer.id });
+    logInfo('Visitor created by admin', {
+      visitorId: visitor.id,
+      createdBy: req.dealer?.id ?? req.user?.id
+    });
 
     const created = await Visitor.findByPk(visitor.id, { attributes: { exclude: ['password'] } });
     res.status(201).json({
@@ -130,10 +138,10 @@ export const createVisitor = async (req: Request, res: Response): Promise<void> 
 // Get all visitors (admin)
 export const getAllVisitors = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -142,6 +150,12 @@ export const getAllVisitors = async (req: Request, res: Response): Promise<void>
     const limit = Math.min(parseInt(req.query.limit as string) || 1000, 1000);
     const search = req.query.search as string;
     const isActive = req.query.isActive as string;
+    const includeInactiveRaw = String(
+      req.query.includeInactive ?? req.query.include_inactive ?? ''
+    )
+      .trim()
+      .toLowerCase();
+    const includeInactive = includeInactiveRaw === 'true' || includeInactiveRaw === '1';
     const sortBy = (req.query.sortBy as string) || 'createdAt';
     const sortOrder = (req.query.sortOrder as string) || 'desc';
     const accessKey = parseAccessQueryFromReq(req);
@@ -150,7 +164,12 @@ export const getAllVisitors = async (req: Request, res: Response): Promise<void>
     if (includeAccessUsers) {
       const union = await listAssignableVisitors({
         search,
-        isActive: isActive === undefined ? true : isActive === 'true' || isActive === '1'
+        includeInactive,
+        isActive: includeInactive
+          ? undefined
+          : isActive === undefined
+            ? true
+            : isActive === 'true' || isActive === '1'
       });
       const filtered = filterByListAccess(union, accessKey || 'visitor');
       const paged = paginateRows(filtered, page, limit);
@@ -173,8 +192,13 @@ export const getAllVisitors = async (req: Request, res: Response): Promise<void>
 
     const where: any = {};
 
-    if (isActive !== undefined) {
-      where.isActive = isActive === 'true';
+    // §AR — default Active only
+    if (!includeInactive) {
+      if (isActive !== undefined) {
+        where.isActive = isActive === 'true' || isActive === '1';
+      } else {
+        where.isActive = true;
+      }
     }
 
     if (search) {
@@ -234,10 +258,10 @@ export const getAllVisitors = async (req: Request, res: Response): Promise<void>
 // Get visitor by ID (admin)
 export const getVisitorById = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -312,10 +336,10 @@ export const getVisitorById = async (req: Request, res: Response): Promise<void>
 // Update visitors (admin)
 export const updateVisitor = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -381,7 +405,9 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
     if (accessParse.access) updateData.access = accessParse.access;
     if (permPatch.officeLocation !== undefined) updateData.officeLocation = permPatch.officeLocation;
     if (permPatch.moduleFieldPermissions !== undefined) {
-      updateData.moduleFieldPermissions = permPatch.moduleFieldPermissions;
+      updateData.moduleFieldPermissions = serializeModuleFieldPermissionsForApi(
+        permPatch.moduleFieldPermissions
+      );
     }
     if (password && String(password).trim()) {
       updateData.password = await bcrypt.hash(String(password), 10);
@@ -409,10 +435,10 @@ export const updateVisitor = async (req: Request, res: Response): Promise<void> 
 // Update visitor password (admin)
 export const updateVisitorPassword = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }
@@ -461,10 +487,10 @@ export const updateVisitorPassword = async (req: Request, res: Response): Promis
 // Delete/Deactivate visitor (admin)
 export const deleteVisitor = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!hasAdminPanelAccess(req)) {
       res.status(403).json({
         success: false,
-        error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+        error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
       });
       return;
     }

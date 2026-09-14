@@ -56,6 +56,8 @@ export const ACCESS_KEYS = [
   "final_confirmation",
   "hr",
   "visitor",
+  "visitor_reports",
+  "calling_reports",
 ] as const
 
 export type AccessKey = (typeof ACCESS_KEYS)[number]
@@ -71,6 +73,9 @@ const ACCESS_TO_ROLE: Record<AccessKey, string> = {
   final_confirmation: "baldev",
   hr: "hr",
   visitor: "visitor",
+  // §AW — reports are grants, not a primary role
+  visitor_reports: "dealer",
+  calling_reports: "dealer",
 }
 
 const PRIMARY_PRIORITY: AccessKey[] = [
@@ -83,6 +88,8 @@ const PRIMARY_PRIORITY: AccessKey[] = [
   "visitor",
   "quotation",
 ]
+
+const REPORT_ACCESS_KEYS = new Set(["visitor_reports", "calling_reports"])
 
 /** Normalize FE / DB values into canonical access keys. */
 export function normalizeAccess(raw: unknown): AccessKey[] {
@@ -98,6 +105,8 @@ export function normalizeAccess(raw: unknown): AccessKey[] {
     if (key === "installer" || key === "install") key = "installation"
     if (key === "baldev" || key === "final" || key === "confirmation") key = "final_confirmation"
     if (key === "dealer" || key === "quotations") key = "quotation"
+    if (key === "visitor_report" || key === "visitorreports") key = "visitor_reports"
+    if (key === "calling_report" || key === "callingreports") key = "calling_reports"
     if (!ACCESS_SET.has(key as AccessKey) || seen.has(key)) continue
     seen.add(key)
     out.push(key as AccessKey)
@@ -123,7 +132,7 @@ export function accessFromRole(role?: string | null): AccessKey[] {
 }
 
 export function primaryRoleFromAccess(access: AccessKey[]): string {
-  const list = normalizeAccess(access)
+  const list = normalizeAccess(access).filter((k) => !REPORT_ACCESS_KEYS.has(k))
   for (const key of PRIMARY_PRIORITY) {
     if (list.includes(key)) return ACCESS_TO_ROLE[key]
   }
@@ -134,10 +143,24 @@ export function resolveAccess(userLike: {
   role?: string | null
   access?: unknown
   permissions?: unknown
+  username?: string | null
 }): AccessKey[] {
-  const fromBody = normalizeAccess(userLike.access ?? userLike.permissions)
-  if (fromBody.length > 0) return fromBody
-  return accessFromRole(userLike.role)
+  const stored = normalizeAccess(userLike.access)
+  const fromPerms = normalizeAccess(userLike.permissions)
+  const fromRole = accessFromRole(userLike.role)
+  const usernameAdmin =
+    String(userLike.username || "").trim().toLowerCase() === "admin"
+      ? (["admin"] as AccessKey[])
+      : []
+
+  const primary =
+    stored.length > 0 ? stored : fromPerms.length > 0 ? fromPerms : fromRole.length > 0 ? fromRole : usernameAdmin
+
+  if (!primary.length) return usernameAdmin
+  if ((fromRole.includes("admin") || usernameAdmin.includes("admin")) && !primary.includes("admin")) {
+    return ["admin", ...primary]
+  }
+  return primary
 }
 
 export function canAccessSection(
@@ -289,14 +312,21 @@ export async function login(req, res) {
 
 /**
  * =============================================================================
- * MIDDLEWARE — replace pure role checks
+ * MIDDLEWARE — replace pure role checks (REQUIRED §AR / HANDOFF §46)
  * =============================================================================
  *
- * Old:  if (req.user.role !== "metering") return 403 AUTH_004
- * New:  if (!canAccessSection(req.user, "metering")) return 403 AUTH_004
+ * Update User AUTH_004 — do NOT use:
+ *   if (req.user.role !== "admin") return 403
+ *
+ * Use:
+ *   router.put("/admin/dealers/:id", auth, requireAdminAccess(), updateDealer)
+ *   router.put("/admin/account-managers/:id", auth, requireAdminAccess(), …)
+ *   router.put("/admin/visitors/:id", auth, requireAdminAccess(), …)
+ *
+ * Allow when role is admin/super-admin OR access/permissions includes "admin".
  *
  * Map routes → access key:
- *   /admin/** (quotation admin)     → "admin"
+ *   /admin/** (Users CRUD)          → "admin"  (requireAdminAccess)
  *   /dealers/**, quotations create  → "quotation"
  *   account-management payments     → "accounts"
  *   installer routes                → "installation"
@@ -305,14 +335,52 @@ export async function login(req, res) {
  *   /hr/**                          → "hr"
  *   visitor routes                  → "visitor"
  */
+export function hasAdminPanelAccess(req) {
+  if (req.dealer?.role === "admin") return true
+  const role = String(req.user?.role || "")
+    .trim()
+    .toLowerCase()
+  if (
+    role === "admin" ||
+    role === "super-admin" ||
+    role === "super-admin-manager" ||
+    role === "superadmin"
+  ) {
+    return true
+  }
+  return canAccessSection(
+    {
+      role: req.user?.role ?? req.dealer?.role ?? req.visitor?.role,
+      access: req.user?.access ?? req.dealer?.access ?? req.visitor?.access,
+      permissions:
+        req.user?.permissions ?? req.dealer?.permissions ?? req.visitor?.permissions,
+    },
+    "admin",
+  )
+}
+
 export function requireAccess(key: AccessKey) {
   return (req, res, next) => {
-    const jwtUser = req.user // from JWT: { role, access, … }
-    if (!jwtUser) {
+    if (!req.user && !req.dealer && !req.visitor) {
       return res.status(401).json({
         success: false,
         error: { code: "AUTH_003", message: "Unauthorized" },
       })
+    }
+    if (key === "admin") {
+      if (hasAdminPanelAccess(req)) return next()
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: "AUTH_004",
+          message: "Insufficient permissions. Admin access required.",
+        },
+      })
+    }
+    const jwtUser = {
+      role: req.user?.role ?? req.dealer?.role ?? req.visitor?.role,
+      access: req.user?.access ?? req.dealer?.access ?? req.visitor?.access,
+      permissions: req.user?.permissions ?? req.dealer?.permissions,
     }
     if (!canAccessSection(jwtUser, key)) {
       return res.status(403).json({
@@ -327,16 +395,27 @@ export function requireAccess(key: AccessKey) {
   }
 }
 
+/** Alias for Admin Users CRUD — same as requireAccess("admin"). */
+export function requireAdminAccess() {
+  return requireAccess("admin")
+}
+
 /** Allow several sections (OR). */
 export function requireAnyAccess(keys: AccessKey[]) {
   return (req, res, next) => {
-    if (!req.user) {
+    if (!req.user && !req.dealer && !req.visitor) {
       return res.status(401).json({
         success: false,
         error: { code: "AUTH_003", message: "Unauthorized" },
       })
     }
-    if (!keys.some((k) => canAccessSection(req.user, k))) {
+    if (keys.includes("admin") && hasAdminPanelAccess(req)) return next()
+    const jwtUser = {
+      role: req.user?.role ?? req.dealer?.role,
+      access: req.user?.access ?? req.dealer?.access,
+      permissions: req.user?.permissions,
+    }
+    if (!keys.some((k) => canAccessSection(jwtUser, k))) {
       return res.status(403).json({
         success: false,
         error: { code: "AUTH_004", message: "Insufficient permissions" },
@@ -349,13 +428,21 @@ export function requireAnyAccess(keys: AccessKey[]) {
 /**
  * Example wiring:
  *
+ *   router.put("/admin/dealers/:id", auth, requireAdminAccess(), updateDealer)
  *   router.post("/metering/quotations/:id/details",
  *     auth, requireAccess("metering"), meteringDetails)
  *
  *   router.get("/account-management/quotations",
  *     auth, requireAnyAccess(["accounts", "admin"]), listApproved)
  *
- * Keep accepting legacy role-only JWTs via accessFromRole inside canAccessSection.
+ * Report GETs (§AX):
+ *   GET /admin/calling-actions → requireAnyAccess(["admin","calling_reports","hr"])
+ *   GET /admin/visits → requireAnyAccess(["admin","visitor_reports"])
+ *   GET /admin/dealers → requireAnyAccess(["admin","calling_reports"]) (employee filter)
+ *
+ * §AW — visitor_reports / calling_reports never set primary role to admin.
+ *
+ * Runtime: utils/userAccess.ts + middleware/authQuotation.ts authorizeAdmin → requireAdminAccess().
  */
 
 /**
@@ -365,7 +452,30 @@ export function requireAnyAccess(keys: AccessKey[]) {
  *
  * GET /api/admin/dealers
  * PUT /api/admin/dealers/:id
+ *
+ * Address (§AS / HANDOFF §47): always echo nested `address` via normalizeDealerAddress.
+ * Persist from nested `address` OR flat `address_street`… / `street` / `streetAddress`.
+ * Runtime: utils/userAddress.ts + utils/userAccess.ts publicDealerForApi.
  */
+
+export function normalizeDealerAddress(row) {
+  const nested =
+    row && row.address && typeof row.address === "object" && !Array.isArray(row.address)
+      ? row.address
+      : null
+  const t = (v) => (v == null ? "" : String(v).trim())
+  return {
+    street:
+      t(nested?.street) ||
+      t(nested?.streetAddress) ||
+      t(row?.addressStreet) ||
+      t(row?.address_street) ||
+      "",
+    city: t(nested?.city) || t(row?.addressCity) || t(row?.address_city) || "",
+    state: t(nested?.state) || t(row?.addressState) || t(row?.address_state) || "",
+    pincode: t(nested?.pincode) || t(row?.addressPincode) || t(row?.address_pincode) || "",
+  }
+}
 
 export function publicDealer(dealer) {
   const access = resolveAccess({
@@ -394,10 +504,15 @@ export function publicDealer(dealer) {
     fatherContact: dealer.fatherContact,
     governmentIdType: dealer.governmentIdType,
     governmentIdNumber: dealer.governmentIdNumber,
-    address: dealer.address,
+    address: normalizeDealerAddress(dealer),
     role: dealer.role || "dealer",
     access: finalAccess,
     permissions: finalAccess,
+    officeLocation: dealer.officeLocation || dealer.office_location || null,
+    office_location: dealer.officeLocation || dealer.office_location || null,
+    // MUST echo — SPA reopens Update User from this (Field access Write/Read only).
+    moduleFieldPermissions: dealer.moduleFieldPermissions || {},
+    modulePermissions: dealer.moduleFieldPermissions || {},
     isActive: dealer.isActive !== false,
     emailVerified: !!dealer.emailVerified,
     createdAt: dealer.createdAt,
@@ -437,11 +552,29 @@ export async function updateDealer(req, res) {
   if (body.fatherContact != null) dealer.fatherContact = body.fatherContact
   if (body.governmentIdType != null) dealer.governmentIdType = body.governmentIdType
   if (body.governmentIdNumber != null) dealer.governmentIdNumber = String(body.governmentIdNumber).trim()
-  if (body.address != null) dealer.address = body.address
   if (body.isActive != null) dealer.isActive = !!body.isActive
   if (body.emailVerified != null) dealer.emailVerified = !!body.emailVerified
 
-  // Access checkboxes from Admin → Users → Edit
+  // Address — nested OR flat (utils/userAddress.ts parseAddressPatchFromBody)
+  const nested =
+    body.address && typeof body.address === "object" ? body.address : null
+  const street =
+    nested?.street ??
+    nested?.streetAddress ??
+    body.address_street ??
+    body.addressStreet ??
+    body.street ??
+    body.streetAddress
+  const city = nested?.city ?? body.address_city ?? body.addressCity ?? body.city
+  const state = nested?.state ?? body.address_state ?? body.addressState ?? body.state
+  const pincode =
+    nested?.pincode ?? body.address_pincode ?? body.addressPincode ?? body.pincode
+  if (street !== undefined) dealer.addressStreet = String(street ?? "").trim()
+  if (city !== undefined) dealer.addressCity = String(city ?? "").trim()
+  if (state !== undefined) dealer.addressState = String(state ?? "").trim()
+  if (pincode !== undefined) dealer.addressPincode = String(pincode ?? "").trim()
+
+  // Access checkboxes from Admin → Users → Edit (§AU — includes visitor_reports / calling_reports)
   const nextAccess = normalizeAccess(body.access ?? body.permissions)
   if (nextAccess.length > 0) {
     dealer.access = nextAccess
@@ -450,6 +583,16 @@ export async function updateDealer(req, res) {
       success: false,
       error: { code: "VAL_001", message: "access must be a non-empty array of known keys" },
     })
+  }
+
+  // §AV — Field access round-trip
+  if (body.officeLocation !== undefined || body.office_location !== undefined) {
+    dealer.officeLocation = body.officeLocation ?? body.office_location ?? null
+  }
+  const mfp =
+    body.moduleFieldPermissions ?? body.modulePermissions ?? body.module_permissions
+  if (mfp !== undefined && mfp != null && typeof mfp === "object") {
+    dealer.moduleFieldPermissions = mfp
   }
 
   await dealer.save()

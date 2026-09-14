@@ -7,6 +7,7 @@ import { swaggerSpec } from './config/swagger';
 import logger from './config/logger';
 import { sequelizeBootstrap } from './config/sequelizeBootstrap';
 import { attachRealtimeServer, emitRealtime, realtimeEvents } from './utils/realtime';
+import { startSheetAutoSyncCron } from './utils/sheetAutoSyncCron';
 
 dotenv.config();
 
@@ -245,6 +246,8 @@ void sequelizeBootstrap.then(() => {
       swaggerUrl: `http://localhost:${listenPort}/api-docs`,
       websocketPath: `http://localhost:${listenPort}/socket.io`
     });
+    // §AZ — HR Social Media auto-sync every 30 min (pull sheet + calling:uploads-updated)
+    startSheetAutoSyncCron();
   });
 });
 

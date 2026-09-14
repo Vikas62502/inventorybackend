@@ -33,7 +33,7 @@ import {
   patchHrSheetSourceSchema,
   hrSheetSourceLeadsQuerySchema
 } from '../validations/hrSheetSourceValidations';
-import { canAccessSection, hasAdminPanelAccess } from '../utils/userAccess';
+import { canAccessSection, hasAdminPanelAccess, requireAnyAccess } from '../utils/userAccess';
 
 const router: Router = express.Router();
 
@@ -88,6 +88,24 @@ const authenticateHrOrCron = (req: Request, res: Response, next: NextFunction): 
 router.post('/sheet-sources/sync-all', authenticateHrOrCron, postHrSheetSourcesSyncAll);
 
 router.use(authenticate);
+
+/** §AX — Calling Reports may use HR calling-actions alias (GET only). */
+router.get(
+  '/calling-actions/summary',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getHrCallingActionsSummary
+);
+router.get(
+  '/calling-actions',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getHrCallingActions
+);
+router.get(
+  '/calling-queue/actions',
+  requireAnyAccess(['admin', 'calling_reports', 'hr']),
+  getHrCallingActions
+);
+
 router.use(authorizeHrLeadAccess);
 
 router.get('/dealers', getHrDealersForAssignment);
@@ -95,10 +113,7 @@ router.get('/assignable-dealers', getHrDealersForAssignment);
 router.get('/dealer-pool', getHrDealersForAssignment);
 router.get('/assignment/dealers', getHrDealersForAssignment);
 router.get('/dealers/assignment-stats', getHrDealerAssignmentStats);
-router.get('/calling-actions/summary', getHrCallingActionsSummary);
-router.get('/calling-actions', getHrCallingActions);
-// Alias used by some frontend builds (§J / §4.8)
-router.get('/calling-queue/actions', getHrCallingActions);
+// calling-actions* registered above (§AX)
 /** Global calling-lead mobile search (SPA HR Uploaded Data search). */
 router.get('/leads/search', getHrLeadsSearchByMobile);
 router.get('/leads/uploads', getHrLeadUploadBatches);

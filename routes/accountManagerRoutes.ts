@@ -11,6 +11,7 @@ import {
   getAccountManagerHistory
 } from '../controllers/accountManagerController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
+import { requireAdminAccess } from '../utils/userAccess';
 import { validate } from '../middleware/validate';
 import { createAccountManagerSchema, updateAccountManagerSchema, updatePasswordSchema } from '../validations/accountManagerValidations';
 
@@ -192,7 +193,13 @@ router.post('/', validate(createAccountManagerSchema), createAccountManager);
  *       403:
  *         description: Insufficient permissions
  */
-router.put('/:accountManagerId', validate(updateAccountManagerSchema), updateAccountManager);
+// §46 — same gate as PUT /admin/dealers/:id (role admin/super-admin or access includes admin).
+router.put(
+  '/:accountManagerId',
+  requireAdminAccess(),
+  validate(updateAccountManagerSchema),
+  updateAccountManager
+);
 
 /**
  * @swagger

@@ -258,6 +258,7 @@ const swaggerDefinition = {
             enum: [
               'waaree_540_560_bifacial',
               'waaree_580_700_bifacial_topcon',
+              'waaree_580_620',
               'waaree_580_630',
               'adani_540_580_bifacial',
               'adani_610_625_bifacial_topcon',

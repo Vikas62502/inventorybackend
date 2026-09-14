@@ -3,6 +3,9 @@ import {
   parseOfficeLocationFromBody,
   workflowPermissionFieldsForApi
 } from './moduleFieldPermissions';
+import { normalizeDealerAddress, stripFlatAddressFields } from './userAddress';
+
+export { normalizeDealerAddress } from './userAddress';
 
 export const ACCESS_KEYS = [
   'admin',
@@ -12,7 +15,9 @@ export const ACCESS_KEYS = [
   'metering',
   'final_confirmation',
   'hr',
-  'visitor'
+  'visitor',
+  'visitor_reports',
+  'calling_reports'
 ] as const;
 
 export type AccessKey = (typeof ACCESS_KEYS)[number];
@@ -27,9 +32,13 @@ const ACCESS_TO_ROLE: Record<AccessKey, string> = {
   metering: 'metering',
   final_confirmation: 'baldev',
   hr: 'hr',
-  visitor: 'visitor'
+  visitor: 'visitor',
+  // §AW — reports are grants, never a primary role
+  visitor_reports: 'dealer',
+  calling_reports: 'dealer'
 };
 
+/** Role-driving keys only — visitor_reports / calling_reports never pick primary role (§AW). */
 const PRIMARY_PRIORITY: AccessKey[] = [
   'admin',
   'accounts',
@@ -40,6 +49,8 @@ const PRIMARY_PRIORITY: AccessKey[] = [
   'visitor',
   'quotation'
 ];
+
+const REPORT_ACCESS_KEYS = new Set<AccessKey>(['visitor_reports', 'calling_reports']);
 
 /** Normalize FE / DB values into canonical access keys. */
 export const normalizeAccess = (raw: unknown): AccessKey[] => {
@@ -77,6 +88,12 @@ export const normalizeAccess = (raw: unknown): AccessKey[] => {
     if (key === 'installer' || key === 'install' || key === 'installation_team') key = 'installation';
     if (key === 'baldev' || key === 'final' || key === 'confirmation') key = 'final_confirmation';
     if (key === 'dealer' || key === 'quotations') key = 'quotation';
+    if (key === 'visitor_report' || key === 'visitorreports' || key === 'visitor_reports_tab') {
+      key = 'visitor_reports';
+    }
+    if (key === 'calling_report' || key === 'callingreports' || key === 'calling_reports_tab') {
+      key = 'calling_reports';
+    }
     if (!ACCESS_SET.has(key) || seen.has(key)) continue;
     seen.add(key);
     out.push(key as AccessKey);
@@ -107,7 +124,7 @@ export const accessFromRole = (role?: string | null): AccessKey[] => {
 };
 
 export const primaryRoleFromAccess = (access: AccessKey[]): string => {
-  const list = normalizeAccess(access);
+  const list = normalizeAccess(access).filter((key) => !REPORT_ACCESS_KEYS.has(key));
   for (const key of PRIMARY_PRIORITY) {
     if (list.includes(key)) return ACCESS_TO_ROLE[key];
   }
@@ -121,15 +138,24 @@ export const resolveAccess = (userLike: {
   username?: string | null;
 }): AccessKey[] => {
   const stored = normalizeAccess(userLike.access);
-  if (stored.length > 0) return stored;
-  const fromBody = normalizeAccess(userLike.permissions);
-  if (fromBody.length > 0) return fromBody;
+  const fromPerms = normalizeAccess(userLike.permissions);
   const fromRole = accessFromRole(userLike.role);
-  if (fromRole.length > 0) return fromRole;
-  if (String(userLike.username || '').trim().toLowerCase() === 'admin') {
-    return ['admin'];
+  const usernameAdmin =
+    String(userLike.username || '').trim().toLowerCase() === 'admin'
+      ? (['admin'] as AccessKey[])
+      : [];
+
+  // Prefer explicit access/permissions, but never drop role-implied admin
+  // (Update User AUTH_004 when stored access omitted "admin" while role is admin).
+  const primary =
+    stored.length > 0 ? stored : fromPerms.length > 0 ? fromPerms : fromRole.length > 0 ? fromRole : usernameAdmin;
+
+  if (!primary.length) return usernameAdmin;
+
+  if (fromRole.includes('admin') || usernameAdmin.includes('admin')) {
+    if (!primary.includes('admin')) return ['admin', ...primary];
   }
-  return [];
+  return primary;
 };
 
 export const canAccessSection = (
@@ -200,9 +226,11 @@ export const publicDealerForApi = (dealer: Record<string, unknown>) => {
     permissions: dealer.permissions,
     username: dealer.username as string
   });
+  const cleaned = stripFlatAddressFields({ ...dealer });
   return {
-    ...dealer,
+    ...cleaned,
     role: dealer.role || 'dealer',
+    address: normalizeDealerAddress(dealer),
     access,
     permissions: access,
     ...workflowPermissionFieldsForApi(dealer)
@@ -216,14 +244,9 @@ export const publicAccountManagerForApi = (row: Record<string, unknown>) => {
     permissions: row.permissions,
     username: row.username as string
   });
-  const address = {
-    street: (row.addressStreet as string) || '',
-    city: (row.addressCity as string) || '',
-    state: (row.addressState as string) || '',
-    pincode: (row.addressPincode as string) || ''
-  };
+  const cleaned = stripFlatAddressFields({ ...row });
   return {
-    ...row,
+    ...cleaned,
     gender: row.gender ?? null,
     dateOfBirth: row.dateOfBirth ?? null,
     fatherName: row.fatherName ?? null,
@@ -231,7 +254,7 @@ export const publicAccountManagerForApi = (row: Record<string, unknown>) => {
     governmentIdType: row.governmentIdType ?? null,
     governmentIdNumber: row.governmentIdNumber ?? null,
     employeeId: row.employeeId ?? null,
-    address,
+    address: normalizeDealerAddress(row),
     access,
     permissions: access,
     ...workflowPermissionFieldsForApi(row)
@@ -240,23 +263,170 @@ export const publicAccountManagerForApi = (row: Record<string, unknown>) => {
 
 /** Admin panel routes (Users tab, dealer directory). */
 export const hasAdminPanelAccess = (req: {
-  dealer?: { role?: string; access?: unknown; username?: string };
+  dealer?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
   user?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+  visitor?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
 }): boolean => {
   if (req.dealer?.role === 'admin') return true;
-  const role = req.user?.role;
-  if (role === 'admin' || role === 'super-admin' || role === 'super-admin-manager' || role === 'superadmin') {
+  const role = String(req.user?.role || '').trim().toLowerCase();
+  if (
+    role === 'admin' ||
+    role === 'super-admin' ||
+    role === 'super-admin-manager' ||
+    role === 'superadmin' ||
+    role === 'super_admin' ||
+    role === 'super_admin_manager'
+  ) {
     return true;
   }
-  return canAccessSection(
-    {
-      role: req.user?.role ?? req.dealer?.role,
-      access: req.user?.access ?? req.dealer?.access,
-      username: req.user?.username ?? req.dealer?.username
-    },
-    'admin'
+  const userLike = {
+    role: req.user?.role ?? req.dealer?.role ?? req.visitor?.role,
+    access: req.user?.access ?? req.dealer?.access ?? (req.visitor as any)?.access,
+    permissions:
+      req.user?.permissions ??
+      (req.dealer as any)?.permissions ??
+      (req.visitor as any)?.permissions,
+    username: req.user?.username ?? req.dealer?.username ?? req.visitor?.username
+  };
+  if (canAccessSection(userLike, 'admin')) return true;
+  // Linked dealer from multi-access may carry admin in access[] while JWT role is hr/etc.
+  if (
+    req.dealer &&
+    canAccessSection(
+      {
+        role: req.dealer.role,
+        access: req.dealer.access,
+        permissions: (req.dealer as any).permissions,
+        username: req.dealer.username
+      },
+      'admin'
+    )
+  ) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Express middleware: allow if JWT role implies section OR access[] includes key.
+ * Use requireAccess("admin") for Admin Users CRUD (not role === "admin" only).
+ */
+export const requireAccess = (key: AccessKey) => {
+  return (req: any, res: any, next: any): void => {
+    if (!req.user && !req.dealer && !req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'Unauthorized' }
+      });
+      return;
+    }
+    if (key === 'admin' && hasAdminPanelAccess(req)) {
+      next();
+      return;
+    }
+    if (
+      canAccessSection(
+        {
+          role: req.user?.role ?? req.dealer?.role ?? req.visitor?.role,
+          access: req.user?.access ?? req.dealer?.access ?? req.visitor?.access,
+          username: req.user?.username ?? req.dealer?.username ?? req.visitor?.username
+        },
+        key
+      )
+    ) {
+      next();
+      return;
+    }
+    res.status(403).json({
+      success: false,
+      error: {
+        code: 'AUTH_004',
+        message:
+          key === 'admin'
+            ? 'Insufficient permissions. Admin access required.'
+            : `Insufficient permissions: requires access "${key}"`
+      }
+    });
+  };
+};
+
+export const requireAdminAccess = () => requireAccess('admin');
+
+/** Allow if any listed access key matches (OR). Used by Calling/Visitor Reports (§AX). */
+export const requireAnyAccess = (keys: AccessKey[]) => {
+  return (req: any, res: any, next: any): void => {
+    if (!req.user && !req.dealer && !req.visitor) {
+      res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_003', message: 'Unauthorized' }
+      });
+      return;
+    }
+    if (keys.includes('admin') && hasAdminPanelAccess(req)) {
+      next();
+      return;
+    }
+    const userLike = {
+      role: req.user?.role ?? req.dealer?.role ?? req.visitor?.role,
+      access: req.user?.access ?? req.dealer?.access ?? req.visitor?.access,
+      permissions:
+        req.user?.permissions ??
+        (req.dealer as any)?.permissions ??
+        (req.visitor as any)?.permissions,
+      username: req.user?.username ?? req.dealer?.username ?? req.visitor?.username
+    };
+    if (keys.some((key) => canAccessSection(userLike, key))) {
+      next();
+      return;
+    }
+    res.status(403).json({
+      success: false,
+      error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+    });
+  };
+};
+
+/** True when JWT may open Calling Reports GETs. */
+export const hasCallingReportsAccess = (req: {
+  dealer?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+  user?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+}): boolean => {
+  if (hasAdminPanelAccess(req)) return true;
+  const role = String(req.user?.role || '').trim().toLowerCase();
+  if (role === 'hr' || role === 'human_resources' || role === 'human-resources') return true;
+  const userLike = {
+    role: req.user?.role ?? req.dealer?.role,
+    access: req.user?.access ?? req.dealer?.access,
+    permissions: req.user?.permissions ?? (req.dealer as any)?.permissions,
+    username: req.user?.username ?? req.dealer?.username
+  };
+  return (
+    canAccessSection(userLike, 'calling_reports') ||
+    canAccessSection(userLike, 'hr') ||
+    canAccessSection(userLike, 'admin')
   );
 };
+
+/** True when JWT may open Visitor Reports GETs. */
+export const hasVisitorReportsAccess = (req: {
+  dealer?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+  user?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+}): boolean => {
+  if (hasAdminPanelAccess(req)) return true;
+  const userLike = {
+    role: req.user?.role ?? req.dealer?.role,
+    access: req.user?.access ?? req.dealer?.access,
+    permissions: req.user?.permissions ?? (req.dealer as any)?.permissions,
+    username: req.user?.username ?? req.dealer?.username
+  };
+  return canAccessSection(userLike, 'visitor_reports') || canAccessSection(userLike, 'admin');
+};
+
+/** True when JWT may list dealers for Calling Reports employee filter (read-only). */
+export const hasDealerDirectoryReadAccess = (req: {
+  dealer?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+  user?: { role?: string; access?: unknown; permissions?: unknown; username?: string };
+}): boolean => hasAdminPanelAccess(req) || hasCallingReportsAccess(req);
 
 /** True when this request should use dealer quotation APIs (own data), even if JWT role is hr. */
 export const isActingAsQuotationDealer = (req: {

@@ -84,7 +84,8 @@ import {
   isReleasedToInstallerListQuery
 } from '../constants/workflowQueues';
 import { extractS3KeyOrStoredPath } from '../utils/s3Service';
-import { isOpsAccountManagerView } from '../utils/userAccess';
+import { isOpsAccountManagerView, canAccessSection, hasAdminPanelAccess } from '../utils/userAccess';
+import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
 import { enforceWorkflowFieldWriteOrRespond } from '../utils/moduleFieldPermissions';
 import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 import {
@@ -134,6 +135,23 @@ import {
 const PRODUCT_CATALOG_CACHE_TTL_MS = 60 * 1000;
 let productCatalogCacheValue: any | null = null;
 let productCatalogCacheUntil = 0;
+
+/** Accounts Payment Management mutations — role OR access[] includes accounts. */
+const hasAccountsPaymentMutatorAccess = (req: Request): boolean => {
+  const role = req.user?.role;
+  if (role === 'account-management' || role === 'hr') return true;
+  if (role === 'admin' || role === 'super-admin' || role === 'super-admin-manager') return true;
+  if (req.dealer?.role === 'admin') return true;
+  if (hasAdminPanelAccess(req)) return true;
+  return canAccessSection(
+    {
+      role: req.user?.role ?? req.dealer?.role,
+      access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+      username: req.user?.username ?? req.dealer?.username
+    },
+    'accounts'
+  );
+};
 
 // Helper function to get product catalog
 const getProductCatalogData = async (): Promise<any> => {
@@ -2115,11 +2133,39 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     // Authorization is handled by middleware (authorizeDealerAdminOrVisitor)
     const { quotationId } = req.params;
     const where: any = { id: quotationId };
-    
-    const isAccountManager = isOpsAccountManagerView(req);
-    
-    // Check permissions
-    if (isAccountManager) {
+
+    const userAccess = {
+      role: req.user?.role ?? req.dealer?.role,
+      access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+      permissions: (req.user as any)?.permissions,
+      username: req.user?.username ?? req.dealer?.username
+    };
+    const role = String(req.user?.role || '').trim().toLowerCase();
+
+    /** Installer / metering / baldev / installation-team — must not be scoped to synthetic dealerId. */
+    const isWorkflowOpsViewer =
+      hasAdminPanelAccess(req) ||
+      req.dealer?.role === 'admin' ||
+      isInstallationTeamJwtRole(req.user?.role) ||
+      role === 'installer' ||
+      role === 'baldev' ||
+      role === 'confirmation' ||
+      role === 'metering' ||
+      role === 'meter' ||
+      role === 'metering-team' ||
+      role === 'mco' ||
+      canAccessSection(userAccess, 'installation') ||
+      canAccessSection(userAccess, 'metering') ||
+      canAccessSection(userAccess, 'final_confirmation');
+
+    const isAccountsViewer =
+      role === 'account-management' ||
+      role === 'hr' ||
+      canAccessSection(userAccess, 'accounts');
+
+    if (isWorkflowOpsViewer) {
+      // Full quotation by id (Installer Dashboard detail fill / operational queues).
+    } else if (isAccountsViewer || isOpsAccountManagerView(req)) {
       // Account managers can only see approved quotations
       where.status = 'approved';
     } else if (req.dealer && req.dealer.role !== 'admin') {
@@ -2433,7 +2479,8 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
       (req.user.role === 'admin' ||
         req.user.role === 'super-admin' ||
         req.user.role === 'super-admin-manager');
-    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
+    const isAccountsOps = hasAccountsPaymentMutatorAccess(req);
+    if (!req.dealer && !isAccountManager && !isInventoryAdmin && !isAccountsOps) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -2459,9 +2506,9 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
       return;
     }
 
-    // Admins / AM can update approved quotations; dealers only their own
+    // Admins / AM / accounts can update approved quotations; dealers only their own
     const where: any = { id: quotationId };
-    if (isAccountManager) {
+    if (isAccountManager || (isAccountsOps && !req.dealer)) {
       where.status = 'approved';
     } else if (req.dealer && req.dealer.role !== 'admin') {
       where.dealerId = req.dealer.id;
@@ -2476,6 +2523,13 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (
+      String(quotation.status || '').toLowerCase() === 'approved' &&
+      !(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))
+    ) {
       return;
     }
 
@@ -3233,7 +3287,8 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       (req.user.role === 'admin' ||
         req.user.role === 'super-admin' ||
         req.user.role === 'super-admin-manager');
-    if (!req.dealer && !isAccountManager && !isInventoryAdmin) {
+    const isAccountsOps = hasAccountsPaymentMutatorAccess(req);
+    if (!req.dealer && !isAccountManager && !isInventoryAdmin && !isAccountsOps) {
       res.status(401).json({
         success: false,
         error: { code: 'AUTH_003', message: 'User not authenticated' }
@@ -3296,11 +3351,11 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       return;
     }
 
-    // Account managers are allowed to edit pricing for approved quotations
+    // Account managers / accounts access edit pricing for approved quotations
 
     // Admins can update all quotations, dealers only their own
     const where: any = { id: quotationId };
-    if (isAccountManager) {
+    if (isAccountManager || (isAccountsOps && !req.dealer)) {
       where.status = 'approved';
     } else if (req.dealer && req.dealer.role !== 'admin') {
       where.dealerId = req.dealer.id;
@@ -3315,6 +3370,13 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (
+      String(quotation.status || '').toLowerCase() === 'approved' &&
+      !(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))
+    ) {
       return;
     }
 
@@ -3602,12 +3664,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     // Only rewrite phases when the client explicitly sent a phase array (Final Settlement does not).
     const hasPhasePayload = Array.isArray(phasePayload);
 
-    const role = req.user?.role;
-    const isAccountManager = role === 'account-management' || role === 'hr';
-    const isInventoryAdmin = role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
-    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-
-    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+    if (!hasAccountsPaymentMutatorAccess(req)) {
       res.status(403).json({
         success: false,
         error: {
@@ -3914,12 +3971,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
  */
 export const submitQuotationFinalSettlement = async (req: Request, res: Response): Promise<void> => {
   try {
-    const role = req.user?.role;
-    const isAccountManager = role === 'account-management' || role === 'hr';
-    const isInventoryAdmin =
-      role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
-    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+    if (!hasAccountsPaymentMutatorAccess(req)) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -3955,6 +4007,10 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))) {
       return;
     }
 
@@ -4067,12 +4123,7 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
  */
 export const revertQuotationFinalSettlement = async (req: Request, res: Response): Promise<void> => {
   try {
-    const role = req.user?.role;
-    const isAccountManager = role === 'account-management' || role === 'hr';
-    const isInventoryAdmin =
-      role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
-    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+    if (!hasAccountsPaymentMutatorAccess(req)) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -4090,6 +4141,10 @@ export const revertQuotationFinalSettlement = async (req: Request, res: Response
         success: false,
         error: { code: 'RES_001', message: 'Quotation not found' }
       });
+      return;
+    }
+
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))) {
       return;
     }
 
@@ -4269,13 +4324,8 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
       return;
     }
 
-    // Account-management/admin only; dealer-admin JWT kept for backward compatibility.
-    const role = req.user?.role;
-    const isAccountManager = role === 'account-management';
-    const isInventoryAdmin =
-      role === 'admin' || role === 'super-admin' || role === 'super-admin-manager';
-    const isQuotationAdmin = req.dealer && req.dealer.role === 'admin';
-    if (!isAccountManager && !isInventoryAdmin && !isQuotationAdmin) {
+    // Account-management / accounts access / admin; dealer-admin JWT kept for backward compatibility.
+    if (!hasAccountsPaymentMutatorAccess(req)) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -4292,6 +4342,11 @@ export const updateQuotationInstallationRelease = async (req: Request, res: Resp
       return;
     }
 
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation))) {
+      return;
+    }
+
+    const role = req.user?.role;
     const isRetrieve =
       installationReadyForInstaller === false &&
       isRetrieveFromInstallationRequest(body as Record<string, unknown>);

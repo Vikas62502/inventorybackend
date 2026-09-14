@@ -18,11 +18,26 @@ const optionalProfileFields = {
   address: z
     .object({
       street: z.string().optional(),
+      streetAddress: z.string().optional(),
+      street_address: z.string().optional(),
       city: z.string().optional(),
       state: z.string().optional(),
       pincode: z.string().optional()
     })
-    .optional()
+    .optional(),
+  address_street: z.string().optional(),
+  address_city: z.string().optional(),
+  address_state: z.string().optional(),
+  address_pincode: z.string().optional(),
+  addressStreet: z.string().optional(),
+  addressCity: z.string().optional(),
+  addressState: z.string().optional(),
+  addressPincode: z.string().optional(),
+  street: z.string().optional(),
+  streetAddress: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  pincode: z.string().optional()
 };
 
 const opsRoleEnum = z.enum([

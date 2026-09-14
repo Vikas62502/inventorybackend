@@ -237,13 +237,13 @@ function getSheetsClient() {
     const credentials = JSON.parse(json)
     const auth = new google.auth.GoogleAuth({
       credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"], // write-back (not .readonly)
     })
     return google.sheets({ version: "v4", auth })
   }
   const auth = new google.auth.GoogleAuth({
     keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"], // write-back (not .readonly)
   })
   return google.sheets({ version: "v4", auth })
 }
@@ -255,6 +255,24 @@ function getSheetsClient() {
 // Optional: platform, campaign_name, ad_name, created_time (+ ops remarks/KW/calls if present)
 // Ignore (raw only): ad_id, adset_*, campaign_id, form_id, is_organic
 // Assign: hr_sheet_sources.dealer_ids + active_cap — not sheet columns
+// -----------------------------------------------------------------------------
+
+/**
+ * DB → Sheet write-back (P0 / REQUIRED §AQ) — utils/hrSheetWriteBack.ts
+ *
+ * After assign + calling CRM updates, call scheduleHrLeadSheetWriteBack(leadId).
+ * Scope: https://www.googleapis.com/auth/spreadsheets (Editor on spreadsheet).
+ *
+ * Writes (create header if missing; match truncated headers e.g. Assignment Stat):
+ *   Assigned Dealer ← dealer name
+ *   Assignment Status / Assignment Stat ← status (queued / completed / …)
+ *   Remarks, 1st/2nd Call Response ← call fields
+ *   Final Decision + reason ← final decision
+ *   Address ← lead address (+ city/state); create Address column if missing
+ *
+ * Never overwrite Meta columns (id, phone_number, full_name, ad_*, …).
+ */
+
 // -----------------------------------------------------------------------------
 
 export const SOCIAL_SHEET_COLUMN_MAP = {
@@ -558,10 +576,11 @@ export async function postHrSheetSourceSync(req, res) {
 /**
  * POST /api/hr/sheet-sources/sync-all
  * Cron / ops: sync every **enabled** sheet source for the default spreadsheet.
- * Recommended schedule: every 15 minutes.
+ * Recommended schedule: every **30 minutes** (§AZ).
  * Emits `calling:uploads-updated` once at the end (reason: sheet_auto_sync).
  *
  * Auth: HR JWT, or header `x-cron-secret` matching CRON_SECRET env.
+ * In-process cron: `utils/sheetAutoSyncCron.ts` (started from server.ts).
  * Register BEFORE /:id routes.
  */
 export async function postHrSheetSourcesSyncAll(req, res) {
@@ -598,6 +617,9 @@ export async function postHrSheetSourcesSyncAll(req, res) {
     syncedAt: new Date().toISOString(),
     count: results.length,
   })
+  // Prefer rooms (P0): io.to("stream:hr").to("stream:dealers").emit(...)
+  // Manual :id/sync → reason "sheet_sync" + sourceId; see REQUIRED §AP / emitSheetSyncUploadsUpdated
+
 
   return res.json({
     success: true,
@@ -644,7 +666,8 @@ router.post("/hr/sheet-sources/:id/sync", authHr, postHrSheetSourceSync)
 router.get("/hr/sheet-sources/:id/leads", authHr, getHrSheetSourceLeads)
 
 Cron (required for auto-sync — Google Sheets cannot push via socket):
-  */15 * * * *  POST /hr/sheet-sources/sync-all  (header x-cron-secret)
+  every 30 min  POST /hr/sheet-sources/sync-all  (header x-cron-secret)
+  In-process: utils/sheetAutoSyncCron.ts (SHEET_AUTO_SYNC_CRON / INTERVAL_MS)
   After each run emit calling:uploads-updated so HR/dealer UIs refresh.
 */
 

@@ -139,6 +139,7 @@ or same fields on `installation-status` / `workflow-status` while stage is `mete
 |-----|-----------|
 | `waaree_540_560_bifacial` | 540-560W Bifacial |
 | `waaree_580_700_bifacial_topcon` | 580-700W Bifacial Topcon |
+| **`waaree_580_620`** | **580W - 620W N-Type Bifacial Topcon** (replaces legacy `waaree_580_630`; legacy still accepted on GET/PATCH and mapped → new key on save) |
 | `adani_540_580_bifacial` | 540-580W Bifacial |
 | `adani_610_625_bifacial_topcon` | 610-625W Bifacial Topcon |
 | `premier_600_625_bifacial_topcon` | 600-625W Bifacial Topcon |
@@ -1717,8 +1718,378 @@ Assign from `dealer_ids` on the source (`active_cap` 1/dealer) — **not** from 
 | Routes (incl. discover prune + sync-all) | Done |
 | Meta column map (P0) | Done |
 | `active_cap` assign after sync | Done |
-| Socket `calling:uploads-updated` | Done |
+| Socket `calling:uploads-updated` → `stream:hr` + `stream:dealers` | Done |
 | Cron + `CRON_SECRET` | Done (ops must schedule) |
+
+---
+
+## §AP — Social Media sheet socket (`calling:uploads-updated`) — Sep 2026
+
+**Status: implemented** — SPA listens on `stream:hr`; without this emit the Social Media tab will not live-update.
+
+### Emit after every sheet sync (P0)
+
+After `POST /hr/sheet-sources/:id/sync` and `POST /hr/sheet-sources/sync-all` (**after assign completes**):
+
+```js
+io.to("stream:hr").to("stream:dealers").emit("calling:uploads-updated", {
+  reason: "sheet_sync",        // manual Sync now
+  // reason: "sheet_auto_sync", // cron / sync-all
+  spreadsheetId,
+  sourceId,                    // optional for single-tab sync
+  syncedAt: new Date().toISOString(),
+})
+```
+
+Optional companion:
+
+```js
+io.to("stream:backend").emit("backend:mutation", {
+  domain: "hr",
+  path: "/hr/sheet-sources/sync", // or sync-all
+  reason: "sheet_sync",
+})
+```
+
+| Do | Don’t |
+|----|--------|
+| Same event name as CSV: `calling:uploads-updated` | Rename / invent `sheet:*` only |
+| Rooms: `stream:hr` + `stream:dealers` | Emit only to admin |
+| Emit on cron sync-all too | Skip emit on cron |
+| Emit after assign completes | Emit before DB commit |
+
+### Also required
+
+| Item | Detail |
+|------|--------|
+| `POST /hr/sheet-sources/sync-all` | Enabled tabs only; auth HR JWT or `x-cron-secret` |
+| Cron every 15 min | Calls sync-all then emits socket above |
+| Env | `CRON_SECRET`, Google SA credentials |
+
+**Code:** `emitSheetSyncUploadsUpdated` in `utils/realtime.ts`; used by `utils/hrSheetSourceSync.ts` + `controllers/hrSheetSourceController.ts`.
+
+---
+
+## §AQ — Google Sheet write-back (assigned dealer + calling status) — Sep 2026
+
+**Status: implemented** — `writeBackHrLeadToSheet` in `utils/hrSheetWriteBack.ts` · HANDOFF §42 · FE HANDOFF §41.
+
+### 1. Google auth (write)
+
+```text
+scope: https://www.googleapis.com/auth/spreadsheets
+```
+
+Share spreadsheet with SA email as **Editor**.
+
+### 2. After every CRM update on a sheet lead
+
+Call `writeBackHrLeadToSheet` / `scheduleHrLeadSheetWriteBack(leadId)` when:
+
+- Round-robin / `active_cap` assign
+- Dealer calling submit / complete / reschedule / not interested
+- Claim / PATCH assignment / customer note on sheet leads
+
+Match row by `external_id` (sheet `id`) or `sheet_row_index`.
+
+### 3. Columns to write (add header if missing)
+
+| Sheet column | DB / CRM field |
+|--------------|----------------|
+| `Assigned Dealer` | dealer display name |
+| `Assignment Status` / truncated `Assignment Stat` | `status` (queued / completed / …) |
+| `lead_status` | CREATED → IN_PROGRESS → COMPLETED |
+| `Remarks` / `Remarks 2` | `remarks` |
+| `1st Call Response` / truncated `1st Call Respon` | call notes |
+| `2nd Call Response` | call notes |
+| `Final Decision` + reason | `final_decision` / `final_decision_reason` |
+| `Address` | lead address (+ city/state); **create column if missing** |
+
+Header match: exact normalize **or** prefix match for truncated headers (`findHeaderIndex` in `hrSheetWriteBack.ts`).
+
+Do **not** change Meta columns (`id`, `phone_number`, `full_name`, ads, …).
+
+### 4. Pull sync rule
+
+For existing `(sheet_source_id, external_id)`: **do not** clear CRM assignment/status from blank sheet cells. Only import **new** Meta rows.
+
+### Still required (if not live)
+
+| Item | Detail |
+|------|--------|
+| Emit `calling:uploads-updated` | → `stream:hr` + `stream:dealers` after sync (§AP) |
+| Cron 15 min | `POST /hr/sheet-sources/sync-all` + socket |
+
+---
+
+## §AR — Users: Active-only + Update User 403 + read/write — Sep 2026
+
+**Status: implemented** — HANDOFF **§46** · `BACKEND_USER_ACCESS.ts` · `BACKEND_USER_FIELD_PERMISSIONS.ts`
+
+### 1. Fix Update User 403
+
+On Admin Users routes, use **`requireAccess("admin")` / `hasAdminPanelAccess`** (not `role === "admin"` only):
+
+- `PUT /admin/dealers/:id`
+- `PUT /admin/account-managers/:id`
+- `PUT /admin/visitors/:id` (+ create / list / get / password / delete)
+
+Allow if JWT role is admin/super-admin **or** `access[]` includes `"admin"`.
+
+Persist on update: `access`, `officeLocation`, `moduleFieldPermissions`.
+
+### 2. Active users only
+
+`GET /admin/dealers` (+ account-managers / visitors):
+
+| Query | Behaviour |
+|-------|-----------|
+| default | `isActive=true` only |
+| `?includeInactive=true` | include pending/inactive |
+
+### 3. Data by access + read / write
+
+| Field | Rule |
+|-------|------|
+| `access[]` | Which dashboards they can open |
+| `moduleFieldPermissions.<module>.level = read` | View only — GET OK; PATCH/POST → 403 |
+| `level = write` | View + edit |
+| `level = none` | No module data |
+| `scope` | Filter rows: `everyone` / `selected_users` / `office_only` |
+
+Person only gets rows matching their scope (`resolveWorkflowListScopeFilter` on admin quotation lists).
+
+### 4. Accounts read-only (Payment Management)
+
+When `moduleFieldPermissions.accounts.level === "read"` (and `access` includes `"accounts"`):
+
+| Allow | Deny (403 `FIELD_PERMISSION_DENIED`) |
+|-------|--------------------------------------|
+| GET approved quotations / payment list | PUT/PATCH installments, PATCH payment-details / site-cost |
+| Read-only GETs | updateSiteCost / site cost writes |
+| | Release / retrieve installer |
+| | Final settlement submit / revert; pricing/discount on approved; subsidy mutate |
+
+Enforcement: `enforceWorkflowFieldWriteOrRespond(req, res, 'accounts', quotation)` / `canWriteWorkflowModule('accounts')` — same pattern as Installation / Metering.
+
+`level: write` → full Manage + cost of site / profit mutations. `level: none` → no Accounts access.
+
+Login / user CRUD echo `moduleFieldPermissions.accounts`.
+
+### QA checklist
+
+- [x] Update User as Admin succeeds (no Admin-access toast)
+- [x] GET dealers default = Active only
+- [x] Read user can open dashboard but cannot mutate (`enforceWorkflowFieldWriteOrRespond`)
+- [x] Write user can mutate
+- [x] `selected_users` / `office_only` filter list GETs
+- [x] Accounts `level: read` → mutation APIs 403; login echoes `accounts.level: "read"`
+- [x] Metering `level: read` → Update User **200**; login echoes `metering.level: "read"`; metering mutate → 403
+
+**Code:** `utils/userAccess.ts` (`requireAccess`, `hasAdminPanelAccess`, `resolveAccess` keeps role-admin), `middleware/authQuotation.ts` (`authorizeAdmin`), `controllers/adminVisitorController.ts`, `controllers/adminController.ts`, `controllers/accountManagerController.ts`, `controllers/quotationController.ts` (payment / settlement / release), `controllers/workflowController.ts` (metering write), `utils/moduleFieldPermissions.ts`
+
+---
+
+## §AS — Users: Address save + echo on Edit — Sep 2026
+
+**Status: implemented** — HANDOFF **§47** · `BACKEND_USER_ACCESS.ts` (`normalizeDealerAddress`) · `utils/userAddress.ts`
+
+### Problem
+
+Admin → Users → Update User saves Address, but re-open Edit shows empty Street / City / State / Pincode — GET listed flat `addressStreet` columns without nested `address`.
+
+### P0
+
+1. **PUT** `/admin/dealers/:id` — persist from nested `{ address: { street, city, state, pincode } }` **or** flat `address_street` / `addressStreet` / top-level `street` / `streetAddress` / `city` / `state` / `pincode`. Writes flat DB columns.
+2. **GET** `/admin/dealers` (+ PUT response) — always return nested `address` via `normalizeDealerAddress` / `publicDealerForApi`. Never `address: null` when columns have values.
+3. Same pattern for **account-managers** / **visitors**.
+
+### QA checklist
+
+- [x] PUT with nested `address` persists
+- [x] PUT with flat `address_street`… persists
+- [x] GET returns nested `address` (Edit form prefills)
+- [x] AM / visitor GET/PUT echo nested `address`
+
+**Code:** `utils/userAddress.ts`, `utils/userAccess.ts` (`publicDealerForApi`, `publicAccountManagerForApi`), `utils/userProfile.ts`, `controllers/adminController.ts` (`updateDealer`), validations (dealer / AM / visitor)
+
+---
+
+## §AT — Calling queue priority: in_progress → Social Media — Sep 2026
+
+**Status: implemented** — HANDOFF **§4.5.3** · `BACKEND_CALLING_QUEUE_CURRENT.ts` · `findOpenAssignedLeadsForDealer`
+
+### Product
+
+1. Open `in_progress` (CSV or social) stays Current until Submit (§E.1).
+2. **Start Call not done** → Current / `nextLead` = Social / Google Sheet when any exist — not older raw CSV.
+3. After Submit → next head prefers social/sheet over older CSV assigned rows.
+
+### Routes
+
+`GET /api/dealers/me/calling-queue/next` and `/current` — both via `buildCallableQueue` → `findOpenAssignedLeadsForDealer` + social-first pool claim.
+
+### ORDER BY
+
+```
+in_progress first
+→ Social / sheet (sheetSourceId OR sourceType in google_sheet|social_media|social|meta OR Meta platform)
+→ Raw CSV / other assigned
+→ FIFO COALESCE(assignedAt, createdAt) ASC
+```
+
+Same order on **pool claim** (`promoteQueuedLeadIfSlotAvailable`). When nothing is `in_progress` and only raw is assigned at slot cap, still claim one social from the pool.
+
+### Also
+
+Echo `customerNote` + `customer_note`, and always `sheet_source_id` / `source_type` / `platform` on lead objects.
+
+### QA checklist
+
+- [x] `in_progress` always Current while open
+- [x] **Start Call not done** + social assigned/pool → `lead` / `nextLead` is social
+- [x] After completion → next head is social/sheet when present
+- [x] No social → oldest assigned / pool as before
+- [x] `customerNote` + social identity fields echoed on GET
+
+**Code:** `controllers/callingLeadController.ts` (`findOpenAssignedLeadsForDealer`, `promoteQueuedLeadIfSlotAvailable`, `sortCallableQueueLeads`, `mapAssignmentRowsToQueueLeads`)
+
+---
+
+## §AU — Update User Zod: `visitor_reports` + `calling_reports` — Sep 2026
+
+**Status: implemented** — HANDOFF **§46** · `BACKEND_USER_ACCESS.ts` · `utils/userAccess.ts` `ACCESS_KEYS`
+
+### Symptom
+
+Update User toast: `Invalid option: expected one of "admin"|"quotation"|…` when Visitor Reports / Calling Reports checked.
+
+### P0
+
+Zod `access` / `permissions` enum includes **`visitor_reports`** and **`calling_reports`**. Persist JSONB; echo on GET/login.
+
+### QA checklist
+
+- [x] Update User with Visitor Reports and/or Calling Reports → **200**
+- [x] GET dealer / login returns those keys in `access`
+
+**Code:** `utils/userAccess.ts`, `validations/dealerValidations.ts`, `validations/accountManagerValidations.ts`
+
+---
+
+## §AV — Field access round-trip (`moduleFieldPermissions`) — Sep 2026
+
+**Status: implemented** — HANDOFF **§46** · `BACKEND_USER_ACCESS.ts` `publicDealer` / `updateDealer`
+
+### Product
+
+When Accounts / Installation / Metering / Final confirmation / Visitor Reports / Calling Reports are checked, **Field access** (Write / Read only / No access) + **Which to access** must save and return on reopen + login.
+
+### P0
+
+1. PUT dealers / AM / visitors — accept `moduleFieldPermissions` (alias `modulePermissions`) + `officeLocation`
+2. Module keys: `accounts` \| `installation` \| `metering` \| `final_confirmation` \| `visitor_reports` \| `calling_reports`
+3. `level`: `none` \| `read` \| `write`
+4. Echo on GET list / GET one / login via `workflowPermissionFieldsForApi` / `publicDealerForApi`
+5. Enforce: `read` → mutations 403; `write` → view + mutate (existing workflow modules)
+
+### QA checklist
+
+- [x] Set Accounts/Installation/Metering Write → Update User **200**
+- [x] Re-open Edit → Field access from API
+- [x] Login returns same `moduleFieldPermissions`
+- [x] `visitor_reports` / `calling_reports` in access + mfp → **200**
+
+**Code:** `utils/moduleFieldPermissions.ts`, `validations/workflowPermissionValidations.ts`, `controllers/adminController.ts`, `controllers/accountManagerController.ts`, `controllers/adminVisitorController.ts`
+
+---
+
+## §AW — Workspace: Visitor Reports + Calling Reports cards — Sep 2026
+
+**Status: implemented** — HANDOFF **§46** · `BACKEND_USER_ACCESS.ts`
+
+### P0
+
+1. Persist + login echo `visitor_reports` / `calling_reports` in `access` (§AU).
+2. Echo `moduleFieldPermissions` for those keys (§AV).
+3. **Do not** set primary `role` to `admin` only because reports are granted — `primaryRoleFromAccess` skips report keys.
+
+### QA checklist
+
+- [x] Update User with both report checkboxes → **200**, GET returns both keys
+- [x] Login → `access` includes both keys
+- [x] Primary role unchanged when only reports added
+
+---
+
+## §AX — Calling / Visitor Reports API auth (`AUTH_004`) — Sep 2026
+
+**Status: implemented** — HANDOFF **§46** · `requireAnyAccess`
+
+### P0
+
+| Route | Allow |
+|-------|--------|
+| `GET /api/admin/calling-actions` (+ summary, queue/actions, leads/actions) | `admin` \| `calling_reports` \| `hr` |
+| `GET /api/hr/calling-actions` (+ aliases) | same |
+| `GET /api/admin/visits` | `admin` \| `visitor_reports` |
+| `GET /api/admin/dealers` | `admin` \| `calling_reports` (employee filter) |
+
+GET-only for report grants. Mutations stay behind `authorizeAdmin` / `requireAdminAccess`.
+
+### QA checklist
+
+- [x] `calling_reports` only → Calling Reports actions **200**
+- [x] `visitor_reports` only → Visitor Reports list **200**
+- [x] Full admin still works
+- [x] Report users cannot PUT Users / mutate quotations
+
+**Code:** `utils/userAccess.ts` (`requireAnyAccess`), `routes/adminRoutes.ts`, `routes/hrLeadRoutes.ts`, `controllers/visitController.ts`, `controllers/adminController.ts`
+
+---
+
+## §AY — Dealer Call Analytics live update after Current Lead action — Sep 2026
+
+**Status: implemented** — HANDOFF **§48** / **§5**
+
+### P0
+
+1. PATCH outcome → persist one history row; echo `callingAction` / `actionRow` in response.
+2. Emit `calling:actions-updated` to **stream:dealers** + **stream:hr** (`reason: dealer_action`).
+3. GET `…/calling-actions?range=all&limit=2000` returns full history with ISO `actionAt` + social identity fields.
+
+### QA checklist
+
+- [x] Submit outcome → PATCH **200** + row persisted
+- [x] GET calling-actions includes that row
+- [x] Socket emit to dealers + hr
+- [x] Stable action `id` (no double-count)
+
+**Code:** `utils/realtime.ts` (`emitCallingActionsUpdated`), `controllers/callingLeadController.ts`
+
+---
+
+## §AZ — HR Social Media auto-sync every 30 min — Sep 2026
+
+**Status: implemented** — HANDOFF **§48** / **§AP** · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts`
+
+### P0
+
+| Item | Detail |
+|------|--------|
+| Route | `POST /api/hr/sheet-sources/sync-all` |
+| Auth | HR JWT or `x-cron-secret: $CRON_SECRET` |
+| Cron | In-process every **30 min** (`sheetAutoSyncCron`) + optional external crontab |
+| Socket | `calling:uploads-updated` `{ reason: "sheet_auto_sync" }` |
+| Manual | `POST …/:id/sync` → `sheet_sync` |
+
+### QA checklist
+
+- [x] sync-all with cron secret → **200** + socket
+- [x] In-process cron starts with server
+- [x] Manual Sync now still works
+
+**Code:** `controllers/hrSheetSourceController.ts` (`runHrSheetSourcesSyncAll`), `utils/sheetAutoSyncCron.ts`, `server.ts`
 
 ---
 

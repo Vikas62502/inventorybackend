@@ -1,21 +1,27 @@
 // @ts-nocheck
 /**
  * =============================================================================
- * BACKEND REFERENCE — Calling queue /current + /next (Jul 2026 §15)
+ * BACKEND REFERENCE — Calling queue /current + /next (§AT / §4.5.3)
  * =============================================================================
  *
- * Live blocker (fixed):
- *   GET /calling-queue/current → was 500; dealers with Assigned>0 saw empty Current Lead.
+ * Live: controllers/callingLeadController.ts
+ *   GET /api/dealers/me/calling-queue/current
+ *   GET /api/dealers/me/calling-queue/next
  *
- * Root cause (Harshita):
- *   buildCallableQueue filtered by batch assignedDealers JSON eligibility, hiding
- *   rows already assigned to the dealer. Fix: return dealer-owned assigned/in_progress
- *   first WITHOUT eligibility; eligibility only for pool claim.
+ * Product rules:
+ *   1) in_progress → stays Current until Submit (§E.1)
+ *   2) Start Call NOT done → Current / nextLead = Social / Google Sheet when any
+ *      exist for this dealer (assigned or claimable pool) — never older raw CSV
+ *   3) After Submit → same social-before-raw priority for next head
  *
- * Shipped:
- *   getDealerCallingQueueCurrent / Next — always 200; lead at root + data
- *   Aliases: /me/lead-queue/next|current
- *   assign-unassigned: see BACKEND_ASSIGN_UNASSIGNED.ts
+ * Implementation:
+ *   findOpenAssignedLeadsForDealer — SQL ORDER BY in_progress, social, FIFO
+ *   promoteQueuedLeadIfSlotAvailable — same social CASE on pool claim;
+ *     preferSocialOverAssignedRaw claims social even when raw fills the slot cap
+ *   sortCallableQueueLeads — JS safety net matching SPA dealerAssignedQueue
+ *   resolveDealerQueueHead — in_progress wins; else first sorted (social)
  *
- * Handoff: BACKEND_CHANGES_HANDOFF.md §15
+ * Echo on every lead (§AN): sheet_source_id, source_type, platform (+ Meta fields)
+ *
+ * Docs: REQUIRED §AT · HANDOFF §4.5.3
  */
