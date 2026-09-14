@@ -84,6 +84,7 @@
 | 72 | High | Calling/Visitor Reports API auth (`AUTH_004`) | **Done** | §46 / REQUIRED §AX / `requireAnyAccess` |
 | 73 | High | Dealer Call Analytics live (`calling:actions-updated`) | **Done** | §48 / REQUIRED §AY |
 | 74 | High | Sheet auto-sync cron every **30 min** | **Done** | §48 / REQUIRED §AZ / `sheetAutoSyncCron` |
+| 75 | High | PDF panel range clear on uncheck (INA / Waaree) | **Done** | §49 / REQUIRED §BA |
 
 **Deploy before QA:**
 
@@ -190,7 +191,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 - **Tata DCR** (`panelBrand` = `Tata`, `systemType` = `dcr`) + `tata_530_570`: inverter line on PDF is **“As per the set”** even if DB stores catalog placeholders (`Vsole/Xwatt`, `5kW`).
 - TOPCon note on PDF only when range key contains `topcon` (e.g. `adani_610_625_bifacial_topcon`).
 
-**Clear on uncheck (critical):** `PATCH …/products` uses `buildQuotationProductPdfPersistFieldsForUpdate` — only overwrites PDF columns **present in the body**. Explicit `""`, `null`, or `false` clears DB values; omitted keys are left unchanged (no accidental wipe on partial PATCH).
+**Clear on uncheck (critical):** `PATCH …/products` uses `buildQuotationProductPdfPersistFieldsForUpdate` — only overwrites PDF columns **present in the body**. Explicit `""`, `null`, or `false` clears DB values; omitted keys are left unchanged (no accidental wipe on partial PATCH). **§BA / §49:** empty key (or `pdfUsePanelSizeRange: false`) must clear a prior INA/Waaree range — explicit clear on either camel or snake wins (no `??` resurrect).
 
 **Snake_case aliases:** `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
 
@@ -3077,4 +3078,28 @@ On AUTH_004, Update User may soft-save Metering read-only in browser localStorag
 1. Submit Connected/Not Connected → PATCH 200 + action row; GET calling-actions includes it; second tab updates via socket.
 2. Wait ~30 min (or trigger sync-all) → sheet tabs refresh + `calling:uploads-updated`.
 3. Manual Sync now still works.
+
+---
+
+## 49. PDF panel range optional + clear on save (§BA) — Sep 2026
+
+**Status: implemented** — REQUIRED **§BA** · FE HANDOFF **§48**
+
+Optional PDF range checkboxes (INA 500–600W Bifacial, Waaree 580W N-Topcon / related). Unchecked → exact entered W on PDF; cleared keys must stick on save/reopen.
+
+| Item | Detail |
+|------|--------|
+| PATCH `…/products` | `pdfPanelRangeKey` / `pdf_panel_range_key` `""` or `null` → DB `null` (explicit clear wins over sibling alias) |
+| Flag | `pdfUsePanelSizeRange: false` → also clears primary key if key omitted |
+| Defaults | **No** auto `ina_500_600_bifacial` when key empty |
+| GET | `quotationProductPdfDisplayApiFields` echoes `null` key + `false` flag |
+| Allowlist | `ina_500_600_bifacial`, `waaree_580_620`, `waaree_580_700_bifacial_topcon` (+ §X) |
+
+**Code:** `utils/quotationProductPdfDisplay.ts` (`buildQuotationProductPdfPersistFieldsForUpdate`)
+
+### QA
+
+1. INA + 620W + Show 500–600W unchecked → save → GET empty key → reopen unchecked → PDF **620W**.
+2. Waaree Topcon unchecked + custom W → same.
+3. Checked range still round-trips allowlisted key.
 

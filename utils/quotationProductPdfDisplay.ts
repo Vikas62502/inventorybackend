@@ -231,6 +231,34 @@ const pdfFieldWasSent = (
   snake: string
 ): boolean => Object.prototype.hasOwnProperty.call(products, camel) || Object.prototype.hasOwnProperty.call(products, snake);
 
+/** True when the client sent an explicit clear (`""` / `null`) for a range key field. */
+const isExplicitPdfRangeClear = (value: unknown): boolean =>
+  value === null || value === '' || (typeof value === 'string' && value.trim() === '');
+
+/**
+ * Resolve a panel range key from camel/snake aliases on PATCH (§BA).
+ * Explicit `""` / `null` on either alias clears — do not fall through via `??` to a
+ * stale sibling value (e.g. camel `""` + leftover snake `ina_500_600_bifacial`).
+ * Never invent defaults (INA must not become `ina_500_600_bifacial` when key is empty).
+ */
+const resolveSentPdfPanelRangeKey = (
+  products: Record<string, unknown>,
+  camel: string,
+  snake: string
+): string | null => {
+  const camelSent = Object.prototype.hasOwnProperty.call(products, camel);
+  const snakeSent = Object.prototype.hasOwnProperty.call(products, snake);
+  if (camelSent && isExplicitPdfRangeClear(products[camel])) return null;
+  if (snakeSent && isExplicitPdfRangeClear(products[snake])) return null;
+  if (camelSent) {
+    return normalizePanelRangeKey(products[camel], { canonicalizeLegacy: true });
+  }
+  if (snakeSent) {
+    return normalizePanelRangeKey(products[snake], { canonicalizeLegacy: true });
+  }
+  return null;
+};
+
 /** Persisted PDF-only columns for create (defaults booleans to false when omitted). */
 export const buildQuotationProductPdfPersistFields = (
   products: Record<string, unknown> | null | undefined
@@ -249,7 +277,9 @@ export const buildQuotationProductPdfPersistFields = (
 
 /**
  * PATCH /products — only overwrite PDF columns the client sent.
- * Explicit null / "" / false clears stored values (checkbox uncheck fix).
+ * Explicit null / "" / false clears stored values (checkbox uncheck / §BA).
+ * When `pdfUsePanelSizeRange` is explicitly false, also clear `pdfPanelRangeKey`
+ * if the key fields were omitted (unchecked range → exact W on PDF).
  */
 export const buildQuotationProductPdfPersistFieldsForUpdate = (
   products: Record<string, unknown> | null | undefined
@@ -276,19 +306,30 @@ export const buildQuotationProductPdfPersistFieldsForUpdate = (
       false;
   }
   if (pdfFieldWasSent(products, 'pdfPanelRangeKey', 'pdf_panel_range_key')) {
-    out.pdfPanelRangeKey =
-      normalizePanelRangeKey(products.pdfPanelRangeKey, { canonicalizeLegacy: true }) ??
-      normalizePanelRangeKey(products.pdf_panel_range_key, { canonicalizeLegacy: true });
+    out.pdfPanelRangeKey = resolveSentPdfPanelRangeKey(
+      products,
+      'pdfPanelRangeKey',
+      'pdf_panel_range_key'
+    );
   }
   if (pdfFieldWasSent(products, 'pdfDcrPanelRangeKey', 'pdf_dcr_panel_range_key')) {
-    out.pdfDcrPanelRangeKey =
-      normalizePanelRangeKey(products.pdfDcrPanelRangeKey, { canonicalizeLegacy: true }) ??
-      normalizePanelRangeKey(products.pdf_dcr_panel_range_key, { canonicalizeLegacy: true });
+    out.pdfDcrPanelRangeKey = resolveSentPdfPanelRangeKey(
+      products,
+      'pdfDcrPanelRangeKey',
+      'pdf_dcr_panel_range_key'
+    );
   }
   if (pdfFieldWasSent(products, 'pdfNonDcrPanelRangeKey', 'pdf_non_dcr_panel_range_key')) {
-    out.pdfNonDcrPanelRangeKey =
-      normalizePanelRangeKey(products.pdfNonDcrPanelRangeKey, { canonicalizeLegacy: true }) ??
-      normalizePanelRangeKey(products.pdf_non_dcr_panel_range_key, { canonicalizeLegacy: true });
+    out.pdfNonDcrPanelRangeKey = resolveSentPdfPanelRangeKey(
+      products,
+      'pdfNonDcrPanelRangeKey',
+      'pdf_non_dcr_panel_range_key'
+    );
+  }
+
+  // Unchecked "Show …W range" without key fields still must wipe a prior key (§BA).
+  if (out.pdfUsePanelSizeRange === false && out.pdfPanelRangeKey === undefined) {
+    out.pdfPanelRangeKey = null;
   }
 
   return out;

@@ -2093,6 +2093,38 @@ GET-only for report grants. Mutations stay behind `authorizeAdmin` / `requireAdm
 
 ---
 
+## §BA — PDF panel range unchecked must persist (clear on save) — Sep 2026
+
+**Status: implemented** — HANDOFF **§49** (FE HANDOFF **§48**) · Quotation PDF optional INA / Waaree ranges
+
+### Product
+
+INA **500–600W Bifacial** and Waaree **580W N-Topcon** (and related) range checkboxes are **optional**. Unchecked → PDF shows the entered wattage (e.g. **620W**), not the range label. Save + reopen must stay unchecked.
+
+| Field | Unchecked | Checked |
+|-------|-----------|---------|
+| `pdfPanelRangeKey` / `pdf_panel_range_key` | `""` or `null` — **clear** previous | e.g. `ina_500_600_bifacial`, `waaree_580_620`, `waaree_580_700_bifacial_topcon` |
+| `pdfUsePanelSizeRange` | `false` | `true` |
+
+### P0 rules
+
+1. `PATCH …/quotations/{id}/products` — empty/`null` key **must overwrite** the old DB value (do not ignore empties; do not resurrect via camel/snake `??` fallback).
+2. Explicit `pdfUsePanelSizeRange: false` also clears `pdfPanelRangeKey` when key fields are omitted.
+3. **Do not** default INA → `ina_500_600_bifacial` when the key is missing/empty.
+4. GET list/detail must echo cleared state (`pdfPanelRangeKey: null`, `pdfUsePanelSizeRange: false`) via `quotationProductPdfDisplayApiFields`.
+5. Allowlist includes `ina_500_600_bifacial`, `waaree_580_620`, `waaree_580_700_bifacial_topcon` (+ existing §X keys).
+
+### QA checklist
+
+- [x] INA + 620W + range unchecked → PATCH → GET empty key + `pdfUsePanelSizeRange: false`
+- [x] Reopen stays unchecked; PDF shows **620W**, not 500–600W range
+- [x] Same for Waaree 580 Topcon unchecked + custom W
+- [x] Checked range still persists allowlisted keys
+
+**Code:** `utils/quotationProductPdfDisplay.ts` (`buildQuotationProductPdfPersistFieldsForUpdate`, `resolveSentPdfPanelRangeKey`), `controllers/quotationController.ts` (products PATCH), Zod `PDF_PANEL_RANGE_KEYS` in `validations/quotationValidations.ts`
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
