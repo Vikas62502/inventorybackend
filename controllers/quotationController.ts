@@ -41,6 +41,14 @@ import {
   touchQuotationProposalValidity
 } from '../utils/quotationApiJson';
 import {
+  parseOptionalFinalSettlementRemarks,
+  readFinalSettlementRemarksFromRow
+} from '../utils/quotationSettlementRemarks';
+import {
+  buildFinalSettlementPersistPatch,
+  isFinalSettlementRequestBody
+} from '../utils/quotationFinalSettlementPersist';
+import {
   pushSystemHistory,
   swapSystemHistory,
   shouldPushSystemHistoryOnProductsPatch,
@@ -545,13 +553,23 @@ const effectivePayableCap = (
   return Math.max(0, base - discount);
 };
 
-/** Resolve remaining + status for API. Never claim completed / remaining 0 while unpaid gap exists. */
+/** Resolve remaining + status for API. Never claim completed / remaining 0 while unpaid gap exists.
+ * When final settlement is applied (flag or amount > 0), always echo remaining 0 + completed (§BB). */
 const reconcilePaymentRemainingStatus = (
   storedStatus: string | null | undefined,
   amountAfterSubsidy: number,
   totalPaid: number,
-  discountAmount: number
+  discountAmount: number,
+  finalSettlementApplied?: boolean,
+  finalSettlementAmount?: number | null
 ): { remaining: number; paymentStatus: 'pending' | 'partial' | 'completed' } => {
+  const settlementAmountNum = Number(finalSettlementAmount);
+  const settled =
+    finalSettlementApplied === true ||
+    (Number.isFinite(settlementAmountNum) && settlementAmountNum > 0);
+  if (settled) {
+    return { remaining: 0, paymentStatus: 'completed' };
+  }
   const remaining = remainingPaymentAgainstSubtotal(
     amountAfterSubsidy,
     totalPaid,
@@ -1763,7 +1781,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           q.paymentStatus,
           amountAfterSubsidyNum,
           totalPaidForRemaining,
-          Number((q as any).discountAmount || 0)
+          Number((q as any).discountAmount || 0),
+          !!(q as any).finalSettlementApplied,
+          (q as any).finalSettlementAmount != null
+            ? Number((q as any).finalSettlementAmount)
+            : null
         );
       const qAny = q as any;
       const row =
@@ -1853,6 +1875,21 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         remainingAmount,
         paymentDate: q.paymentDate,
         paymentStatus: reconciledPaymentStatus,
+        // §BB — explicit PostgreSQL settlement echo (FE requires these on every GET)
+        finalSettlementApplied: !!(q as any).finalSettlementApplied,
+        final_settlement_applied: !!(q as any).finalSettlementApplied,
+        finalSettlementAmount:
+          (q as any).finalSettlementAmount != null
+            ? Number((q as any).finalSettlementAmount)
+            : null,
+        final_settlement_amount:
+          (q as any).finalSettlementAmount != null
+            ? Number((q as any).finalSettlementAmount)
+            : null,
+        finalSettlementRemarks: readFinalSettlementRemarksFromRow(row),
+        final_settlement_remarks: readFinalSettlementRemarksFromRow(row),
+        discountAmount: Number((q as any).discountAmount || 0),
+        discount_amount: Number((q as any).discountAmount || 0),
         installments: phaseRows,
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
@@ -1912,7 +1949,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           stateSubsidy: pricing.stateSubsidy,
           finalSettlementApplied: !!(q as any).finalSettlementApplied,
           finalSettlementAmount:
-            (q as any).finalSettlementAmount != null ? Number((q as any).finalSettlementAmount) : null
+            (q as any).finalSettlementAmount != null ? Number((q as any).finalSettlementAmount) : null,
+          finalSettlementRemarks: readFinalSettlementRemarksFromRow(row)
         } : null,
         status: q.status,
         discount: q.discount,
@@ -2288,7 +2326,17 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       ...pricing,
       subtotal: Number(quotation.subtotal || pricing.subtotal),
       totalAmount: Number(quotation.totalAmount || pricing.totalAmount),
-      finalAmount: Number(quotation.finalAmount || pricing.finalAmount)
+      finalAmount: Number(quotation.finalAmount || pricing.finalAmount),
+      discountAmount: Number((quotation as any).discountAmount ?? pricing.discountAmount ?? 0),
+      discount_amount: Number((quotation as any).discountAmount ?? pricing.discountAmount ?? 0),
+      finalSettlementApplied: !!(quotation as any).finalSettlementApplied,
+      finalSettlementAmount:
+        (quotation as any).finalSettlementAmount != null
+          ? Number((quotation as any).finalSettlementAmount)
+          : null,
+      finalSettlementRemarks: readFinalSettlementRemarksFromRow(
+        quotation.get({ plain: true }) as unknown as Record<string, unknown>
+      )
     };
 
     const amountAfterSubsidyNum = resolveAmountAfterSubsidy(quotation as any, products);
@@ -2298,7 +2346,11 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         quotation.paymentStatus,
         amountAfterSubsidyNum,
         totalPaidForRemaining,
-        Number((quotation as any).discountAmount || 0)
+        Number((quotation as any).discountAmount || 0),
+        !!(quotation as any).finalSettlementApplied,
+        (quotation as any).finalSettlementAmount != null
+          ? Number((quotation as any).finalSettlementAmount)
+          : null
       );
     const rowById = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     const resolvedDocsAny = (resolvedDocuments || {}) as any;
@@ -2451,6 +2503,21 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         remainingAmount,
         paymentDate: quotation.paymentDate,
         paymentStatus: reconciledPaymentStatus,
+        // §BB — explicit PostgreSQL settlement echo (POST confirm + hard refresh)
+        finalSettlementApplied: !!(quotation as any).finalSettlementApplied,
+        final_settlement_applied: !!(quotation as any).finalSettlementApplied,
+        finalSettlementAmount:
+          (quotation as any).finalSettlementAmount != null
+            ? Number((quotation as any).finalSettlementAmount)
+            : null,
+        final_settlement_amount:
+          (quotation as any).finalSettlementAmount != null
+            ? Number((quotation as any).finalSettlementAmount)
+            : null,
+        finalSettlementRemarks: readFinalSettlementRemarksFromRow(rowById),
+        final_settlement_remarks: readFinalSettlementRemarksFromRow(rowById),
+        discountAmount: Number((quotation as any).discountAmount || 0),
+        discount_amount: Number((quotation as any).discountAmount || 0),
         installments: phaseRows,
         paymentPhases: phaseRows,
         payment_phases: phaseRows,
@@ -2622,40 +2689,84 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
           ? discount
           : discount;
 
-    await quotation.update({
-      discount: discountFieldToStore,
-      totalAmount: newTotalAmount,
-      finalAmount: newFinalAmount,
-      discountAmount: computedDiscountAmount,
-      remainingAmount: remainingPaymentAgainstSubtotal(
+    const body = (req.body || {}) as Record<string, unknown>;
+    const settling = isFinalSettlementRequestBody(body);
+    if (settling && rejectLoanOnlyFinalSettlement(quotation, res)) {
+      return;
+    }
+
+    if (settling) {
+      const phases = await loadQuotationPaymentPhases(quotation.id);
+      const paid =
+        phases.length > 0
+          ? sumPhasePaidAmounts(phases)
+          : Number(quotation.paidAmount || 0);
+      const { actorId } = resolveActorForAudit(req);
+      const patch = buildFinalSettlementPersistPatch({
         amountAfterSubsidy,
-        Number(quotation.paidAmount || 0),
-        computedDiscountAmount
-      ),
-      validUntil: computeQuotationValidUntil(new Date())
-    });
+        paid,
+        existingDiscount: Number((quotation as any).discountAmount || 0),
+        body: {
+          ...body,
+          discountAmount: computedDiscountAmount,
+          discount: computedDiscountAmount
+        },
+        actorId
+      });
+      await quotation.update({
+        ...patch,
+        paymentPlanUpdatedBy: actorId,
+        paymentPlanUpdatedAt: new Date(),
+        validUntil: computeQuotationValidUntil(new Date())
+      });
+    } else {
+      await quotation.update({
+        discount: discountFieldToStore,
+        totalAmount: newTotalAmount,
+        finalAmount: newFinalAmount,
+        discountAmount: computedDiscountAmount,
+        remainingAmount: remainingPaymentAgainstSubtotal(
+          amountAfterSubsidy,
+          Number(quotation.paidAmount || 0),
+          computedDiscountAmount
+        ),
+        validUntil: computeQuotationValidUntil(new Date())
+      });
+    }
 
     await quotation.reload();
+    const qAny = quotation as any;
 
     res.json({
       success: true,
       data: {
         id: quotation.id,
         discount: quotation.discount,
-        discountAmount: Number((quotation as any).discountAmount || computedDiscountAmount),
-        discount_amount: Number((quotation as any).discountAmount || computedDiscountAmount),
+        discountAmount: Number(qAny.discountAmount || computedDiscountAmount),
+        discount_amount: Number(qAny.discountAmount || computedDiscountAmount),
         finalAmount: quotation.finalAmount,
-        remaining: (quotation as any).remainingAmount ?? null,
-        remainingAmount: (quotation as any).remainingAmount ?? null,
+        remaining: settling ? 0 : (qAny.remainingAmount ?? null),
+        remainingAmount: settling ? 0 : (qAny.remainingAmount ?? null),
+        paymentStatus: settling ? 'completed' : qAny.paymentStatus,
+        finalSettlementApplied: !!qAny.finalSettlementApplied,
+        final_settlement_applied: !!qAny.finalSettlementApplied,
+        finalSettlementAmount:
+          qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null,
+        finalSettlementRemarks: readFinalSettlementRemarksFromRow(
+          quotation.get({ plain: true }) as unknown as Record<string, unknown>
+        ),
         pricing: {
           subtotal: savedSubtotal,
-          totalAmount: newTotalAmount,
-          finalAmount: newFinalAmount,
+          totalAmount: settling ? Number(qAny.totalAmount || newTotalAmount) : newTotalAmount,
+          finalAmount: settling ? Number(qAny.finalAmount || newFinalAmount) : newFinalAmount,
           amountAfterSubsidy: amountAfterSubsidy,
-          discountAmount: computedDiscountAmount,
+          discountAmount: Number(qAny.discountAmount || computedDiscountAmount),
           totalSubsidy: totalSubsidy,
           centralSubsidy: centralSubsidy,
-          stateSubsidy: stateSubsidy
+          stateSubsidy: stateSubsidy,
+          finalSettlementApplied: !!qAny.finalSettlementApplied,
+          finalSettlementAmount:
+            qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null
         },
         ...quotationProposalDateApiFields(quotation)
       }
@@ -3200,10 +3311,19 @@ export const restoreQuotationCurrent = async (req: Request, res: Response): Prom
     }
 
     const { quotationId } = req.params;
+    const body = (req.body || {}) as Record<string, unknown>;
+
+    // §BB — SPA finalizeSettlement fallback: PATCH /quotations/:id with settlement body
+    if (
+      String(req.method || '').toUpperCase() === 'PATCH' &&
+      isFinalSettlementRequestBody(body)
+    ) {
+      await submitQuotationFinalSettlement(req, res);
+      return;
+    }
 
     // PATCH fallback from FE restoreAsCurrent: require { isCurrent: true }.
     if (String(req.method || '').toUpperCase() === 'PATCH') {
-      const body = (req.body || {}) as Record<string, unknown>;
       const wantsCurrent =
         body.isCurrent === true ||
         body.is_current === true ||
@@ -3214,7 +3334,8 @@ export const restoreQuotationCurrent = async (req: Request, res: Response): Prom
           success: false,
           error: {
             code: 'VAL_001',
-            message: 'PATCH /quotations/:id supports restoring current via { isCurrent: true }'
+            message:
+              'PATCH /quotations/:id supports restoring current via { isCurrent: true }, or Final Settlement fields (finalSettlementApplied / remaining 0)'
           }
         });
         return;
@@ -3381,12 +3502,9 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     }
 
     // Settlement-style pricing write (FE finalizeSettlement fallback): block loan-only.
-    // FE sends { discountAmount, totalAmount, finalAmount } without subtotal.
-    const looksLikeSettlementPricing =
-      req.body?.finalSettlementApplied === true ||
-      (String(req.body?.paymentStatus || '').toLowerCase() === 'completed' &&
-        (Number(req.body?.remaining) === 0 || Number(req.body?.remainingAmount) === 0)) ||
-      (discountAmount !== undefined && subtotal === undefined && finalAmount !== undefined);
+    const looksLikeSettlementPricing = isFinalSettlementRequestBody(
+      (req.body || {}) as Record<string, unknown>
+    ) || (discountAmount !== undefined && subtotal === undefined && finalAmount !== undefined);
     if (looksLikeSettlementPricing && rejectLoanOnlyFinalSettlement(quotation, res)) {
       return;
     }
@@ -3500,9 +3618,25 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       bodyTotalAmount !== undefined ? Number(bodyTotalAmount) : calculatedTotalAmount;
 
     // Validate finalAmount against stored/computed amountAfterSubsidy
+    // Settlement writes may send AM-cap finalAmount that differs slightly from AAS — clamp, don't 400.
     if (
       newFinalAmount !== undefined &&
-      (isNaN(newFinalAmount) || newFinalAmount < 0 || newFinalAmount > amountAfterSubsidy + 0.01)
+      (isNaN(newFinalAmount) || newFinalAmount < 0)
+    ) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Final amount must be a non-negative number',
+          details: [{ field: 'finalAmount', message: 'Final amount must be a non-negative number' }]
+        }
+      });
+      return;
+    }
+    if (
+      !looksLikeSettlementPricing &&
+      newFinalAmount !== undefined &&
+      newFinalAmount > amountAfterSubsidy + 0.01
     ) {
       res.status(400).json({
         success: false,
@@ -3522,14 +3656,18 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       normalizedPaidAmount !== undefined
         ? normalizedPaidAmount
         : Number(quotation.paidAmount || 0);
-    const computedRemaining = remainingPaymentAgainstSubtotal(
-      amountAfterSubsidy,
-      paidForRemaining,
-      effectiveDiscountAmount
-    );
-    const normalizedPaymentStatus = normalizedPaidAmount !== undefined
-      ? calculatePaymentStatus(normalizedPaidAmount, persistedTotalAmount)
-      : (paymentStatus ?? undefined);
+    const computedRemaining = looksLikeSettlementPricing
+      ? 0
+      : remainingPaymentAgainstSubtotal(
+          amountAfterSubsidy,
+          paidForRemaining,
+          effectiveDiscountAmount
+        );
+    const normalizedPaymentStatus = looksLikeSettlementPricing
+      ? 'completed'
+      : normalizedPaidAmount !== undefined
+        ? calculatePaymentStatus(normalizedPaidAmount, persistedTotalAmount)
+        : (paymentStatus ?? undefined);
 
     // When absolute discountAmount is set, store it on `discount` too (FE: discount > 100 ⇒ INR).
     const discountFieldToStore =
@@ -3537,20 +3675,51 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
         ? effectiveDiscountAmount
         : newDiscount;
 
-    // Update quotation
-    await quotation.update({
-      subtotal: newSubtotal,
-      discount: discountFieldToStore,
-      totalAmount: persistedTotalAmount,
-      finalAmount: finalFinalAmount,
-      discountAmount: effectiveDiscountAmount,
-      remainingAmount: computedRemaining,
-      paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
-      paidAmount: normalizedPaidAmount !== undefined ? normalizedPaidAmount : quotation.paidAmount,
-      paymentDate: paymentDate !== undefined ? paymentDate : quotation.paymentDate,
-      paymentStatus: normalizedPaymentStatus !== undefined ? normalizedPaymentStatus : quotation.paymentStatus,
-      validUntil: computeQuotationValidUntil(new Date())
-    });
+    const { actorId } = resolveActorForAudit(req);
+
+    // Update quotation — settlement-shaped PATCH /pricing uses shared §BB persist helper.
+    if (looksLikeSettlementPricing) {
+      const phases = await loadQuotationPaymentPhases(quotation.id);
+      const paid =
+        phases.length > 0 ? sumPhasePaidAmounts(phases) : paidForRemaining;
+      const settlementPatch = buildFinalSettlementPersistPatch({
+        amountAfterSubsidy,
+        paid,
+        existingDiscount: Number((quotation as any).discountAmount || 0),
+        body: {
+          ...((req.body || {}) as Record<string, unknown>),
+          discountAmount:
+            newDiscountAmount !== undefined ? effectiveDiscountAmount : (req.body as any)?.discountAmount,
+          finalAmount:
+            newFinalAmount !== undefined
+              ? Math.min(amountAfterSubsidy, newFinalAmount)
+              : calculatedFinalAmount
+        },
+        actorId
+      });
+      await quotation.update({
+        subtotal: newSubtotal,
+        ...settlementPatch,
+        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+        paidAmount: normalizedPaidAmount !== undefined ? normalizedPaidAmount : quotation.paidAmount,
+        paymentDate: paymentDate !== undefined ? paymentDate : quotation.paymentDate,
+        validUntil: computeQuotationValidUntil(new Date())
+      });
+    } else {
+      await quotation.update({
+        subtotal: newSubtotal,
+        discount: discountFieldToStore,
+        totalAmount: persistedTotalAmount,
+        finalAmount: finalFinalAmount,
+        discountAmount: effectiveDiscountAmount,
+        remainingAmount: computedRemaining,
+        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+        paidAmount: normalizedPaidAmount !== undefined ? normalizedPaidAmount : quotation.paidAmount,
+        paymentDate: paymentDate !== undefined ? paymentDate : quotation.paymentDate,
+        paymentStatus: normalizedPaymentStatus !== undefined ? normalizedPaymentStatus : quotation.paymentStatus,
+        validUntil: computeQuotationValidUntil(new Date())
+      });
+    }
 
     // Update products with subsidies and/or the commercial flag if provided
     const commercialFlagProvided = commercialFlagDefinedInBody(req.body);
@@ -3584,8 +3753,8 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       }
     }
 
-    // Refresh quotation to get updated timestamp
     await quotation.reload();
+    const qPricingAny = quotation as any;
 
     res.json({
       success: true,
@@ -3594,7 +3763,16 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
         paymentMode: quotation.paymentMode,
         paidAmount: quotation.paidAmount ? Number(quotation.paidAmount) : null,
         paymentDate: quotation.paymentDate,
-        paymentStatus: quotation.paymentStatus,
+        paymentStatus: looksLikeSettlementPricing ? 'completed' : quotation.paymentStatus,
+        finalSettlementApplied: !!qPricingAny.finalSettlementApplied,
+        final_settlement_applied: !!qPricingAny.finalSettlementApplied,
+        finalSettlementAmount:
+          qPricingAny.finalSettlementAmount != null
+            ? Number(qPricingAny.finalSettlementAmount)
+            : null,
+        finalSettlementRemarks: readFinalSettlementRemarksFromRow(
+          quotation.get({ plain: true }) as unknown as Record<string, unknown>
+        ),
         pricing: {
           subtotal: newSubtotal,
           totalSubsidy: totalSubsidy,
@@ -3604,7 +3782,12 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
           discount: discountFieldToStore,
           discountAmount: effectiveDiscountAmount,
           totalAmount: persistedTotalAmount,
-          finalAmount: finalFinalAmount
+          finalAmount: finalFinalAmount,
+          finalSettlementApplied: !!qPricingAny.finalSettlementApplied,
+          finalSettlementAmount:
+            qPricingAny.finalSettlementAmount != null
+              ? Number(qPricingAny.finalSettlementAmount)
+              : null
         },
         discount: discountFieldToStore,
         discountAmount: effectiveDiscountAmount,
@@ -3691,25 +3874,33 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     }
 
     // Loan-only cannot apply Final Settlement (cash / mix only) — even via payment-details flag.
-    if (finalSettlementApplied === true && rejectLoanOnlyFinalSettlement(quotation, res)) {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const settlingRequest =
+      finalSettlementApplied === true || isFinalSettlementRequestBody(body);
+    if (settlingRequest && rejectLoanOnlyFinalSettlement(quotation, res)) {
       return;
     }
 
     const { actorId } = resolveActorForAudit(req);
-    const siteCostParsed = parseSiteCostFromBody(req.body as Record<string, unknown>);
+    const siteCostParsed = parseSiteCostFromBody(body);
     const siteCostFields =
       siteCostParsed !== undefined ? { siteCost: siteCostParsed } : {};
+    const settlementRemarksParsed = parseOptionalFinalSettlementRemarks(body);
     const settlementFields = {
       ...(finalSettlementAmount !== undefined
         ? { finalSettlementAmount: Number(finalSettlementAmount) }
         : {}),
-      ...(finalSettlementApplied !== undefined
+      ...(settlingRequest
         ? {
-            finalSettlementApplied: !!finalSettlementApplied,
-            ...(finalSettlementApplied
-              ? { finalSettlementAt: new Date(), finalSettlementBy: actorId }
-              : {})
+            finalSettlementApplied: true,
+            finalSettlementAt: new Date(),
+            finalSettlementBy: actorId
           }
+        : finalSettlementApplied !== undefined
+          ? { finalSettlementApplied: !!finalSettlementApplied }
+          : {}),
+      ...(settlementRemarksParsed !== undefined
+        ? { finalSettlementRemarks: settlementRemarksParsed }
         : {})
     };
 
@@ -3765,7 +3956,13 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         totalPaidAmount,
         discountAmt
       );
-      if (paymentStatusFromBody === 'completed' && reconciled.remaining > 0.01) {
+      const settlingNow = settlingRequest;
+      // Final settlement with phases: never VAL_013 — flag + remaining 0 must persist (§BB).
+      if (
+        paymentStatusFromBody === 'completed' &&
+        reconciled.remaining > 0.01 &&
+        !settlingNow
+      ) {
         res.status(400).json({
           success: false,
           error: {
@@ -3777,11 +3974,11 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         return;
       }
       const remainingStored =
-        paymentStatusFromBody === 'completed' && reconciled.remaining <= 0.01
+        settlingNow || (paymentStatusFromBody === 'completed' && reconciled.remaining <= 0.01)
           ? 0
           : reconciled.remaining;
       const resolvedPaymentStatus =
-        paymentStatusFromBody === 'completed' && reconciled.remaining <= 0.01
+        settlingNow || (paymentStatusFromBody === 'completed' && reconciled.remaining <= 0.01)
           ? 'completed'
           : paymentStatusFromBody !== undefined && paymentStatusFromBody !== null && reconciled.remaining <= 0.01
             ? paymentStatusFromBody
@@ -3793,6 +3990,19 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         .sort()
         .pop() || null;
 
+      // When settling via payment-details+phases, clear AAS payable via shared §BB helper.
+      let settlementDiscountPatch: Record<string, unknown> = {};
+      if (settlingNow) {
+        const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
+        settlementDiscountPatch = buildFinalSettlementPersistPatch({
+          amountAfterSubsidy: amountAfterSubsidyCap,
+          paid: totalPaidAmount,
+          existingDiscount: discountAmt,
+          body,
+          actorId
+        });
+      }
+
       await quotation.update({
         paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
         paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
@@ -3801,49 +4011,33 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
         paymentPhases: mergedPhases,
         remainingAmount: remainingStored,
+        ...settlementDiscountPatch,
         ...siteCostFields,
-        ...settlementFields,
+        ...(settlingNow ? {} : settlementFields),
         ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,
         paymentPlanUpdatedAt: new Date()
       });
-    } else if (finalSettlementApplied === true) {
-      // Flag-only Final Settlement (fallback attempt): persist the write-off itself so this
-      // call alone settles even if PATCH /pricing never ran. Do NOT touch installments; skip
-      // VAL_012; never reject with "cannot exceed remaining". Grow discount only up to
-      // amountAfterSubsidy − paid so payable never drops below paid (subtotal-vs-AAS mismatch).
-      // (Loan-only already rejected above when finalSettlementApplied === true.)
+    } else if (settlingRequest) {
+      // Flag-only / settlement-shaped Final Settlement (fallback): persist the write-off itself so
+      // this call alone settles even if PATCH /pricing never ran. Do NOT touch installments.
       const existingDiscount = Number((quotation as any).discountAmount || 0);
       const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
-      const paidAmt = Number(quotation.paidAmount || 0);
-      const discountToClear = Math.max(
-        0,
-        amountAfterSubsidyCap - Math.min(paidAmt, amountAfterSubsidyCap)
-      );
-      const newDiscount = Math.min(
-        amountAfterSubsidyCap,
-        Math.max(existingDiscount, discountToClear)
-      );
-      const newFinalAmount = Math.max(0, amountAfterSubsidyCap - newDiscount);
-      // Audit: record what AM asked to write off (may exceed applied discount in mismatch case).
-      const auditSettlement =
-        finalSettlementAmount !== undefined
-          ? Number(finalSettlementAmount)
-          : Math.max(0, amountAfterSubsidyCap - existingDiscount - paidAmt);
+      const paidAmt =
+        Number(quotation.paidAmount || 0) ||
+        sumPhasePaidAmounts(await loadQuotationPaymentPhases(quotation.id));
+      const settlementPatch = buildFinalSettlementPersistPatch({
+        amountAfterSubsidy: amountAfterSubsidyCap,
+        paid: paidAmt,
+        existingDiscount,
+        body,
+        actorId
+      });
 
       await quotation.update({
         paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
         paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-        discount: newDiscount,
-        discountAmount: newDiscount,
-        totalAmount: newFinalAmount,
-        finalAmount: newFinalAmount,
-        remainingAmount: 0,
-        paymentStatus: 'completed',
-        finalSettlementApplied: true,
-        finalSettlementAmount: auditSettlement,
-        finalSettlementAt: new Date(),
-        finalSettlementBy: actorId,
+        ...settlementPatch,
         ...siteCostFields,
         ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
         paymentPlanUpdatedBy: actorId,
@@ -3917,13 +4111,15 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         : sumPhasePaidAmounts(responsePhases);
     const amountAfterSubsidyOut = resolveAmountAfterSubsidy(quotation as any);
     const discountAmtOut = Number((quotation as any).discountAmount || 0);
+    const qAny = quotation as any;
     const reconciledOut = reconcilePaymentRemainingStatus(
       quotation.paymentStatus,
       amountAfterSubsidyOut,
       totalPaidSaved,
-      discountAmtOut
+      discountAmtOut,
+      !!qAny.finalSettlementApplied,
+      qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null
     );
-    const qAny = quotation as any;
     const subsidyChequesOut = Array.isArray(qAny.subsidyCheques) ? qAny.subsidyCheques : [];
     const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
 
@@ -3968,6 +4164,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
 /**
  * Optional one-shot Final Settlement: write off remaining as discountAmount, mark completed.
  * Prefer FE sequence (PATCH pricing → status-only payment-details); this is a convenience.
+ * §BB: always persist applied/amount/completed/remaining=0 so hard refresh stays settled.
  */
 export const submitQuotationFinalSettlement = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3980,14 +4177,26 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
     }
 
     const { quotationId } = req.params;
-    // Client sends amount / settlementAmount / discountAmount (all = remaining); accept any.
-    const amountRaw =
-      req.body?.amount ??
-      req.body?.settlementAmount ??
-      req.body?.discountAmount ??
-      req.body?.finalSettlementAmount;
-    const amount = amountRaw !== undefined && amountRaw !== null ? Number(amountRaw) : NaN;
-    if (!Number.isFinite(amount) || amount < 0) {
+    const body = (req.body || {}) as Record<string, unknown>;
+    // Client sends amount / settlementAmount (= Remaining write-off) and absolute discountAmount.
+    const settlementRaw =
+      body.amount ?? body.settlementAmount ?? body.finalSettlementAmount;
+    const absoluteDiscountRaw = body.discountAmount;
+    const settlementParsed =
+      settlementRaw !== undefined && settlementRaw !== null && String(settlementRaw).trim() !== ''
+        ? Number(settlementRaw)
+        : NaN;
+    const absoluteDiscountParsed =
+      absoluteDiscountRaw !== undefined &&
+      absoluteDiscountRaw !== null &&
+      String(absoluteDiscountRaw).trim() !== ''
+        ? Number(absoluteDiscountRaw)
+        : NaN;
+
+    if (
+      (!Number.isFinite(settlementParsed) || settlementParsed < 0) &&
+      (!Number.isFinite(absoluteDiscountParsed) || absoluteDiscountParsed < 0)
+    ) {
       res.status(400).json({
         success: false,
         error: {
@@ -4015,32 +4224,56 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
     }
 
     const phases = await loadQuotationPaymentPhases(quotation.id);
+    const remarksParsed = parseOptionalFinalSettlementRemarks(body);
 
-    // Idempotent: if already settled, echo current state instead of double-adding discount.
+    const buildSettlementResponse = (qRow: typeof quotation, phaseRows: typeof phases) => {
+      const qAny = qRow as any;
+      const remarksEcho = readFinalSettlementRemarksFromRow(
+        qRow.get({ plain: true }) as unknown as Record<string, unknown>
+      );
+      return {
+        id: qRow.id,
+        discountAmount: Number(qAny.discountAmount || 0),
+        discount_amount: Number(qAny.discountAmount || 0),
+        remaining: 0,
+        remainingAmount: 0,
+        paymentStatus: 'completed' as const,
+        finalSettlementAmount:
+          qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null,
+        finalSettlementApplied: true,
+        final_settlement_applied: true,
+        finalSettlementAt: qAny.finalSettlementAt || null,
+        finalSettlementBy: qAny.finalSettlementBy || null,
+        finalSettlementRemarks: remarksEcho,
+        final_settlement_remarks: remarksEcho,
+        installments: phaseRows,
+        paymentPhases: phaseRows
+      };
+    };
+
+    // Idempotent: if already settled, optionally refresh remarks; never double-add discount.
+    // Also heal legacy rows that have applied=true but remainingAmount still null.
     if ((quotation as any).finalSettlementApplied === true) {
-      const qAny = quotation as any;
+      const heal: Record<string, unknown> = {};
+      if (remarksParsed !== undefined) heal.finalSettlementRemarks = remarksParsed;
+      const remRaw = (quotation as any).remainingAmount;
+      if (remRaw === null || remRaw === undefined || Number(remRaw) !== 0) {
+        heal.remainingAmount = 0;
+      }
+      if (String((quotation as any).paymentStatus || '').toLowerCase() !== 'completed') {
+        heal.paymentStatus = 'completed';
+      }
+      if (Object.keys(heal).length > 0) {
+        await quotation.update(heal);
+        await quotation.reload();
+      }
       res.json({
         success: true,
-        data: {
-          id: quotation.id,
-          discountAmount: Number(qAny.discountAmount || 0),
-          discount_amount: Number(qAny.discountAmount || 0),
-          remaining: 0,
-          remainingAmount: 0,
-          paymentStatus: 'completed',
-          finalSettlementAmount:
-            qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null,
-          finalSettlementApplied: true,
-          finalSettlementAt: qAny.finalSettlementAt || null,
-          finalSettlementBy: qAny.finalSettlementBy || null,
-          installments: phases,
-          paymentPhases: phases
-        }
+        data: buildSettlementResponse(quotation, phases)
       });
       return;
     }
 
-    // Optional server guard: Final Settlement only for Cash / Cash + loan (mix).
     if (rejectLoanOnlyFinalSettlement(quotation, res)) return;
 
     const paid =
@@ -4052,60 +4285,55 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
       (quotation as any).products
     );
     const existingDiscount = Number((quotation as any).discountAmount || 0);
-    const currentRemaining = remainingPaymentAgainstSubtotal(
+    const { actorId } = resolveActorForAudit(req);
+    const patch = buildFinalSettlementPersistPatch({
       amountAfterSubsidy,
       paid,
-      existingDiscount
-    );
+      existingDiscount,
+      body,
+      actorId
+    });
 
-    // Settlement = "mark completed, remaining 0". Do NOT reject when the server already
-    // thinks the balance is cleared (subtotal-vs-amountAfterSubsidy mismatch: AM may show a
-    // small gap the server's amountAfterSubsidy doesn't). Store the requested amount for audit,
-    // but only grow discount up to (amountAfterSubsidy − paid) so payable never drops below paid.
-    const requestedSettlement = amount > 0 ? amount : currentRemaining;
-    const maxDiscountAddable = Math.max(0, currentRemaining); // = amountAfterSubsidy − paid − existingDiscount, floored at 0
-    const discountAdded = Math.min(requestedSettlement, maxDiscountAddable);
-    const newDiscountAmount = existingDiscount + discountAdded;
-    const newTotalAmount = Math.max(0, amountAfterSubsidy - newDiscountAmount);
-    const { actorId } = resolveActorForAudit(req);
+    logInfo('Final settlement persist', {
+      quotationId,
+      paid,
+      amountAfterSubsidy,
+      existingDiscount,
+      newDiscountAmount: patch.discountAmount,
+      requestedSettlement: patch.finalSettlementAmount,
+      remarks: patch.finalSettlementRemarks ?? remarksParsed ?? null
+    });
 
     await quotation.update({
-      discountAmount: newDiscountAmount,
-      discount: newDiscountAmount,
-      totalAmount: newTotalAmount,
-      finalAmount: newTotalAmount,
-      remainingAmount: 0,
-      paymentStatus: 'completed',
-      // Audit: record what AM asked to write off, even if the server could only apply `discountAdded`.
-      finalSettlementAmount: requestedSettlement,
-      finalSettlementApplied: true,
-      finalSettlementAt: new Date(),
-      finalSettlementBy: actorId,
+      ...patch,
       paymentPlanUpdatedBy: actorId,
       paymentPlanUpdatedAt: new Date(),
       validUntil: computeQuotationValidUntil(new Date())
     });
 
     await quotation.reload();
-    const responsePhases = await loadQuotationPaymentPhases(quotation.id);
     const qAny = quotation as any;
+    if (qAny.finalSettlementApplied !== true) {
+      logError(
+        'Final settlement flag did not persist after update',
+        new Error('finalSettlementApplied not true after reload'),
+        { quotationId }
+      );
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'SYS_001',
+          message:
+            'Settlement write did not persist finalSettlementApplied — check quotations.finalSettlementApplied column mapping'
+        }
+      });
+      return;
+    }
 
+    const responsePhases = await loadQuotationPaymentPhases(quotation.id);
     res.json({
       success: true,
-      data: {
-        id: quotation.id,
-        discountAmount: Number(qAny.discountAmount || 0),
-        discount_amount: Number(qAny.discountAmount || 0),
-        remaining: 0,
-        remainingAmount: 0,
-        paymentStatus: 'completed',
-        finalSettlementAmount: Number(qAny.finalSettlementAmount || requestedSettlement),
-        finalSettlementApplied: true,
-        finalSettlementAt: qAny.finalSettlementAt || null,
-        finalSettlementBy: qAny.finalSettlementBy || null,
-        installments: responsePhases,
-        paymentPhases: responsePhases
-      }
+      data: buildSettlementResponse(quotation, responsePhases)
     });
   } catch (error) {
     logError('Submit final settlement error', error, { quotationId: req.params.quotationId });
@@ -4216,11 +4444,12 @@ export const revertQuotationFinalSettlement = async (req: Request, res: Response
       remainingAmount,
       paymentStatus,
 
-      // Clear settlement audit fields
+      // Clear settlement audit fields + remarks (§BB)
       finalSettlementApplied: false,
       finalSettlementAmount: 0,
       finalSettlementAt: null,
       finalSettlementBy: null,
+      finalSettlementRemarks: null,
 
       paymentPlanUpdatedBy: actorId,
       paymentPlanUpdatedAt: new Date()
@@ -4244,6 +4473,8 @@ export const revertQuotationFinalSettlement = async (req: Request, res: Response
         finalSettlementApplied: false,
         finalSettlementAt: null,
         finalSettlementBy: null,
+        finalSettlementRemarks: null,
+        final_settlement_remarks: null,
         installments: responsePhases,
         paymentPhases: responsePhases
       }

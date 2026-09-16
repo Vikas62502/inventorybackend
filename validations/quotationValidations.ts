@@ -348,7 +348,19 @@ export const createQuotationSchema = z.preprocess(
 export const updateDiscountSchema = z.object({
   // ≤100 = percentage; >100 = absolute INR (Final Settlement / quotation edit convention).
   discount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
-  discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional()
+  discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  // §BB — SPA finalizeSettlement fallback may send these on PATCH /discount
+  finalSettlementApplied: booleanOrString.optional(),
+  final_settlement_applied: booleanOrString.optional(),
+  finalSettlementAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  final_settlement_amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  paymentStatus: paymentStatusEnum.optional(),
+  remaining: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  remainingAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  remarks: z.string().max(10000).optional().nullable(),
+  settlementRemarks: z.string().max(10000).optional().nullable(),
+  finalSettlementRemarks: z.string().max(10000).optional().nullable(),
+  final_settlement_remarks: z.string().max(10000).optional().nullable()
 }).refine((data) => data.discount !== undefined || data.discountAmount !== undefined, {
   message: 'Either discount or discountAmount must be provided'
 });
@@ -386,6 +398,17 @@ export const updatePricingSchema = z.object({
   paidAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Payment date must be in YYYY-MM-DD format').optional(),
   paymentStatus: paymentStatusEnum.optional(),
+  // §BB — SPA finalizeSettlement fallback (do not strip these in validate middleware)
+  remaining: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  remainingAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  finalSettlementApplied: booleanOrString.optional(),
+  final_settlement_applied: booleanOrString.optional(),
+  finalSettlementAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  final_settlement_amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+  remarks: z.string().max(10000).optional().nullable(),
+  settlementRemarks: z.string().max(10000).optional().nullable(),
+  finalSettlementRemarks: z.string().max(10000).optional().nullable(),
+  final_settlement_remarks: z.string().max(10000).optional().nullable(),
   // Keep commercial flags after Zod parse (validate middleware replaces req.body).
   pdfCommercialSet: booleanOrString.optional(),
   pdf_commercial_set: booleanOrString.optional(),
@@ -440,6 +463,18 @@ export const updatePaymentDetailsSchema = z
     final_settlement_amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
     finalSettlementApplied: booleanOrString.optional(),
     final_settlement_applied: booleanOrString.optional(),
+    /** §BB SPA fallbacks may also send write-off / absolute discount on payment-details */
+    amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    settlementAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    discountAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    discount_amount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    discount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    finalAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
+    /** §BB optional settlement remarks (aliases) */
+    remarks: z.string().max(10000).optional().nullable(),
+    settlementRemarks: z.string().max(10000).optional().nullable(),
+    finalSettlementRemarks: z.string().max(10000).optional().nullable(),
+    final_settlement_remarks: z.string().max(10000).optional().nullable(),
     replaceInstallments: z.boolean().optional(),
     replace: z.boolean().optional(),
     phases: z.array(rawPaymentPhaseSchema).optional(),
@@ -466,7 +501,11 @@ export const updatePaymentDetailsSchema = z
         data.finalSettlementAmount !== undefined ||
         data.final_settlement_amount !== undefined ||
         data.finalSettlementApplied !== undefined ||
-        data.final_settlement_applied !== undefined;
+        data.final_settlement_applied !== undefined ||
+        data.amount !== undefined ||
+        data.settlementAmount !== undefined ||
+        data.discountAmount !== undefined ||
+        data.discount_amount !== undefined;
       const hasSiteCost =
         data.siteCost !== undefined ||
         data.site_cost !== undefined ||
@@ -631,7 +670,12 @@ export const finalSettlementSchema = z.object({
   paymentStatus: paymentStatusEnum.optional(),
   remaining: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
   remainingAmount: numberOrStringNumber.pipe(z.number().nonnegative()).optional(),
-  finalSettlementApplied: booleanOrString.optional()
+  finalSettlementApplied: booleanOrString.optional(),
+  /** §BB optional remarks — first non-empty of these is persisted */
+  remarks: z.string().max(10000).optional().nullable(),
+  settlementRemarks: z.string().max(10000).optional().nullable(),
+  finalSettlementRemarks: z.string().max(10000).optional().nullable(),
+  final_settlement_remarks: z.string().max(10000).optional().nullable()
 }).refine(
   (data) =>
     data.amount !== undefined ||

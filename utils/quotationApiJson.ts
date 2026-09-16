@@ -408,6 +408,11 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
       : null;
   const finalSettlementAt = (q.finalSettlementAt ?? q.final_settlement_at ?? null) as string | Date | null;
   const finalSettlementBy = (q.finalSettlementBy ?? q.final_settlement_by ?? null) as string | null;
+  const finalSettlementRemarksRaw = q.finalSettlementRemarks ?? q.final_settlement_remarks ?? null;
+  const finalSettlementRemarks =
+    finalSettlementRemarksRaw == null || String(finalSettlementRemarksRaw).trim() === ''
+      ? null
+      : String(finalSettlementRemarksRaw).trim();
   return {
     paymentMode,
     payment_mode: paymentMode,
@@ -433,7 +438,9 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     finalSettlementAt,
     final_settlement_at: finalSettlementAt,
     finalSettlementBy,
-    final_settlement_by: finalSettlementBy
+    final_settlement_by: finalSettlementBy,
+    finalSettlementRemarks,
+    final_settlement_remarks: finalSettlementRemarks
   };
 }
 

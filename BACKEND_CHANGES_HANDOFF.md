@@ -84,7 +84,8 @@
 | 72 | High | Calling/Visitor Reports API auth (`AUTH_004`) | **Done** | §46 / REQUIRED §AX / `requireAnyAccess` |
 | 73 | High | Dealer Call Analytics live (`calling:actions-updated`) | **Done** | §48 / REQUIRED §AY |
 | 74 | High | Sheet auto-sync cron every **30 min** | **Done** | §48 / REQUIRED §AZ / `sheetAutoSyncCron` |
-| 75 | High | PDF panel range clear on uncheck (INA / Waaree) | **Done** | §49 / REQUIRED §BA |
+| 75 | High | PDF panel range clear on uncheck (INA / Waaree) | **Done** | §48.3 / REQUIRED §BA (FE HANDOFF §48) |
+| 76 | High | Final settlement → PostgreSQL Completed + Revert | **Done** | §49 / REQUIRED §BB |
 
 **Deploy before QA:**
 
@@ -108,6 +109,8 @@ yarn migrate
 | `20260817160000-add-non-dcr-waaree-125kw-pricing.js` | Merge Non-DCR Waaree 125kW @ ₹35,62,500 + catalog `125kW` / `705W` |
 | `20260821160000-add-calling-lead-id-to-quotations.js` | `quotations.calling_lead_id` for Customer Journey (§33 / §AE) |
 | `20260831160000-add-office-location-and-module-field-permissions.js` | `officeLocation` + `moduleFieldPermissions` on users; quotation office scope (§39 / §AL) |
+| `20260916120000-add-settlement-remarks-to-quotations.js` | Settlement columns + `finalSettlementRemarks` (§BB / §49) |
+| `20260916140000-heal-settled-remaining-zero.js` | Heal applied=true rows → `remainingAmount=0` + `paymentStatus=completed` |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -191,7 +194,7 @@ Optional: `TZ=Asia/Kolkata` if weekly HR reports must match SPA Mon–Sun in IST
 - **Tata DCR** (`panelBrand` = `Tata`, `systemType` = `dcr`) + `tata_530_570`: inverter line on PDF is **“As per the set”** even if DB stores catalog placeholders (`Vsole/Xwatt`, `5kW`).
 - TOPCon note on PDF only when range key contains `topcon` (e.g. `adani_610_625_bifacial_topcon`).
 
-**Clear on uncheck (critical):** `PATCH …/products` uses `buildQuotationProductPdfPersistFieldsForUpdate` — only overwrites PDF columns **present in the body**. Explicit `""`, `null`, or `false` clears DB values; omitted keys are left unchanged (no accidental wipe on partial PATCH). **§BA / §49:** empty key (or `pdfUsePanelSizeRange: false`) must clear a prior INA/Waaree range — explicit clear on either camel or snake wins (no `??` resurrect).
+**Clear on uncheck (critical):** `PATCH …/products` uses `buildQuotationProductPdfPersistFieldsForUpdate` — only overwrites PDF columns **present in the body**. Explicit `""`, `null`, or `false` clears DB values; omitted keys are left unchanged (no accidental wipe on partial PATCH). **§BA / FE HANDOFF §48:** empty key (or `pdfUsePanelSizeRange: false`) must clear a prior INA/Waaree range — explicit clear on either camel or snake wins (no `??` resurrect).
 
 **Snake_case aliases:** `pdf_panel_range_key`, `pdf_dcr_panel_range_key`, `pdf_non_dcr_panel_range_key`.
 
@@ -3081,7 +3084,7 @@ On AUTH_004, Update User may soft-save Metering read-only in browser localStorag
 
 ---
 
-## 49. PDF panel range optional + clear on save (§BA) — Sep 2026
+## 48.3 PDF panel range optional + clear on save (§BA) — Sep 2026
 
 **Status: implemented** — REQUIRED **§BA** · FE HANDOFF **§48**
 
@@ -3102,4 +3105,69 @@ Optional PDF range checkboxes (INA 500–600W Bifacial, Waaree 580W N-Topcon / r
 1. INA + 620W + Show 500–600W unchecked → save → GET empty key → reopen unchecked → PDF **620W**.
 2. Waaree Topcon unchecked + custom W → same.
 3. Checked range still round-trips allowlisted key.
+
+---
+
+## 49. Final settlement → PostgreSQL Completed + Revert (§BB) — Sep 2026
+
+**Status: implemented** — REQUIRED **§BB** · FE HANDOFF **§49** · `BACKEND_SETTLEMENT_REMARKS.md` · `BACKEND_FINAL_SETTLEMENT.ts` · `BACKEND_REVERT_SETTLEMENT.md`
+
+Persists Final Settlement in **PostgreSQL** so Account Management UI can:
+
+1. **Remaining ₹0**
+2. **Subtotal** original → strikethrough, show net (after discount `d`)
+3. **Hide Submit**, show **Revert only**
+4. Stay **Completed** after hard refresh (no browser session bridge)
+
+### Migration
+
+Idempotent: `20260916120000-add-settlement-remarks-to-quotations.js`  
+(This DB uses camelCase columns; spec SQL may show `final_settlement_*`.)
+
+| Column | Purpose |
+|--------|---------|
+| `finalSettlementApplied` | authoritative settled flag |
+| `finalSettlementAmount` | write-off `d` |
+| `finalSettlementAt` / `finalSettlementBy` | audit |
+| `finalSettlementRemarks` | optional notes |
+| `remainingAmount` | must be **0** after settle |
+
+### Settle — `POST /api/quotations/:id/final-settlement`
+
+| Field | Value |
+|-------|--------|
+| `finalSettlementApplied` | `true` |
+| `finalSettlementAmount` | write-off `d` (= Remaining) |
+| `finalSettlementRemarks` | optional |
+| `discountAmount` | existing + `d` (absolute) |
+| `paymentStatus` | `completed` |
+| `remaining` / `remainingAmount` | **0** |
+
+**Do not** rewrite installment paid rows.
+
+### SPA fallbacks (same persist)
+
+SPA also tries these; each must persist the same columns via `buildFinalSettlementPersistPatch`:
+
+- `PATCH /api/quotations/:id/pricing`
+- `PATCH /api/quotations/:id/discount`
+- `PATCH /api/quotations/:id/payment-details`
+- `PATCH /api/quotations/:id` (settlement-shaped body → delegates to settle)
+
+Shared helper: `utils/quotationFinalSettlementPersist.ts`
+
+### GET (approved list + by-id)
+
+Must echo the same fields so SPA can Remaining ₹0, strikethrough Subtotal → net, hide Submit / show Revert, survive refresh.
+
+### Revert — `POST …/revert-final-settlement` (also `DELETE …/final-settlement`)
+
+Clear `finalSettlementApplied` / amount / remarks / at / by; restore `discountAmount`, `remaining`, `paymentStatus`. Installments unchanged.
+
+**Code:** `submitQuotationFinalSettlement`, `revertQuotationFinalSettlement`, `quotationPaymentApiFields`, `utils/quotationSettlementRemarks.ts`
+
+### QA
+
+1. Settle → hard refresh → still **Completed**, Remaining **₹0**, Submit hidden, Revert visible, Subtotal net of `d`.
+2. Revert → refresh → Pending/Partial again, Remaining restored, Submit visible.
 

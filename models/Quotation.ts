@@ -67,6 +67,8 @@ interface QuotationAttributes {
   finalSettlementApplied?: boolean;
   finalSettlementAt?: Date | null;
   finalSettlementBy?: string | null;
+  /** Optional AM notes when Remaining written off (§BB) */
+  finalSettlementRemarks?: string | null;
   paymentPhases?: Array<{
     phaseNumber: number;
     phaseName: string;
@@ -141,7 +143,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'loanAmount' | 'cashAmount' | 'siteCost' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson' | 'callingLeadId'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'loanAmount' | 'cashAmount' | 'siteCost' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'finalSettlementRemarks' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson' | 'callingLeadId'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -203,6 +205,7 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public finalSettlementApplied!: boolean;
   public finalSettlementAt!: Date | null;
   public finalSettlementBy!: string | null;
+  public finalSettlementRemarks!: string | null;
   public paymentPhases!: Array<{
     phaseNumber: number;
     phaseName: string;
@@ -472,6 +475,10 @@ Quotation.init(
     },
     finalSettlementBy: {
       type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    finalSettlementRemarks: {
+      type: DataTypes.TEXT,
       allowNull: true
     },
     paymentPhases: {

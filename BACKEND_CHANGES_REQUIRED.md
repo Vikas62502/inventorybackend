@@ -2095,7 +2095,7 @@ GET-only for report grants. Mutations stay behind `authorizeAdmin` / `requireAdm
 
 ## §BA — PDF panel range unchecked must persist (clear on save) — Sep 2026
 
-**Status: implemented** — HANDOFF **§49** (FE HANDOFF **§48**) · Quotation PDF optional INA / Waaree ranges
+**Status: implemented** — HANDOFF **§48.3** (FE HANDOFF **§48**) · Quotation PDF optional INA / Waaree ranges
 
 ### Product
 
@@ -2116,12 +2116,82 @@ INA **500–600W Bifacial** and Waaree **580W N-Topcon** (and related) range che
 
 ### QA checklist
 
-- [x] INA + 620W + range unchecked → PATCH → GET empty key + `pdfUsePanelSizeRange: false`
+- [x] INA + 620W + box unchecked → PATCH → GET empty key + `pdfUsePanelSizeRange: false`
 - [x] Reopen stays unchecked; PDF shows **620W**, not 500–600W range
 - [x] Same for Waaree 580 Topcon unchecked + custom W
 - [x] Checked range still persists allowlisted keys
 
 **Code:** `utils/quotationProductPdfDisplay.ts` (`buildQuotationProductPdfPersistFieldsForUpdate`, `resolveSentPdfPanelRangeKey`), `controllers/quotationController.ts` (products PATCH), Zod `PDF_PANEL_RANGE_KEYS` in `validations/quotationValidations.ts`
+
+---
+
+## §BB — Final settlement persist in PostgreSQL (Completed + Revert) — Sep 2026
+
+**Status: implemented** — HANDOFF **§49** · `BACKEND_SETTLEMENT_REMARKS.md` · `BACKEND_FINAL_SETTLEMENT.ts` · `BACKEND_REVERT_SETTLEMENT.md`
+
+### Product / UI (SPA)
+
+After settle (PostgreSQL only — no browser session bridge):
+
+| UI | Behavior |
+|----|----------|
+| Remaining | **₹0** |
+| Subtotal | Original strikethrough → **net** (after discount `d`) |
+| Actions | **Hide Submit**, show **Revert** only |
+| Status | **Completed** — must survive hard refresh |
+
+Without GET echo of `finalSettlementApplied`, settle looks fine then refresh → Pending/Partial again.
+
+### 1) Migration
+
+```sql
+ALTER TABLE quotations
+  ADD COLUMN IF NOT EXISTS final_settlement_applied BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS final_settlement_amount  NUMERIC(12,2) DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS final_settlement_at      TIMESTAMPTZ NULL,
+  ADD COLUMN IF NOT EXISTS final_settlement_by      UUID NULL,
+  ADD COLUMN IF NOT EXISTS final_settlement_remarks TEXT NULL,
+  ADD COLUMN IF NOT EXISTS remaining_amount         NUMERIC(12,2) DEFAULT 0;
+```
+
+**This repo:** camelCase columns (`finalSettlementApplied`, …) via Sequelize `underscored: false`. Migration `20260916120000-add-settlement-remarks-to-quotations.js` is idempotent.
+
+### 2) Settle — `POST /api/quotations/:id/final-settlement`
+
+| Field | Value |
+|-------|--------|
+| `finalSettlementApplied` | `true` |
+| `finalSettlementAmount` | write-off `d` (= Remaining) |
+| `finalSettlementRemarks` | optional (`remarks` / `finalSettlementRemarks` / `final_settlement_remarks`) |
+| `discountAmount` | existing + `d` |
+| `paymentStatus` | `completed` |
+| `remaining` / `remainingAmount` | **0** |
+
+**Do not** change installment paid rows. Always persist the applied flag (even if server AAS remaining was already 0).
+
+**SPA fallbacks** (same fields must persist): `PATCH /pricing`, `PATCH /discount`, `PATCH /payment-details`, `PATCH /quotations/:id` — shared helper `utils/quotationFinalSettlementPersist.ts`.
+
+### 3) GET must echo (approved list + by-id)
+
+Return the same fields so SPA can Remaining ₹0, strikethrough Subtotal → net, hide Submit / show Revert, stay Completed after refresh.
+
+When applied **or** `finalSettlementAmount > 0` → force `remaining=0` + `paymentStatus=completed` in reconcile.
+
+### 4) Revert — `POST /api/quotations/:id/revert-final-settlement`
+
+Also: `DELETE /api/quotations/:id/final-settlement`.
+
+Clear applied / amount / remarks / at / by; restore `discountAmount`, `remaining`, `paymentStatus`. Installments unchanged.
+
+### QA checklist
+
+- [x] Migration + model mapping
+- [x] Settle → hard refresh still **Completed**, Remaining **₹0**, Revert-only UI
+- [x] GET list + by-id echo `finalSettlementApplied` / amount / discount / remaining 0
+- [x] Revert → Pending/Partial again, Remaining restored
+- [x] Installment paid rows never rewritten
+
+**Code:** `controllers/quotationController.ts` (`submitQuotationFinalSettlement`, `revertQuotationFinalSettlement`), `utils/quotationApiJson.ts`, `utils/quotationSettlementRemarks.ts`, `models/Quotation.ts`, `validations/quotationValidations.ts`
 
 ---
 
