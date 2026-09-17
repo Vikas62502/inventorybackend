@@ -220,9 +220,9 @@ const reclaimStuckCallingAssignments = async (transaction: any): Promise<number>
     await ensureCallingPoolDealerExists(transaction);
 
     const cutoff = new Date(Date.now() - CALLING_STUCK_RECLAIM_HOURS * 60 * 60 * 1000);
-    const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
-      .map((value) => `'${value.replace(/'/g, "''")}'`)
-      .join(', ');
+  const sentinels = Array.from(HR_UPLOAD_UNASSIGNED_DEALER_SENTINELS)
+    .map((value) => `'${value.replace(/'/g, "''")}'`)
+    .join(', ');
 
     const [, meta] = await sequelize.query(
       `
@@ -593,7 +593,7 @@ const dealerBatchEligibilityClause = (dealerId: string) =>
           cl."batchId" IS NULL
           OR ${batchDealerEligibilityPredicate(dealerId, 'b')}
         )
-      )
+    )
   `);
 
 const normalizeMobile = (value: unknown): string | null => {
@@ -1854,15 +1854,15 @@ const buildCallingActionsResponse = async (req: Request) => {
         where,
         include: [leadInclude],
         raw: true,
-        attributes: [
-          'action',
-          'statusLabel',
-          'statusReason',
-          'callRemark',
-          'statusCategory',
-          'reasonCategory'
-        ]
-      })
+      attributes: [
+        'action',
+        'statusLabel',
+        'statusReason',
+        'callRemark',
+        'statusCategory',
+        'reasonCategory'
+      ]
+    })
     : rows.rows;
 
   const actionDealerIds = Array.from(new Set(rows.rows.map((row: any) => String(row.dealerId || '')).filter(Boolean)));
@@ -1871,10 +1871,10 @@ const buildCallingActionsResponse = async (req: Request) => {
     cachedActiveDealers && cachedActiveDealersExpiresAt > now
       ? Promise.resolve(cachedActiveDealers)
       : Dealer.findAll({
-          where: { role: 'dealer', isActive: true },
+      where: { role: 'dealer', isActive: true },
           raw: true,
-          attributes: ['id', 'firstName', 'lastName'],
-          order: [['firstName', 'ASC'], ['lastName', 'ASC']]
+      attributes: ['id', 'firstName', 'lastName'],
+      order: [['firstName', 'ASC'], ['lastName', 'ASC']]
         }).then((dealers) => {
           cachedActiveDealers = (dealers as any[]).map((d) => ({
             id: String(d.id),
@@ -1896,8 +1896,8 @@ const buildCallingActionsResponse = async (req: Request) => {
       ? Dealer.findAll({
           where: { id: { [Op.in]: missingDealerIds } },
           raw: true,
-          attributes: ['id', 'firstName', 'lastName']
-        })
+        attributes: ['id', 'firstName', 'lastName']
+      })
       : Promise.resolve([])
   ]);
   const dealerNameMap = new Map<string, string>();
@@ -2137,18 +2137,18 @@ const promoteQueuedLeadIfSlotAvailable = async (
     // §15 — free stuck work back into the pool before allocating.
     await reclaimStuckCallingAssignments(transaction);
 
-    // §4.5.1 / §E.1 — one open call per dealer: do not promote while in_progress is open.
-    const openCallCount = await DealerLeadAssignment.count({
-      where: {
-        [Op.and]: [
-          { dealerId, status: 'in_progress' },
-          LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
-          dealerBatchEligibilityClause(dealerId)
-        ]
-      },
-      transaction
-    });
-    if (openCallCount > 0) return;
+  // §4.5.1 / §E.1 — one open call per dealer: do not promote while in_progress is open.
+  const openCallCount = await DealerLeadAssignment.count({
+    where: {
+      [Op.and]: [
+        { dealerId, status: 'in_progress' },
+        LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
+        dealerBatchEligibilityClause(dealerId)
+      ]
+    },
+    transaction
+  });
+  if (openCallCount > 0) return;
 
     const openSlots = await countDealerOpenCallingSlots(dealerId, transaction);
     const atSlotCap = openSlots >= limit;
@@ -2158,10 +2158,10 @@ const promoteQueuedLeadIfSlotAvailable = async (
     if (atSlotCap) {
       if (!preferSocialOverAssignedRaw) return;
       const socialAssignedCount = await DealerLeadAssignment.count({
-        where: {
+    where: {
           [Op.and]: [
             {
-              dealerId,
+      dealerId,
               status: { [Op.in]: ['queued', 'assigned', 'active', 'in_progress'] }
             },
             LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE,
@@ -2893,12 +2893,12 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     // 2) Wrap CSV parse in try/catch → 400 VAL_001 on bad file
     let rows: Record<string, unknown>[] = [];
     try {
-      const workbook = XLSX.read(file.buffer, { type: 'buffer', raw: false });
-      const firstSheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[firstSheetName];
-      if (!sheet) {
-        res.status(400).json({
-          success: false,
+    const workbook = XLSX.read(file.buffer, { type: 'buffer', raw: false });
+    const firstSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[firstSheetName];
+    if (!sheet) {
+      res.status(400).json({
+        success: false,
           error: { code: 'VAL_001', message: 'Invalid CSV format — no sheet found' }
         });
         return;
@@ -3016,10 +3016,10 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     const existingMobiles = new Set<string>();
     for (let i = 0; i < normalizedRows.length; i += UPLOAD_INSERT_CHUNK_SIZE) {
       const slice = normalizedRows.slice(i, i + UPLOAD_INSERT_CHUNK_SIZE);
-      const existingLeads = await CallingLead.findAll({
+    const existingLeads = await CallingLead.findAll({
         where: { mobileNormalized: { [Op.in]: slice.map((row) => row.mobile) } },
-        attributes: ['mobileNormalized']
-      });
+      attributes: ['mobileNormalized']
+    });
       for (const lead of existingLeads as any[]) {
         existingMobiles.add(String(lead.mobileNormalized));
       }
@@ -3042,12 +3042,12 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
     await sequelize.transaction(async (transaction) => {
       await CallingLeadUploadBatch.create(
         {
-          id: batchId,
-          fileName: file.originalname || 'upload.csv',
-          uploadedBy: req.user?.id || 'unknown',
-          uploadedAt: new Date(),
-          rowCount: parsed,
-          assignedDealers: dealerIds
+        id: batchId,
+        fileName: file.originalname || 'upload.csv',
+        uploadedBy: req.user?.id || 'unknown',
+        uploadedAt: new Date(),
+        rowCount: parsed,
+        assignedDealers: dealerIds
         },
         { transaction }
       );
@@ -3106,23 +3106,23 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
           let lead: CallingLead | null = null;
           try {
             lead = await CallingLead.create(
-              {
-                id: uuidv4(),
-                batchId,
-                name: row.name,
-                mobile: row.mobile,
-                mobileNormalized: row.mobile,
-                altMobile: row.altMobile,
-                kNumber: row.kNumber,
-                address: row.address,
-                city: row.city,
-                state: row.state,
-                customerNote: row.customerNote,
-                rawPayload: row.rawPayload
-              },
-              { transaction }
-            );
-            created += 1;
+          {
+            id: uuidv4(),
+            batchId,
+            name: row.name,
+            mobile: row.mobile,
+            mobileNormalized: row.mobile,
+            altMobile: row.altMobile,
+            kNumber: row.kNumber,
+            address: row.address,
+            city: row.city,
+            state: row.state,
+            customerNote: row.customerNote,
+            rawPayload: row.rawPayload
+          },
+          { transaction }
+        );
+        created += 1;
           } catch (rowError) {
             await sequelize.query(`ROLLBACK TO SAVEPOINT "${savepoint}"`, { transaction });
             if (isUniqueConstraintError(rowError)) {
@@ -3175,21 +3175,21 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
             const assignSp = `${savepoint}_a${attempt}`;
             await sequelize.query(`SAVEPOINT "${assignSp}"`, { transaction });
             try {
-              await DealerLeadAssignment.create(
-                {
-                  id: uuidv4(),
+        await DealerLeadAssignment.create(
+          {
+            id: uuidv4(),
                   leadId: lead!.id,
                   dealerId: assignee.dealerId,
-                  assignedBy: assignedByUserId,
-                  assignedAt: new Date(),
+            assignedBy: assignedByUserId,
+            assignedAt: new Date(),
                   status: assignee.status as any
-                },
-                { transaction }
-              );
+          },
+          { transaction }
+        );
               await sequelize.query(`RELEASE SAVEPOINT "${assignSp}"`, { transaction });
               assignmentOk = true;
               if (assignee.status === 'assigned') assigned += 1;
-              else queued += 1;
+        else queued += 1;
               break;
             } catch (assignError) {
               await sequelize.query(`ROLLBACK TO SAVEPOINT "${assignSp}"`, { transaction });
@@ -3213,35 +3213,35 @@ export const uploadCallingLeadsCsv = async (req: Request, res: Response): Promis
           }
 
           chunkAudit.push({
-            rowIndex: row.rowIndex,
-            status: 'created',
-            customerName: row.name,
-            customerMobile: row.mobile,
-            customerAddress: buildCustomerAddress(row),
+          rowIndex: row.rowIndex,
+          status: 'created',
+          customerName: row.name,
+          customerMobile: row.mobile,
+          customerAddress: buildCustomerAddress(row),
             leadId: lead!.id,
-            rawPayload: row.rawPayload
-          });
-        }
+          rawPayload: row.rawPayload
+        });
+      }
 
         if (chunkAudit.length > 0) {
-          await CallingLeadUploadRow.bulkCreate(
+        await CallingLeadUploadRow.bulkCreate(
             chunkAudit
-              .filter((row) => row.rowIndex > 0)
-              .map((row) => ({
-                id: uuidv4(),
-                batchId,
-                rowIndex: row.rowIndex,
-                customerName: row.customerName,
-                customerMobile: row.customerMobile,
-                customerAddress: row.customerAddress,
-                status: row.status,
-                leadId: row.leadId || null,
-                rawPayload: row.rawPayload
-              })),
-            { transaction }
-          );
-        }
-      });
+            .filter((row) => row.rowIndex > 0)
+            .map((row) => ({
+              id: uuidv4(),
+              batchId,
+              rowIndex: row.rowIndex,
+              customerName: row.customerName,
+              customerMobile: row.customerMobile,
+              customerAddress: row.customerAddress,
+              status: row.status,
+              leadId: row.leadId || null,
+              rawPayload: row.rawPayload
+            })),
+          { transaction }
+        );
+      }
+    });
     }
 
     // Persist invalid/in-file-duplicate audit rows (not already written with creates)
@@ -3424,10 +3424,10 @@ const findOpenAssignedLeadsForDealer = async (dealerId: string, limit = 500) => 
         ),
         'ASC'
       ],
-      ['id', 'ASC']
-    ],
-    limit
-  });
+        ['id', 'ASC']
+      ],
+      limit
+    });
 };
 
 const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
@@ -3453,18 +3453,18 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
   );
   let assigneeNameById = new Map<string, string>();
   try {
-    const assigneeDealers = assigneeDealerIds.length
-      ? await Dealer.findAll({
-          where: { id: { [Op.in]: assigneeDealerIds } },
-          attributes: ['id', 'firstName', 'lastName']
-        })
-      : [];
+  const assigneeDealers = assigneeDealerIds.length
+    ? await Dealer.findAll({
+      where: { id: { [Op.in]: assigneeDealerIds } },
+      attributes: ['id', 'firstName', 'lastName']
+    })
+    : [];
     assigneeNameById = new Map(
-      assigneeDealers.map((dealer) => [
-        dealer.id,
-        `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
-      ])
-    );
+    assigneeDealers.map((dealer) => [
+      dealer.id,
+      `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim()
+    ])
+  );
   } catch (error) {
     logError('assignee dealer name lookup failed (non-fatal)', error, { dealerId });
   }
@@ -4267,8 +4267,8 @@ export const getDealerCallingQueueCurrent = async (req: Request, res: Response):
     }
 
     const data = {
-      ...snapshot,
-      debugEligibility: debugCounts
+        ...snapshot,
+        debugEligibility: debugCounts
     };
     res.status(200).json({
       success: true,

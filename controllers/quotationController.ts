@@ -1954,8 +1954,6 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         } : null,
         status: q.status,
         discount: q.discount,
-        discountAmount: Number((q as any).discountAmount || 0),
-        discount_amount: Number((q as any).discountAmount || 0),
         ...quotationProposalDateApiFields(q),
         ...quotationCurrentApiFields(row),
         ...quotationCallingLeadApiFields(row)
@@ -2702,15 +2700,17 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
           ? sumPhasePaidAmounts(phases)
           : Number(quotation.paidAmount || 0);
       const { actorId } = resolveActorForAudit(req);
+      const plain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+      const alreadyApplied = !!(quotation as any).finalSettlementApplied;
       const patch = buildFinalSettlementPersistPatch({
         amountAfterSubsidy,
+        originalSubtotal: pickQuotationSubtotalForPayments(plain) || Number(quotation.subtotal || amountAfterSubsidy),
         paid,
         existingDiscount: Number((quotation as any).discountAmount || 0),
-        body: {
-          ...body,
-          discountAmount: computedDiscountAmount,
-          discount: computedDiscountAmount
-        },
+        alreadyApplied,
+        existingSettlementAmount: (quotation as any).finalSettlementAmount,
+        // Pass original body — do not inject computedDiscountAmount (avoids double-add on retry)
+        body,
         actorId
       });
       await quotation.update({
@@ -3682,19 +3682,17 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       const phases = await loadQuotationPaymentPhases(quotation.id);
       const paid =
         phases.length > 0 ? sumPhasePaidAmounts(phases) : paidForRemaining;
+      const plain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+      const alreadyApplied = !!(quotation as any).finalSettlementApplied;
       const settlementPatch = buildFinalSettlementPersistPatch({
         amountAfterSubsidy,
+        originalSubtotal: pickQuotationSubtotalForPayments(plain) || Number(quotation.subtotal || amountAfterSubsidy),
         paid,
         existingDiscount: Number((quotation as any).discountAmount || 0),
-        body: {
-          ...((req.body || {}) as Record<string, unknown>),
-          discountAmount:
-            newDiscountAmount !== undefined ? effectiveDiscountAmount : (req.body as any)?.discountAmount,
-          finalAmount:
-            newFinalAmount !== undefined
-              ? Math.min(amountAfterSubsidy, newFinalAmount)
-              : calculatedFinalAmount
-        },
+        alreadyApplied,
+        existingSettlementAmount: (quotation as any).finalSettlementAmount,
+        // Original body only — do not re-inject effectiveDiscountAmount (retry would double)
+        body: (req.body || {}) as Record<string, unknown>,
         actorId
       });
       await quotation.update({
@@ -3994,10 +3992,14 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       let settlementDiscountPatch: Record<string, unknown> = {};
       if (settlingNow) {
         const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
+        const alreadyApplied = !!(quotation as any).finalSettlementApplied;
         settlementDiscountPatch = buildFinalSettlementPersistPatch({
           amountAfterSubsidy: amountAfterSubsidyCap,
+          originalSubtotal: amGross || paymentCap || amountAfterSubsidyCap,
           paid: totalPaidAmount,
           existingDiscount: discountAmt,
+          alreadyApplied,
+          existingSettlementAmount: (quotation as any).finalSettlementAmount,
           body,
           actorId
         });
@@ -4026,10 +4028,17 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       const paidAmt =
         Number(quotation.paidAmount || 0) ||
         sumPhasePaidAmounts(await loadQuotationPaymentPhases(quotation.id));
+      const plainSettle = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+      const alreadyApplied = !!(quotation as any).finalSettlementApplied;
       const settlementPatch = buildFinalSettlementPersistPatch({
         amountAfterSubsidy: amountAfterSubsidyCap,
+        originalSubtotal:
+          pickQuotationSubtotalForPayments(plainSettle) ||
+          Number(quotation.subtotal || amountAfterSubsidyCap),
         paid: paidAmt,
         existingDiscount,
+        alreadyApplied,
+        existingSettlementAmount: (quotation as any).finalSettlementAmount,
         body,
         actorId
       });
@@ -4251,22 +4260,46 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
       };
     };
 
-    // Idempotent: if already settled, optionally refresh remarks; never double-add discount.
-    // Also heal legacy rows that have applied=true but remainingAmount still null.
+    // Idempotent: if already settled, heal remaining/status/doubled d; never ADD discount again.
     if ((quotation as any).finalSettlementApplied === true) {
-      const heal: Record<string, unknown> = {};
+      const paidHeal =
+        phases.length > 0
+          ? sumPhasePaidAmounts(phases)
+          : Number(quotation.paidAmount || 0);
+      const aasHeal = resolveAmountAfterSubsidy(
+        quotation as any,
+        (quotation as any).products
+      );
+      const plainHeal = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
+      const { actorId: actorHeal } = resolveActorForAudit(req);
+      const healPatch = buildFinalSettlementPersistPatch({
+        amountAfterSubsidy: aasHeal,
+        originalSubtotal:
+          pickQuotationSubtotalForPayments(plainHeal) ||
+          Number(quotation.subtotal || aasHeal),
+        paid: paidHeal,
+        existingDiscount: Number((quotation as any).discountAmount || 0),
+        alreadyApplied: true,
+        existingSettlementAmount: (quotation as any).finalSettlementAmount,
+        body,
+        actorId: actorHeal
+      });
+      const heal: Record<string, unknown> = {
+        remainingAmount: 0,
+        paymentStatus: 'completed',
+        finalSettlementApplied: true,
+        finalSettlementAmount: healPatch.finalSettlementAmount,
+        discountAmount: healPatch.discountAmount,
+        discount: healPatch.discountAmount,
+        totalAmount: healPatch.totalAmount,
+        finalAmount: healPatch.finalAmount
+      };
       if (remarksParsed !== undefined) heal.finalSettlementRemarks = remarksParsed;
-      const remRaw = (quotation as any).remainingAmount;
-      if (remRaw === null || remRaw === undefined || Number(remRaw) !== 0) {
-        heal.remainingAmount = 0;
+      else if (healPatch.finalSettlementRemarks !== undefined) {
+        heal.finalSettlementRemarks = healPatch.finalSettlementRemarks;
       }
-      if (String((quotation as any).paymentStatus || '').toLowerCase() !== 'completed') {
-        heal.paymentStatus = 'completed';
-      }
-      if (Object.keys(heal).length > 0) {
-        await quotation.update(heal);
-        await quotation.reload();
-      }
+      await quotation.update(heal);
+      await quotation.reload();
       res.json({
         success: true,
         data: buildSettlementResponse(quotation, phases)
@@ -4286,10 +4319,16 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
     );
     const existingDiscount = Number((quotation as any).discountAmount || 0);
     const { actorId } = resolveActorForAudit(req);
+    const plainSettle = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     const patch = buildFinalSettlementPersistPatch({
       amountAfterSubsidy,
+      originalSubtotal:
+        pickQuotationSubtotalForPayments(plainSettle) ||
+        Number(quotation.subtotal || amountAfterSubsidy),
       paid,
       existingDiscount,
+      alreadyApplied: false, // caller already returned early when applied
+      existingSettlementAmount: (quotation as any).finalSettlementAmount,
       body,
       actorId
     });
@@ -4298,9 +4337,10 @@ export const submitQuotationFinalSettlement = async (req: Request, res: Response
       quotationId,
       paid,
       amountAfterSubsidy,
+      originalSubtotal: pickQuotationSubtotalForPayments(plainSettle) || Number(quotation.subtotal || 0),
       existingDiscount,
+      gap: patch.finalSettlementAmount,
       newDiscountAmount: patch.discountAmount,
-      requestedSettlement: patch.finalSettlementAmount,
       remarks: patch.finalSettlementRemarks ?? remarksParsed ?? null
     });
 

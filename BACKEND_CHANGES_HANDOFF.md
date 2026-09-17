@@ -85,7 +85,7 @@
 | 73 | High | Dealer Call Analytics live (`calling:actions-updated`) | **Done** | §48 / REQUIRED §AY |
 | 74 | High | Sheet auto-sync cron every **30 min** | **Done** | §48 / REQUIRED §AZ / `sheetAutoSyncCron` |
 | 75 | High | PDF panel range clear on uncheck (INA / Waaree) | **Done** | §48.3 / REQUIRED §BA (FE HANDOFF §48) |
-| 76 | High | Final settlement → PostgreSQL Completed + Revert | **Done** | §49 / REQUIRED §BB |
+| 76 | High | Final settlement → PostgreSQL — gap-only `d`, absolute SET, Completed survives refresh, Revert | **Done** | §49 / REQUIRED §BB |
 
 **Deploy before QA:**
 
@@ -3112,12 +3112,32 @@ Optional PDF range checkboxes (INA 500–600W Bifacial, Waaree 580W N-Topcon / r
 
 **Status: implemented** — REQUIRED **§BB** · FE HANDOFF **§49** · `BACKEND_SETTLEMENT_REMARKS.md` · `BACKEND_FINAL_SETTLEMENT.ts` · `BACKEND_REVERT_SETTLEMENT.md`
 
+**Working UI (needs DB):** Remaining ₹0 · Subtotal ~~original~~ → net · `d` = unpaid gap only · **Completed only** · hide Submit · show Revert · **hard refresh keeps Completed**.
+
 Persists Final Settlement in **PostgreSQL** so Account Management UI can:
 
 1. **Remaining ₹0**
 2. **Subtotal** original → strikethrough, show net (after discount `d`)
 3. **Hide Submit**, show **Revert only**
 4. Stay **Completed** after hard refresh (no browser session bridge)
+5. Not appear under **Pending & Partial** after refresh
+
+### Math (must match SPA — server authoritative)
+
+```
+d / settlementAmount / finalSettlementAmount = originalSubtotal − paid   // gap ONLY
+discountAmount                               = ABSOLUTE SET to d         // never ADD
+remaining                                    = 0
+paymentStatus                                = completed
+finalSettlementApplied                       = true
+```
+
+| Case | Subtotal | Paid | `d` |
+|------|----------|------|-----|
+| JYOTI | 2,75,000 | 2,70,000 | **5,000** |
+| ARTI | 2,90,000 | 2,89,000 | **1,000** (not 2,000) |
+
+Body `amount` / `discountAmount` are **ignored for `d`** so SPA retries cannot double.
 
 ### Migration
 
@@ -3127,7 +3147,7 @@ Idempotent: `20260916120000-add-settlement-remarks-to-quotations.js`
 | Column | Purpose |
 |--------|---------|
 | `finalSettlementApplied` | authoritative settled flag |
-| `finalSettlementAmount` | write-off `d` |
+| `finalSettlementAmount` | write-off `d` (gap only) |
 | `finalSettlementAt` / `finalSettlementBy` | audit |
 | `finalSettlementRemarks` | optional notes |
 | `remainingAmount` | must be **0** after settle |
@@ -3137,13 +3157,13 @@ Idempotent: `20260916120000-add-settlement-remarks-to-quotations.js`
 | Field | Value |
 |-------|--------|
 | `finalSettlementApplied` | `true` |
-| `finalSettlementAmount` | write-off `d` (= Remaining) |
+| `finalSettlementAmount` | `d` = `originalSubtotal − paid` (gap only) |
 | `finalSettlementRemarks` | optional |
-| `discountAmount` | existing + `d` (absolute) |
+| `discountAmount` | **absolute SET** to `d` — never ADD on SPA retries |
 | `paymentStatus` | `completed` |
 | `remaining` / `remainingAmount` | **0** |
 
-**Do not** rewrite installment paid rows.
+**Do not** rewrite installment paid rows. **Idempotent** (no double `d`); heals previously doubled rows.
 
 ### SPA fallbacks (same persist)
 
@@ -3158,16 +3178,17 @@ Shared helper: `utils/quotationFinalSettlementPersist.ts`
 
 ### GET (approved list + by-id)
 
-Must echo the same fields so SPA can Remaining ₹0, strikethrough Subtotal → net, hide Submit / show Revert, survive refresh.
+Must echo the same fields so SPA can Remaining ₹0, strikethrough Subtotal → net, hide Submit / show Revert, survive refresh (Completed only — not Pending & Partial).
 
 ### Revert — `POST …/revert-final-settlement` (also `DELETE …/final-settlement`)
 
 Clear `finalSettlementApplied` / amount / remarks / at / by; restore `discountAmount`, `remaining`, `paymentStatus`. Installments unchanged.
 
-**Code:** `submitQuotationFinalSettlement`, `revertQuotationFinalSettlement`, `quotationPaymentApiFields`, `utils/quotationSettlementRemarks.ts`
+**Code:** `submitQuotationFinalSettlement`, `revertQuotationFinalSettlement`, `quotationPaymentApiFields`, `utils/quotationFinalSettlementPersist.ts`, `utils/quotationSettlementRemarks.ts`
 
-### QA
+### QA / Done when
 
-1. Settle → hard refresh → still **Completed**, Remaining **₹0**, Submit hidden, Revert visible, Subtotal net of `d`.
-2. Revert → refresh → Pending/Partial again, Remaining restored, Submit visible.
+1. Settle → hard refresh → still **Completed**, Remaining **₹0**, correct `d` (JYOTI 5,000 / ARTI 1,000), Submit hidden, Revert visible.
+2. Not in **Pending & Partial** after refresh.
+3. Revert → refresh → Pending/Partial again, Remaining restored, Submit visible.
 

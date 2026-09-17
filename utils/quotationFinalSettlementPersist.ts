@@ -3,11 +3,15 @@
  * Used by POST /final-settlement and SPA fallbacks:
  * PATCH /pricing, /discount, /payment-details, /quotations.
  *
- * Math (authoritative — do not trust SPA absolute totals on retry):
- *   unpaidGap (d)     = max(0, amCap − existingDiscount − paid)   // Remaining only
- *   discountAmount    = SET max(existing, amCap − paid)           // so payable = paid
- *   finalSettlementAmount = unpaidGap (never existing + d again)
- * Never ADD discount on every /pricing or /discount retry.
+ * Math (must match SPA — server authoritative, never trust inflated body):
+ *   d = originalSubtotal − paid          // gap ONLY
+ *   discountAmount = ABSOLUTE SET to d   // never ADD on retries
+ *   finalSettlementAmount = d
+ *   remaining = 0, paymentStatus = completed, finalSettlementApplied = true
+ *
+ * Cases:
+ *   JYOTI  subtotal 2,75,000  paid 2,70,000  → d = 5,000
+ *   ARTI   subtotal 2,90,000  paid 2,89,000  → d = 1,000 (not 2,000)
  */
 
 import type { Request } from 'express';
@@ -16,11 +20,15 @@ import {
 } from './quotationSettlementRemarks';
 
 export type FinalSettlementPersistInput = {
+  /** Pricing AAS — caps totalAmount / finalAmount when AAS < AM subtotal. */
   amountAfterSubsidy: number;
+  /** AM original subtotal (payment basis). */
+  originalSubtotal: number;
   paid: number;
   existingDiscount: number;
-  /** Prior audit write-off (kept on idempotent retry when gap already 0). */
-  existingFinalSettlementAmount?: number | null;
+  /** When true, idempotent — keep correct d; heal if previously doubled. */
+  alreadyApplied?: boolean;
+  existingSettlementAmount?: number | null;
   body: Record<string, unknown>;
   actorId: string | null;
 };
@@ -56,7 +64,6 @@ export const isFinalSettlementRequestBody = (
     .toLowerCase();
   const remaining = Number(body.remaining ?? body.remainingAmount ?? body.remaining_amount);
   if (status === 'completed' && Number.isFinite(remaining) && remaining === 0) {
-    // PATCH /pricing settlement shape: absolute discount + finalAmount without subtotal
     if (
       body.discountAmount !== undefined &&
       body.finalAmount !== undefined &&
@@ -64,7 +71,6 @@ export const isFinalSettlementRequestBody = (
     ) {
       return true;
     }
-    // PATCH /payment-details settlement shape: completed + remaining 0 + write-off amount
     if (
       body.finalSettlementAmount !== undefined ||
       body.final_settlement_amount !== undefined ||
@@ -79,70 +85,61 @@ export const isFinalSettlementRequestBody = (
   return false;
 };
 
-const parseNonNegNumber = (raw: unknown): number => {
-  if (raw === undefined || raw === null || String(raw).trim() === '') return NaN;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : NaN;
-};
-
 /**
- * Compute columns to persist for Final Settlement.
- * discountAmount is SET so payable = paid; finalSettlementAmount is unpaid gap only.
- * Body absolute discountAmount is ignored for growth (SPA may send existing+d again on retry).
+ * d = originalSubtotal − paid (gap only).
+ * discountAmount = SET d (never ADD). Body amounts are ignored for d.
  */
 export const buildFinalSettlementPersistPatch = (
   input: FinalSettlementPersistInput
 ): FinalSettlementPersistPatch => {
   const {
     amountAfterSubsidy,
+    originalSubtotal,
     paid,
     existingDiscount,
-    existingFinalSettlementAmount,
+    alreadyApplied = false,
+    existingSettlementAmount = null,
     body,
     actorId
   } = input;
 
-  const amCap = Math.max(0, Number(amountAfterSubsidy) || 0);
-  const paidSafe = Math.min(Math.max(0, Number(paid) || 0), amCap);
+  const basis = Math.max(0, Number(originalSubtotal) || Number(amountAfterSubsidy) || 0);
+  const aas = Math.max(0, Number(amountAfterSubsidy) || basis);
+  const paidNum = Math.max(0, Number(paid) || 0);
+  const paidVsBasis = Math.min(paidNum, basis);
   const existing = Math.max(0, Number(existingDiscount) || 0);
 
-  // Absolute discount so payable (amCap − discount) = paid. SET — never ADD on retry.
-  const discountToClear = Math.max(0, amCap - paidSafe);
-  // Unpaid gap only = current Remaining (write-off d). Not doubled.
-  const unpaidGap = Math.max(0, amCap - existing - paidSafe);
+  // Authoritative gap — ignore body amount/settlementAmount/discountAmount for d
+  // (SPA retries may send existing+d twice → 2,000 when d is 1,000).
+  const d = Math.max(0, basis - paidVsBasis);
 
-  let newDiscountAmount = Math.max(existing, discountToClear);
-  if (newDiscountAmount > amCap) {
-    newDiscountAmount = amCap;
-  }
+  // AAS-capped discount for pricing columns when AM subtotal > server AAS.
+  const aasClear = Math.max(0, aas - Math.min(paidNum, aas));
+  const discountToStore = d > aas + 0.01 ? aasClear : Math.min(aas, d);
 
-  const settlementFromBody = parseNonNegNumber(
-    body.amount ?? body.settlementAmount ?? body.finalSettlementAmount ?? body.final_settlement_amount
-  );
-  const priorAudit = parseNonNegNumber(existingFinalSettlementAmount);
-
+  let newDiscountAmount: number;
   let finalSettlementAmount: number;
-  if (unpaidGap > 0.01) {
-    // Authoritative server gap. Cap body if SPA accidentally sends absolute / doubled value.
-    if (Number.isFinite(settlementFromBody) && settlementFromBody > 0) {
-      finalSettlementAmount = Math.min(settlementFromBody, unpaidGap);
+
+  if (alreadyApplied) {
+    const prior = Number(existingSettlementAmount);
+    const priorOk = Number.isFinite(prior) && prior >= 0;
+    // Heal doubled rows (e.g. ARTI stored 2,000 instead of 1,000).
+    const looksDoubled =
+      (priorOk && prior > d + 0.01) ||
+      existing > discountToStore + 0.01;
+    if (looksDoubled) {
+      newDiscountAmount = discountToStore;
+      finalSettlementAmount = d;
     } else {
-      finalSettlementAmount = unpaidGap;
+      newDiscountAmount = existing;
+      finalSettlementAmount = priorOk ? prior : d;
     }
-  } else if (Number.isFinite(priorAudit) && priorAudit > 0) {
-    // Idempotent retry after discount already cleared — keep prior write-off audit.
-    finalSettlementAmount = priorAudit;
-  } else if (Number.isFinite(settlementFromBody) && settlementFromBody > 0) {
-    // AAS already clear (subtotal vs AAS mismatch) — accept AM write-off for audit only.
-    // Cap to a sane upper bound so we never store existing+d doubled as the gap.
-    const cap =
-      discountToClear > 0.01 ? discountToClear : settlementFromBody;
-    finalSettlementAmount = Math.min(settlementFromBody, cap);
   } else {
-    finalSettlementAmount = 0;
+    newDiscountAmount = discountToStore;
+    finalSettlementAmount = d;
   }
 
-  const newTotalAmount = Math.max(0, amCap - newDiscountAmount);
+  const newTotalAmount = Math.max(0, aas - Math.min(newDiscountAmount, aas));
   const remarksParsed = parseOptionalFinalSettlementRemarks(body);
 
   const patch: FinalSettlementPersistPatch = {

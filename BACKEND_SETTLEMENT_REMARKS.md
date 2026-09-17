@@ -57,10 +57,16 @@ ALTER TABLE quotations
 
 | Rule | Detail |
 |------|--------|
-| **Settlement amount `d`** | = **current Remaining** for that quotation (any INR). Not fixed at ₹5,000. |
+| **`d` / settlementAmount** | = `originalSubtotal − paid` (**gap ONLY**). Server authoritative — body amounts ignored for `d`. |
+| **`discountAmount`** | **ABSOLUTE SET** to `d` — never ADD on SPA retries. |
 | **Remarks** | Optional on settle (`remarks` / `finalSettlementRemarks` / `final_settlement_remarks`). |
-| **After settle** | `remaining=0`, `paymentStatus=completed`, `discountAmount` = existing + `d`, installments **unchanged**. |
+| **After settle** | `remaining=0`, `paymentStatus=completed`, `finalSettlementApplied=true`, installments **unchanged**. |
 | **Source of truth** | PostgreSQL only. FE confirms with GET by-id before treating as Completed. |
+
+| Case | Subtotal | Paid | `d` |
+|------|----------|------|-----|
+| JYOTI | 2,75,000 | 2,70,000 | **5,000** |
+| ARTI | 2,90,000 | 2,89,000 | **1,000** (not 2,000) |
 
 ---
 
@@ -73,13 +79,13 @@ Auth: `account-management` | `admin` (accounts access). Quotation `status = appr
 | Field | Value |
 |-------|--------|
 | `finalSettlementApplied` | `true` |
-| `finalSettlementAmount` | write-off `d` |
+| `finalSettlementAmount` | `d` = `originalSubtotal − paid` (gap only) |
 | `finalSettlementRemarks` | optional |
-| `discountAmount` | existing + `d` |
+| `discountAmount` | **absolute SET** to `d` — never ADD on retry |
 | `paymentStatus` | `completed` |
 | `remaining` / `remainingAmount` | **0** |
 
-**Do not** rewrite installment paid rows.
+**Do not** rewrite installment paid rows. **Idempotent** (no double `d`); heals previously doubled rows.
 
 ### SPA fallbacks (same persist)
 
@@ -94,7 +100,7 @@ Shared: `utils/quotationFinalSettlementPersist.ts`.
 
 ### Do not reject
 
-Do **not** fail with “settlementAmount cannot exceed remaining (0)” when AAS already looks cleared but AM still shows a gap. Still set applied=true, amount, remaining=0, completed.
+Do **not** fail with “settlementAmount cannot exceed remaining (0)” when AAS already looks cleared but AM still shows a gap. Still set applied=true, amount=`d`, remaining=0, completed.
 
 ---
 
@@ -143,12 +149,14 @@ Installments **unchanged**.
 
 - [x] Migration: settlement + remarks columns
 - [x] Model mapped; remarks not silently dropped
-- [x] `settlementAmount` = any Remaining (not hardcoded ₹5,000)
+- [x] `d` = `originalSubtotal − paid` (gap only); body ignored for `d` (no double)
+- [x] `discountAmount` = absolute SET to `d`; idempotent heal of doubled rows
 - [x] `POST /final-settlement` persists flags + discount + remaining 0
 - [x] GET approved list + by-id echo all settlement fields
-- [x] Hard refresh: Remaining ₹0, Completed, Revert-only (Submit hidden)
+- [x] Hard refresh: Remaining ₹0, Completed only, Revert-only (Submit hidden)
 - [x] Revert then refresh: Remaining restored, Pending/Partial, Submit visible
 - [x] Installment paid amounts never rewritten by settle/revert
+- [x] QA: JYOTI d=5,000 · ARTI d=1,000 (not 2,000) → refresh Completed → Revert works
 
 ---
 

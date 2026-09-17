@@ -2129,18 +2129,32 @@ INA **500–600W Bifacial** and Waaree **580W N-Topcon** (and related) range che
 
 **Status: implemented** — HANDOFF **§49** · `BACKEND_SETTLEMENT_REMARKS.md` · `BACKEND_FINAL_SETTLEMENT.ts` · `BACKEND_REVERT_SETTLEMENT.md`
 
-### Product / UI (SPA)
-
-After settle (PostgreSQL only — no browser session bridge):
+### Product / UI (SPA) — working conditions
 
 | UI | Behavior |
 |----|----------|
 | Remaining | **₹0** |
-| Subtotal | Original strikethrough → **net** (after discount `d`) |
+| Subtotal | ~~original~~ → **net** (after `d`) |
+| `d` | unpaid gap only (`originalSubtotal − paid`) |
+| Status | **Completed only** — must survive hard refresh (not Pending & Partial) |
 | Actions | **Hide Submit**, show **Revert** only |
-| Status | **Completed** — must survive hard refresh |
 
-Without GET echo of `finalSettlementApplied`, settle looks fine then refresh → Pending/Partial again.
+Without GET echo of `finalSettlementApplied`, settle looks fine then refresh → Pending (e.g. JYOTI ₹5,000).
+
+### Math (must match SPA — server authoritative)
+
+```
+d / settlementAmount / finalSettlementAmount = originalSubtotal − paid   // gap ONLY
+discountAmount                               = ABSOLUTE SET to d         // never ADD
+remaining = 0 · paymentStatus = completed · finalSettlementApplied = true
+```
+
+| Case | Subtotal | Paid | `d` |
+|------|----------|------|-----|
+| JYOTI | 2,75,000 | 2,70,000 | **5,000** |
+| ARTI | 2,90,000 | 2,89,000 | **1,000** (not 2,000) |
+
+Body amounts are ignored for `d` so SPA retries cannot double.
 
 ### 1) Migration
 
@@ -2161,19 +2175,19 @@ ALTER TABLE quotations
 | Field | Value |
 |-------|--------|
 | `finalSettlementApplied` | `true` |
-| `finalSettlementAmount` | write-off `d` (= Remaining) |
-| `finalSettlementRemarks` | optional (`remarks` / `finalSettlementRemarks` / `final_settlement_remarks`) |
-| `discountAmount` | existing + `d` |
+| `finalSettlementAmount` | `d` = `originalSubtotal − paid` (gap only) |
+| `finalSettlementRemarks` | optional |
+| `discountAmount` | **absolute SET** to `d` — never ADD on retries |
 | `paymentStatus` | `completed` |
 | `remaining` / `remainingAmount` | **0** |
 
-**Do not** change installment paid rows. Always persist the applied flag (even if server AAS remaining was already 0).
+**Do not** change installment paid rows. Idempotent (no double `d`); heals previously doubled rows.
 
-**SPA fallbacks** (same fields must persist): `PATCH /pricing`, `PATCH /discount`, `PATCH /payment-details`, `PATCH /quotations/:id` — shared helper `utils/quotationFinalSettlementPersist.ts`.
+**SPA fallbacks** (same persist): `PATCH /pricing`, `PATCH /discount`, `PATCH /payment-details`, `PATCH /quotations/:id` — `utils/quotationFinalSettlementPersist.ts`.
 
 ### 3) GET must echo (approved list + by-id)
 
-Return the same fields so SPA can Remaining ₹0, strikethrough Subtotal → net, hide Submit / show Revert, stay Completed after refresh.
+Return the same fields so hard refresh stays Completed, Remaining ₹0, correct `d`, Revert-only.
 
 When applied **or** `finalSettlementAmount > 0` → force `remaining=0` + `paymentStatus=completed` in reconcile.
 
@@ -2183,15 +2197,15 @@ Also: `DELETE /api/quotations/:id/final-settlement`.
 
 Clear applied / amount / remarks / at / by; restore `discountAmount`, `remaining`, `paymentStatus`. Installments unchanged.
 
-### QA checklist
+### Done when
 
-- [x] Migration + model mapping
-- [x] Settle → hard refresh still **Completed**, Remaining **₹0**, Revert-only UI
-- [x] GET list + by-id echo `finalSettlementApplied` / amount / discount / remaining 0
-- [x] Revert → Pending/Partial again, Remaining restored
+- [x] Settle → refresh still **Completed**, Remaining **₹0**, correct `d` (JYOTI 5,000 / ARTI 1,000)
+- [x] Not in Pending & Partial after refresh
+- [x] Submit hidden · Revert only
+- [x] Revert restores balance
 - [x] Installment paid rows never rewritten
 
-**Code:** `controllers/quotationController.ts` (`submitQuotationFinalSettlement`, `revertQuotationFinalSettlement`), `utils/quotationApiJson.ts`, `utils/quotationSettlementRemarks.ts`, `models/Quotation.ts`, `validations/quotationValidations.ts`
+**Code:** `controllers/quotationController.ts`, `utils/quotationFinalSettlementPersist.ts`, `utils/quotationApiJson.ts`, `utils/quotationSettlementRemarks.ts`, `models/Quotation.ts`, `validations/quotationValidations.ts`
 
 ---
 
