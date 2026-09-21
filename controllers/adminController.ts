@@ -37,6 +37,7 @@ import { parseCityFilter, cityInFilterWhere } from '../utils/serviceCities';
 import {
   buildReleasedToInstallerWhere,
   INSTALLER_RELEASE_STATUSES,
+  INSTALLER_APPROVED_QUEUE_STATUSES,
   isReleasedToInstallerListQuery
 } from '../constants/workflowQueues';
 import {
@@ -56,7 +57,9 @@ import {
   meteringWorkflowApiFields,
   normalizeMeteringWorkflowStatus,
   parseMeteringWccAfterDiscomFlag,
-  parseBankProcessDoneFlag
+  parseBankProcessDoneFlag,
+  isMeteringWorkflowStatus,
+  resolvePersistedMeteringStatus
 } from '../utils/meteringWorkflowApi';
 import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
@@ -67,11 +70,14 @@ import {
   meteringDetailsEchoFields
 } from '../utils/installationPartialApi';
 import {
-  INSTALLATION_REVERT_ALLOWED_FROM,
   installationRevertPatch,
   isPendingInstallerStatus,
   normalizeInstallStatus
 } from '../utils/installationRevert';
+import {
+  loadHasAtLeastOneSiteCompletionPhoto,
+  installerApprovalMissingSitePhotoMessage
+} from '../utils/installationApprovalPhotos';
 import {
   applyRetrieveFromMetering,
   RetrieveFromMeteringError
@@ -135,6 +141,7 @@ const respondWorkflowQuotation = async (quotation: Quotation, res: Response): Pr
       status: quotation.status,
       ...meteringWorkflowApiFields({
         installationStatus: quotation.installationStatus,
+        meteringStatus: (quotation as any).meteringStatus,
         meteringApprovedAt: quotation.meteringApprovedAt,
         mcoAt: quotation.mcoAt,
         completionAt: quotation.completionAt,
@@ -175,27 +182,9 @@ const hasMeteringDualTrackAccess = (req: Request): boolean => {
  * Jul 2026: include pending_installer / installer_in_progress so Admin → Quotations → All
  * "Send to Metering" works while OPS is still Pending Installer (see BACKEND_SEND_TO_METERING.ts).
  * installer_partial_approved stays blocked (Complete & Mark as Approved first).
+ * Metering is written to meteringStatus only — installation_status is untouched.
  */
-const SEND_TO_METERING_FROM_STATUSES = new Set([
-  'pending_installer',
-  'installer_in_progress',
-  'installer_rejected',
-  'installer_approved',
-  'pending_baldev',
-  'baldev_approved',
-  'baldev_rejected',
-  'metering_in_progress'
-]);
-
 /** Frontend always sends these on Admin Metering handoff (lib/api.ts → sendQuotationToMetering). */
-const isAdminSendToMeteringOverride = (body: Record<string, unknown> | null | undefined): boolean => {
-  if (!body) return false;
-  if (body.force === true || body.force === 'true' || body.force === 1) return true;
-  if (body.adminOverride === true || body.adminOverride === 'true') return true;
-  if (body.allowFromPendingInstaller === true || body.allowFromPendingInstaller === 'true') return true;
-  if (String(body.source || '').toLowerCase() === 'admin') return true;
-  return false;
-};
 
 /**
  * Remaining = amountAfterSubsidy − discountAmount − total paid.
@@ -416,8 +405,9 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         ...(where[Op.and] || []),
         {
           [Op.or]: [
-            { installationReadyForInstaller: true },
-            { installationStatus: { [Op.in]: meteringStates } }
+            { meteringStatus: { [Op.in]: meteringStates } },
+            { installationStatus: { [Op.in]: meteringStates } },
+            { installationReadyForInstaller: true }
           ]
         }
       ];
@@ -434,7 +424,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       if (installerStatusRaw === 'pending_installer') {
         installerStatuses = ['pending_installer'];
       } else if (installerStatusRaw === 'approved') {
-        installerStatuses = ['installer_approved'];
+        installerStatuses = [...INSTALLER_APPROVED_QUEUE_STATUSES];
       } else if (installerStatusRaw) {
         installerStatuses = installerStatusRaw
           .split(',')
@@ -661,11 +651,12 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             ? installationDocMap.get(String(q.id)) || []
             : [];
           const installationPayload = includeMedia
-            ? await mapInstallationDocumentsForApi(rawInstallationDocs)
+            ? await mapInstallationDocumentsForApi(rawInstallationDocs, String(q.id))
             : {
-                documents: [],
-                installationDocuments: [],
-                installationPhotoUrls: [],
+                documents: {},
+                installationDocuments: {},
+                installationPhotoUrls: [] as string[],
+                siteCompletionImages: [] as any[],
                 installationFieldUrls: {}
               };
           const latestMeterDoc = includeMedia
@@ -746,6 +737,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             }),
             ...meteringWorkflowApiFields({
               installationStatus: (q as any).installationStatus || 'pending_installer',
+              meteringStatus: (q as any).meteringStatus,
               meteringApprovedAt: (q as any).meteringApprovedAt,
               mcoAt: (q as any).mcoAt,
               completionAt: (q as any).completionAt,
@@ -797,6 +789,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             installationDocuments: installationPayload.installationDocuments,
             installationPhotoUrls: installationPayload.installationPhotoUrls,
             installation_photo_urls: installationPayload.installationPhotoUrls,
+            siteCompletionImages: installationPayload.siteCompletionImages,
+            site_completion_images: installationPayload.siteCompletionImages,
             ...installationPayload.installationFieldUrls,
             ...quotationProposalDateApiFields(q),
             ...quotationCallingLeadApiFields(row)
@@ -1161,6 +1155,7 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
           status: quotation.status,
           ...meteringWorkflowApiFields({
             installationStatus: quotation.installationStatus,
+            meteringStatus: (quotation as any).meteringStatus,
             meteringApprovedAt: quotation.meteringApprovedAt,
             mcoAt: quotation.mcoAt,
             completionAt: quotation.completionAt,
@@ -1169,6 +1164,11 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
             meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
           }),
           ...quotationPaymentApiFields(row),
+          // Explicit after spreads so revert always clears approved_at for the UI
+          installationStatus: quotation.installationStatus || null,
+          installation_status: quotation.installationStatus || null,
+          meteringStatus: (quotation as any).meteringStatus || null,
+          metering_status: (quotation as any).meteringStatus || null,
           installerApprovedAt: quotation.installerApprovedAt || null,
           installer_approved_at: quotation.installerApprovedAt || null,
           ...installationPartialApiFields({
@@ -1211,188 +1211,188 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     const nextStatus =
       normalizeMeteringWorkflowStatus(requested) || requested!;
 
-    // §AH — Admin Revert: installer_approved / partial → pending_installer.
-    // Do not write pending_installer onto quotation.status. Keep S3 photos.
+    // §AH — Admin Revert: always allow (incl. leaked pending_metering on installation_status).
+    // Write installation_status only; leave metering_status unchanged.
     if (isPendingInstallerStatus(nextStatus)) {
-      const currentNorm = normalizeInstallStatus(currentStatus);
-      if (!INSTALLATION_REVERT_ALLOWED_FROM.has(currentNorm)) {
-        res.status(409).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: `Cannot revert installation from "${currentStatus}"`,
-            details: [
-              {
-                field: 'installationStatus',
-                message:
-                  'Allowed from installer_approved / installer_partial_approved / installer_in_progress (idempotent if already pending_installer)'
-              }
-            ]
-          }
-        });
-        return;
-      }
       await quotation.update(installationRevertPatch() as any);
       await respondWithQuotation();
       return;
     }
 
-    if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
+    // Metering stages → meteringStatus column only (never overwrite installation_status).
+    if (isMeteringWorkflowStatus(nextStatus)) {
+      const currentMetering =
+        resolvePersistedMeteringStatus({
+          meteringStatus: (quotation as any).meteringStatus,
+          installationStatus: currentStatus
+        }) || '';
+
+      if (nextStatus === 'pending_metering') {
+        if (currentMetering === 'pending_metering') {
+          await respondWithQuotation();
+          return;
+        }
+        const installNorm = normalizeInstallStatus(currentStatus);
+        if (isInstallationPartialApprovedStatus(currentStatus)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VAL_001',
+              message: `Cannot send to metering from installation status "${currentStatus}"`,
+              details: [
+                {
+                  field: 'installationStatus',
+                  message:
+                    'Complete & Mark as Approved first (installer_partial_approved cannot go to metering)'
+                }
+              ]
+            }
+          });
+          return;
+        }
+        const tooLate = new Set([
+          'metering_approved',
+          METER_INSTALLATION_PENDING_STATUS,
+          'mco',
+          'completed'
+        ]);
+        if (tooLate.has(currentMetering)) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VAL_001',
+              message: `Cannot send to metering from metering status "${currentMetering}"`,
+              details: [
+                {
+                  field: 'meteringStatus',
+                  message: 'Quotation is already past Meter Pending'
+                }
+              ]
+            }
+          });
+          return;
+        }
+        // Do not require installer_approved — Send to Metering is independent.
+        void installNorm;
+      }
+
+      if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
+        if (
+          currentMetering !== 'metering_approved' &&
+          currentMetering !== METER_INSTALLATION_PENDING_STATUS
+        ) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VAL_001',
+              message: `Cannot move to meter_installation_pending from "${currentMetering || currentStatus}"`,
+              details: [
+                {
+                  field: 'meteringStatus',
+                  message: 'Allowed only from metering_approved'
+                }
+              ]
+            }
+          });
+          return;
+        }
+      }
+
+      if (nextStatus === 'mco') {
+        const allowedToMco = new Set([
+          METER_INSTALLATION_PENDING_STATUS,
+          'metering_approved'
+        ]);
+        if (!allowedToMco.has(currentMetering) && currentMetering !== 'mco') {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VAL_001',
+              message: `Cannot move to mco from "${currentMetering || currentStatus}"`,
+              details: [
+                {
+                  field: 'meteringStatus',
+                  message: 'To MCO requires meter_installation_pending (or legacy metering_approved)'
+                }
+              ]
+            }
+          });
+          return;
+        }
+      }
+
+      const meteringPatch: Record<string, unknown> = {
+        meteringStatus: nextStatus
+      };
+      // Heal leaked metering value off installation_status when present
+      if (isMeteringWorkflowStatus(currentStatus)) {
+        meteringPatch.installationStatus = quotation.installerApprovedAt
+          ? 'installer_approved'
+          : 'pending_installer';
+      }
+
+      if (nextStatus === 'pending_metering') {
+        meteringPatch.meteringActionAt = now;
+        meteringPatch.meteringWccAfterDiscom = false;
+        meteringPatch.meteringWccAfterDiscomAt = null;
+      }
+      if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
+        meteringPatch.meterInstallationPendingAt =
+          (quotation as any).meterInstallationPendingAt || now;
+        meteringPatch.meteringWccAfterDiscom = false;
+        meteringPatch.meteringWccAfterDiscomAt = null;
+      }
+      if (nextStatus === 'mco') {
+        meteringPatch.mcoAt = quotation.mcoAt || now;
+        if (!quotation.meteringApprovedAt) {
+          meteringPatch.meteringApprovedAt = now;
+        }
+        meteringPatch.meteringWccAfterDiscom = false;
+        meteringPatch.meteringWccAfterDiscomAt = null;
+      }
+      if (nextStatus === 'metering_approved') {
+        meteringPatch.meteringApprovedAt = quotation.meteringApprovedAt || now;
+        if (currentMetering === 'pending_metering' || currentMetering === 'metering_in_progress') {
+          meteringPatch.meteringWccAfterDiscom = false;
+          meteringPatch.meteringWccAfterDiscomAt = null;
+        }
+      }
       if (
-        currentStatus !== 'metering_approved' &&
-        currentStatus !== METER_INSTALLATION_PENDING_STATUS
+        nextStatus === 'pending_metering' ||
+        nextStatus === 'metering_in_progress'
       ) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: `Cannot move to meter_installation_pending from "${currentStatus}"`,
-            details: [
-              {
-                field: 'installationStatus',
-                message: 'Allowed only from metering_approved'
-              }
-            ]
-          }
-        });
-        return;
+        meteringPatch.meteringApprovedAt = null;
+        meteringPatch.mcoAt = null;
+        meteringPatch.meterInstallationPendingAt = null;
+        meteringPatch.meteringWccAfterDiscom = false;
+        meteringPatch.meteringWccAfterDiscomAt = null;
       }
+
+      if (wccAfterDiscomFlag !== undefined && nextStatus === 'metering_approved') {
+        const applied = applyWccAfterDiscomPatch(meteringPatch, wccAfterDiscomFlag, nextStatus);
+        if (!applied.ok) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'VAL_001',
+              message: applied.message,
+              details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
+            }
+          });
+          return;
+        }
+      }
+
+      await quotation.update(meteringPatch as any);
+      await respondWithQuotation();
+      return;
     }
 
-    if (nextStatus === 'mco') {
-      const allowedToMco = new Set([
-        METER_INSTALLATION_PENDING_STATUS,
-        'metering_approved'
-      ]);
-      if (!allowedToMco.has(currentStatus) && currentStatus !== 'mco') {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: `Cannot move to mco from "${currentStatus}"`,
-            details: [
-              {
-                field: 'installationStatus',
-                message: 'To MCO requires meter_installation_pending (or legacy metering_approved)'
-              }
-            ]
-          }
-        });
-        return;
-      }
-    }
-
-    if (nextStatus === 'pending_metering') {
-      if (currentStatus === 'pending_metering') {
-        await respondWithQuotation();
-        return;
-      }
-      // Partial install must Complete & Approve before metering — never allow.
-      if (isInstallationPartialApprovedStatus(currentStatus)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: `Cannot send to metering from installation status "${currentStatus}"`,
-            details: [{
-              field: 'installationStatus',
-              message:
-                'Complete & Mark as Approved first (installer_partial_approved cannot go to metering)'
-            }]
-          }
-        });
-        return;
-      }
-      // Terminal / past Meter Pending — reject even with admin force flags.
-      const tooLateForSendToMetering = new Set([
-        'metering_approved',
-        METER_INSTALLATION_PENDING_STATUS,
-        'mco',
-        'completed'
-      ]);
-      if (tooLateForSendToMetering.has(currentStatus)) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: `Cannot send to metering from installation status "${currentStatus}"`,
-            details: [{
-              field: 'installationStatus',
-              message: 'Quotation is already past Meter Pending'
-            }]
-          }
-        });
-        return;
-      }
-      // Jul 2026: pending_installer / installer_in_progress are in SEND_TO_METERING_FROM_STATUSES
-      // so Admin → Quotations → All → Send to Metering works without installer_approved.
-      // force / adminOverride / source:"admin" are accepted but not required (handler is admin-only).
-      if (!SEND_TO_METERING_FROM_STATUSES.has(currentStatus)) {
-        const adminOverride = isAdminSendToMeteringOverride(body);
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: `Cannot send to metering from installation status "${currentStatus}"`,
-            details: [{
-              field: 'installationStatus',
-              message: adminOverride
-                ? 'Unsupported installation status for Send to Metering'
-                : 'Send to Metering requires pending_installer / installer_approved (or later Baldev stages)'
-            }]
-          }
-        });
-        return;
-      }
-    }
-
+    // Installation-only transitions (never write metering stages onto installationStatus).
+    // Do not clear metering_status or metering timestamps — pipelines are independent.
     const patch: Record<string, unknown> = {
       installationStatus: nextStatus
     };
-
-    if (nextStatus === 'pending_metering') {
-      patch.meteringActionAt = now;
-      patch.meteringWccAfterDiscom = false;
-      patch.meteringWccAfterDiscomAt = null;
-    }
-
-    if (nextStatus === METER_INSTALLATION_PENDING_STATUS) {
-      patch.meterInstallationPendingAt =
-        (quotation as any).meterInstallationPendingAt || now;
-      // Leave post-Discom WCC queue when entering Meter Installation Pending
-      patch.meteringWccAfterDiscom = false;
-      patch.meteringWccAfterDiscomAt = null;
-    }
-
-    if (nextStatus === 'mco') {
-      patch.mcoAt = quotation.mcoAt || now;
-      if (!quotation.meteringApprovedAt) {
-        patch.meteringApprovedAt = now;
-      }
-      patch.meteringWccAfterDiscom = false;
-      patch.meteringWccAfterDiscomAt = null;
-    }
-
-    const preMeteringApproved = new Set([
-      'pending_installer',
-      'installer_in_progress',
-      INSTALLATION_PARTIAL_STATUS,
-      'installer_approved',
-      'installer_rejected',
-      'pending_baldev',
-      'baldev_rejected',
-      'baldev_approved',
-      'pending_metering',
-      'metering_in_progress'
-    ]);
-
-    if (preMeteringApproved.has(nextStatus)) {
-      patch.meteringApprovedAt = null;
-      patch.mcoAt = null;
-      patch.meterInstallationPendingAt = null;
-      patch.meteringWccAfterDiscom = false;
-      patch.meteringWccAfterDiscomAt = null;
-    }
 
     if (nextStatus === INSTALLATION_PARTIAL_STATUS) {
       patch.installationPartialApproved = true;
@@ -1402,28 +1402,40 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     }
 
     if (nextStatus === 'installer_approved') {
+      // Complete from Pending only — never from payment save. Require ≥1 site photo.
+      // Does NOT set pending_metering / meteringStatus.
+      const earlyInstall = new Set([
+        'pending_installer',
+        'installer_in_progress',
+        'installer_partial_approved',
+        'partial_approved',
+        ''
+      ]);
+      if (earlyInstall.has(normalizeInstallStatus(currentStatus)) || !quotation.installerApprovedAt) {
+        const hasSitePhoto = await loadHasAtLeastOneSiteCompletionPhoto(quotationId);
+        if (!hasSitePhoto) {
+          res.status(400).json({
+            success: false,
+            error: {
+              code: 'WF_002',
+              message: installerApprovalMissingSitePhotoMessage,
+              details: [
+                {
+                  field: 'installationStatus',
+                  message:
+                    'Approved Installation requires Complete from Pending with ≥1 site photo (payment save cannot approve)'
+                }
+              ]
+            }
+          });
+          return;
+        }
+      }
       if (!quotation.installerApprovedAt) {
         patch.installerApprovedAt = now;
       }
       patch.installationPartialApproved = false;
       patch.installationPartialApprovedAt = null;
-    }
-    if (nextStatus === 'metering_approved') {
-      patch.meteringApprovedAt = quotation.meteringApprovedAt || now;
-      // Undo from MIP keeps metering_approved; clear MIP stamp only when leaving that path later if needed
-      if (currentStatus === METER_INSTALLATION_PENDING_STATUS) {
-        // keep meterInstallationPendingAt history; status alone drives the tab
-      } else {
-        patch.mcoAt = null;
-        // To Discom from Meter Pending → Meter in Discom (not WCC Pending)
-        if (
-          currentStatus === 'pending_metering' ||
-          currentStatus === 'metering_in_progress'
-        ) {
-          patch.meteringWccAfterDiscom = false;
-          patch.meteringWccAfterDiscomAt = null;
-        }
-      }
     }
     if (nextStatus === 'completed' && !quotation.completionAt) {
       patch.completionAt = now;
@@ -1432,14 +1444,15 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       patch.baldevActionAt = quotation.baldevActionAt || now;
     }
 
-    // Explicit post-Discom WCC flag on the same PATCH (e.g. stay metering_approved + flag true)
+    // WCC flag only applies when metering is already metering_approved (column).
     if (wccAfterDiscomFlag !== undefined) {
-      if (nextStatus === METER_INSTALLATION_PENDING_STATUS || nextStatus === 'mco') {
-        // already cleared above
-      } else if (nextStatus === 'metering_approved' || currentStatus === 'metering_approved') {
-        const stageForGate =
-          nextStatus === 'metering_approved' ? 'metering_approved' : currentStatus;
-        const applied = applyWccAfterDiscomPatch(patch, wccAfterDiscomFlag, stageForGate);
+      const currentMetering =
+        resolvePersistedMeteringStatus({
+          meteringStatus: (quotation as any).meteringStatus,
+          installationStatus: currentStatus
+        }) || '';
+      if (currentMetering === 'metering_approved') {
+        const applied = applyWccAfterDiscomPatch(patch, wccAfterDiscomFlag, 'metering_approved');
         if (!applied.ok) {
           res.status(400).json({
             success: false,
@@ -1461,9 +1474,6 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
           }
         });
         return;
-      } else {
-        patch.meteringWccAfterDiscom = false;
-        patch.meteringWccAfterDiscomAt = null;
       }
     }
 
@@ -1488,32 +1498,36 @@ export const revertQuotationInstallationToPending = async (req: Request, res: Re
     force: body.force ?? true,
     adminOverride: body.adminOverride ?? true,
     allowRevert: body.allowRevert ?? true,
+    allowFromMetering: body.allowFromMetering ?? true,
+    independentInstallation: body.independentInstallation ?? true,
+    skipMeteringGuard: body.skipMeteringGuard ?? true,
     source: body.source ?? 'admin-install-revert'
   };
   await updateQuotationInstallationStatus(req, res);
 };
 
 /**
- * Preferred Admin "Send to Metering" endpoint (Jul 2026).
- * PATCH|POST /admin/quotations/:quotationId/send-to-metering
- *
- * Always targets pending_metering and allows pending_installer → pending_metering
- * so Admin → Quotations → All → Metering works while OPS is still Pending Installer.
- * See BACKEND_SEND_TO_METERING.ts.
+ * Preferred Admin "Send to Metering" — writes meteringStatus only.
+ * Does not require installer_approved. Does not overwrite installation_status.
  */
 export const sendQuotationToMetering = async (req: Request, res: Response): Promise<void> => {
-  // Normalize body so updateQuotationInstallationStatus takes the pending_metering path
-  // with admin override flags the frontend also sends on status patches.
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
   req.body = {
     ...body,
-    installationStatus: 'pending_metering',
     meteringStatus: 'pending_metering',
+    metering_status: 'pending_metering',
+    // Prefer meteringStatus key so installationStatus is not forced to pending_metering
+    installationStatus: undefined,
+    installation_status: undefined,
     force: body.force ?? true,
     adminOverride: body.adminOverride ?? true,
     allowFromPendingInstaller: body.allowFromPendingInstaller ?? true,
-    source: body.source ?? 'admin'
+    handoff: body.handoff ?? 'metering',
+    target: body.target ?? 'pending_metering',
+    source: body.source ?? 'admin-quotations-send-to-metering'
   };
+  // Ensure pickStatus finds meteringStatus
+  if (!req.body.meteringStatus) req.body.meteringStatus = 'pending_metering';
   await updateQuotationInstallationStatus(req, res);
 };
 
@@ -1704,6 +1718,7 @@ export const updateMeteringWccAfterDiscom = async (req: Request, res: Response):
         id: quotation.id,
         ...meteringWorkflowApiFields({
           installationStatus: quotation.installationStatus,
+          meteringStatus: (quotation as any).meteringStatus,
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
@@ -1811,6 +1826,7 @@ export const updateQuotationBankProcess = async (req: Request, res: Response): P
         ...quotationPaymentApiFields(row),
         ...meteringWorkflowApiFields({
           installationStatus: quotation.installationStatus,
+          meteringStatus: (quotation as any).meteringStatus,
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
@@ -2092,7 +2108,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         ? (doc as { toJSON: () => Record<string, unknown> }).toJSON()
         : (doc as unknown as Record<string, unknown>)
     );
-    const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
+    const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs, quotation.id);
     const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
     const meterDocumentFields = await buildMeterDocumentApiFields(
       resolveMeterStoredRef(quotationAny.meterDocumentImageUrl, rawInstallationDocs),
@@ -2137,6 +2153,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         }),
         ...meteringWorkflowApiFields({
           installationStatus: quotationAny.installationStatus || 'pending_installer',
+          meteringStatus: (quotationAny as any).meteringStatus,
           meteringApprovedAt: quotationAny.meteringApprovedAt,
           mcoAt: quotationAny.mcoAt,
           completionAt: quotationAny.completionAt,
@@ -2180,6 +2197,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,
         installation_photo_urls: installationPayload.installationPhotoUrls,
+        siteCompletionImages: installationPayload.siteCompletionImages,
+        site_completion_images: installationPayload.siteCompletionImages,
         ...installationPayload.installationFieldUrls,
         updatedAt: quotation.updatedAt
       }

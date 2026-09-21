@@ -2819,6 +2819,25 @@ Cause: bulk `GET ?range=all&limit=2000` omitted ISO `actionAt` and/or `mobile` (
 2. Row leaves Approved; appears under Pending Installation.
 3. GET-by-id still has photos; quotation `status` is still `approved`.
 
+### Upload-on-pick (immediate) — Sep 2026
+
+| Item | Detail |
+|------|--------|
+| Single upload | `POST …/documents/upload` (installer + admin `…/installer-documents/upload`) |
+| Flags | `saveMediaOnly` / `persistImagesOnly` / `force` / `allowFromPendingInstaller` |
+| S3 | `quotation-workflow/{id}/site_completion_image-{field}-{ts}.ext` |
+| Status | Stays `pending_installer` (never flips Approved on pick) |
+| Response | Presigned `url` + `publicUrl` + `field` |
+| Complete | `POST …/documents` with status + existing URLs; ≥1 site photo |
+
+### QA (revert + pick)
+
+1. Approved → Revert → Pending; photos still visible; refresh stays Pending.
+2. Pending → Retrieve from Installation → gone from Installation; Accounts shows Send again.
+3. On Pending, pick one photo → **200** + public URL before Complete; status still pending.
+4. Complete → Approved (fast; no re-upload of that file).
+5. Second slot upload does not delete the first.
+
 ---
 
 ## 37. Admin Calling Reports — exact Total Calls by date (§AI) — Aug 2026

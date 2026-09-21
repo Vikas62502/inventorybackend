@@ -1,18 +1,33 @@
 /**
- * Admin Installation Revert — installer_approved / partial → pending_installer.
- * See BACKEND_INSTALLATION_REVERT.ts, REQUIRED §AH.
- *
- * Never write pending_installer onto quotations.status (that enum is pending|approved|rejected).
- * Never delete S3 photos.
+ * Admin Installation Revert — any install (or leaked metering) value → pending_installer.
+ * Never write pending_installer onto quotations.status.
+ * Never touch metering_status. Never delete S3 photos.
  */
 
-export const INSTALLATION_REVERT_ALLOWED_FROM = new Set([
-  'installer_approved',
-  'installer_partial_approved',
-  'partial_approved',
+export const INSTALLATION_ONLY_STATUSES = new Set([
+  'pending_installer',
   'installer_in_progress',
   'in_progress',
-  'pending_installer'
+  'installer_partial_approved',
+  'partial_approved',
+  'installer_approved',
+  'installer_rejected',
+  'pending_baldev',
+  'baldev_approved',
+  'baldev_rejected',
+  'completed'
+]);
+
+/** Historical / leaked values that may still sit on installation_status. */
+export const INSTALLATION_REVERT_ALLOWED_FROM = new Set([
+  ...INSTALLATION_ONLY_STATUSES,
+  'pending_metering',
+  'metering_in_progress',
+  'metering_approved',
+  'meter_installation_pending',
+  'meter_install_pending',
+  'mco',
+  ''
 ]);
 
 export const normalizeInstallStatus = (raw: unknown): string =>
@@ -33,11 +48,21 @@ export const isAdminInstallationRevertRequest = (
   const source = String(body.source || '').toLowerCase();
   if (source.includes('revert') || source === 'admin-install-revert') return true;
   const truthy = (v: unknown) => v === true || v === 'true' || v === 1 || v === '1';
-  if (truthy(body.allowRevert) || truthy(body.force) || truthy(body.adminOverride)) return true;
+  if (
+    truthy(body.allowRevert) ||
+    truthy(body.force) ||
+    truthy(body.adminOverride) ||
+    truthy(body.allowFromMetering) ||
+    truthy(body.independentInstallation) ||
+    truthy(body.skipMeteringGuard)
+  ) {
+    return true;
+  }
   // Admin PATCH to pending_installer is always a revert (handler is admin-only).
   return true;
 };
 
+/** Install-only patch — does not clear or change meteringStatus. */
 export const installationRevertPatch = (): Record<string, unknown> => ({
   installationStatus: 'pending_installer',
   installerApprovedAt: null,

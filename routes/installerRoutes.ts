@@ -70,7 +70,8 @@ const handleInstallerMultipart = (req: Request, res: Response, next: NextFunctio
 };
 
 const handleSingleInstallerUploadMultipart = (req: Request, res: Response, next: NextFunction): void => {
-  installerMulter.single('file')(req, res, (err: unknown) => {
+  // Accept `file`, per-slot fields (homeFrontPhoto, …), or installerCompletionImages bag.
+  installerMulter.any()(req, res, (err: unknown) => {
     if (!err) {
       next();
       return;
@@ -83,13 +84,13 @@ const handleSingleInstallerUploadMultipart = (req: Request, res: Response, next:
       });
       return;
     }
-    if (e.code === 'LIMIT_UNEXPECTED_FILE') {
+    if (e.code === 'LIMIT_FILE_COUNT' || e.code === 'LIMIT_UNEXPECTED_FILE') {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_001',
-          message: 'Expected a single file field named "file"',
-          details: [{ field: e.field || 'file', message: e.message }]
+          message: 'Unexpected or too many file fields for single-slot upload',
+          details: [{ field: e.field || 'files', message: e.message }]
         }
       });
       return;

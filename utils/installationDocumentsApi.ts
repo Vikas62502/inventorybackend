@@ -3,7 +3,9 @@ import QuotationInstallationDoc from '../models/QuotationInstallationDoc';
 import {
   extractS3KeyOrStoredPath,
   persistableMediaReference,
-  resolveBrowsableMediaUrl
+  resolveBrowsableMediaUrl,
+  listSiteCompletionImagesForQuotation,
+  type SiteCompletionImageApiItem
 } from './s3Service';
 
 /** Normalize inbound URL/key for DB persistence (store object key when possible). */
@@ -87,6 +89,8 @@ export type InstallationDocumentsApiPayload = {
   installationFieldUrls: Record<string, unknown>;
   /** Flat presigned URLs for admin/installer thumbnails (§6.4.C.8). */
   installationPhotoUrls: string[];
+  /** §C.8 — key + fresh GetObject publicUrl for each site_completion_image. */
+  siteCompletionImages: SiteCompletionImageApiItem[];
 };
 
 /**
@@ -94,7 +98,8 @@ export type InstallationDocumentsApiPayload = {
  * presigned/public browsable URLs (§6.4.C.8 — avoids private S3 AccessDenied).
  */
 export const mapInstallationDocumentsForApi = async (
-  rawDocs: unknown[]
+  rawDocs: unknown[],
+  quotationId?: string | null
 ): Promise<InstallationDocumentsApiPayload> => {
   const docs = (rawDocs || []).map((d) => {
     const row = d as Record<string, unknown> & { toJSON?: () => Record<string, unknown> };
@@ -132,7 +137,9 @@ export const mapInstallationDocumentsForApi = async (
   const piUploadUrl = piUploadUrls[0] ?? null;
   const installerPoUrl =
     slotToUrls.installerPo?.[slotToUrls.installerPo.length - 1] ??
-    (installerPo.length ? String(installerPo[installerPo.length - 1].publicUrl || installerPo[installerPo.length - 1].url) : null);
+    (installerPo.length
+      ? String(installerPo[installerPo.length - 1].publicUrl || installerPo[installerPo.length - 1].url)
+      : null);
 
   const installationFieldUrls: Record<string, unknown> = {
     piUploadUrl,
@@ -193,16 +200,45 @@ export const mapInstallationDocumentsForApi = async (
     .map((doc) => (typeof doc.publicUrl === 'string' ? doc.publicUrl : String(doc.url || '')))
     .filter((u) => u.length > 0);
 
+  let siteCompletionImagesListed: SiteCompletionImageApiItem[] = [];
+  const qid =
+    String(quotationId || '').trim() ||
+    String((docs[0] as any)?.quotationId || (enriched[0] as any)?.quotationId || '').trim();
+  if (qid) {
+    try {
+      siteCompletionImagesListed = await listSiteCompletionImagesForQuotation(qid);
+      for (const item of siteCompletionImagesListed) {
+        if (item.publicUrl && !installationPhotoUrls.includes(item.publicUrl)) {
+          installationPhotoUrls.push(item.publicUrl);
+        }
+      }
+    } catch {
+      // ignore list failures — DB docs still returned
+    }
+  }
+
   return {
     documents,
     installationDocuments,
     installationPhotoUrls,
+    siteCompletionImages: siteCompletionImagesListed.length
+      ? siteCompletionImagesListed
+      : siteCompletionImages.map((doc) => {
+          const key =
+            extractS3KeyOrStoredPath(String((doc as any).fileUrl || doc.url || '')) ||
+            String((doc as any).key || '');
+          const publicUrl = String(doc.publicUrl || doc.url || '');
+          return { key, publicUrl, public_url: publicUrl, url: publicUrl };
+        }),
     installationFieldUrls: {
       ...installationFieldUrls,
       installationPhotoUrls,
       installation_photo_urls: installationPhotoUrls,
       existingInstallationImageUrlsJson,
-      existing_installation_image_urls_json: existingInstallationImageUrlsJson
+      existing_installation_image_urls_json: existingInstallationImageUrlsJson,
+      siteCompletionImages: siteCompletionImagesListed.length
+        ? siteCompletionImagesListed
+        : siteCompletionImages
     }
   };
 };

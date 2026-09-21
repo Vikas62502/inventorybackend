@@ -18,6 +18,20 @@ export const INSTALLER_RELEASE_STATUSES = [
   'completed'
 ] as const;
 
+/**
+ * Approved Installation queue — installer_approved only.
+ * Metering lives on meteringStatus; pending_metering must not appear here.
+ */
+export const INSTALLER_APPROVED_QUEUE_STATUSES = ['installer_approved'] as const;
+
+export const METERING_QUEUE_STATUSES = [
+  'pending_metering',
+  'metering_in_progress',
+  'metering_approved',
+  'meter_installation_pending',
+  'mco'
+] as const;
+
 /** True when the client wants only Payment Management → installer released rows. */
 export const isReleasedToInstallerListQuery = (query: Record<string, unknown>): boolean => {
   const operationalView = String(query.operationalView || '').toLowerCase();
@@ -45,7 +59,7 @@ export const resolveInstallerQueueStatuses = (statusQuery: string | undefined): 
   const raw = String(statusQuery || '').trim().toLowerCase();
   if (!raw) return INSTALLER_RELEASE_STATUSES.join(',');
   if (raw === 'pending_installer') return 'pending_installer';
-  // Frontend compatibility: "approved" means installer-forward pipeline.
-  if (raw === 'approved') return 'installer_approved';
+  // Approved Installation = installer_approved only (not metering / payment completed).
+  if (raw === 'approved') return INSTALLER_APPROVED_QUEUE_STATUSES.join(',');
   return raw;
 };

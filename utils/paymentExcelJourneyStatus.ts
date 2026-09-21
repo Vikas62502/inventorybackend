@@ -79,6 +79,9 @@ export const deriveInstallationStage = (
 
   if (isPartial) return 'in_progress';
 
+  // Approved Installation = installationStatus only (Complete from Pending or later).
+  // Do NOT treat leftover installerApprovedAt / photos / payment completed as Approved
+  // while status is still pending_installer / installer_in_progress.
   const isApprovedInstall =
     inst === 'installer_approved' ||
     inst === 'pending_baldev' ||
@@ -92,8 +95,7 @@ export const deriveInstallationStage = (
       'meter_install_pending',
       'mco',
       'completed'
-    ].includes(inst) ||
-    Boolean(opts?.installerApprovedAt);
+    ].includes(inst);
 
   if (isApprovedInstall) return 'completed'; // UI label = "Approved"
 
@@ -115,15 +117,22 @@ export const deriveInstallationStage = (
  */
 export const deriveMeteringStage = (
   quotationStatus: string | null | undefined,
-  installationStatus: string | null | undefined,
-  meteringWccAfterDiscom?: unknown
+  installationOrMeteringStatus: string | null | undefined,
+  meteringWccAfterDiscom?: unknown,
+  meteringStatusCol?: string | null
 ): JourneyStageState => {
   if (deriveAdminApprovalStage(quotationStatus) !== 'completed') return 'not_started';
 
-  const inst = String(installationStatus || '')
+  const inst = String(installationOrMeteringStatus || '')
     .trim()
     .toLowerCase();
-  const metering = String(deriveMeteringStatus(installationStatus) || inst || '')
+  const metering = String(
+    deriveMeteringStatus(meteringStatusCol) ||
+      deriveMeteringStatus(installationOrMeteringStatus) ||
+      meteringStatusCol ||
+      inst ||
+      ''
+  )
     .trim()
     .toLowerCase();
 
@@ -177,6 +186,7 @@ export const deriveFinalConfirmationStage = (
 export const buildJourneyStageProgress = (input: {
   status?: string | null;
   installationStatus?: string | null;
+  meteringStatus?: string | null;
   meteringWccAfterDiscom?: unknown;
   installationPartialApproved?: unknown;
   installerApprovedAt?: unknown;
@@ -189,7 +199,12 @@ export const buildJourneyStageProgress = (input: {
     })
   ),
   metering: toStageState(
-    deriveMeteringStage(input.status, input.installationStatus, input.meteringWccAfterDiscom)
+    deriveMeteringStage(
+      input.status,
+      input.installationStatus,
+      input.meteringWccAfterDiscom,
+      input.meteringStatus
+    )
   ),
   finalConfirmation: toStageState(
     deriveFinalConfirmationStage(input.status, input.installationStatus)
@@ -235,7 +250,24 @@ export const deriveFileStatusLabel = (input: {
 
 export const paymentExcelJourneyApiFields = (q: Record<string, unknown>) => {
   const status = (q.status ?? null) as string | null;
-  const installationStatus = (q.installationStatus ?? q.installation_status ?? null) as string | null;
+  let installationStatus = (q.installationStatus ?? q.installation_status ?? null) as string | null;
+  const meteringFromCol = (q.meteringStatus ?? q.metering_status ?? null) as string | null;
+  // If install column still holds a metering stage (pre-heal), treat as installer_approved for install label.
+  const installNorm = String(installationStatus || '')
+    .trim()
+    .toLowerCase();
+  if (
+    [
+      'pending_metering',
+      'metering_in_progress',
+      'metering_approved',
+      'meter_installation_pending',
+      'meter_install_pending',
+      'mco'
+    ].includes(installNorm)
+  ) {
+    installationStatus = 'installer_approved';
+  }
   const installationReadyForInstaller = Boolean(
     q.installationReadyForInstaller ?? q.installation_ready_for_installer ?? false
   );
@@ -248,6 +280,7 @@ export const paymentExcelJourneyApiFields = (q: Record<string, unknown>) => {
   const journeyStageProgress = buildJourneyStageProgress({
     status,
     installationStatus,
+    meteringStatus: meteringFromCol,
     meteringWccAfterDiscom,
     installationPartialApproved,
     installerApprovedAt
@@ -261,6 +294,7 @@ export const paymentExcelJourneyApiFields = (q: Record<string, unknown>) => {
   });
 
   const instKey = String(installationStatus || 'pending_installer');
+  const meteringKey = String(meteringFromCol || installNorm || '');
   const adminApprovalStatus =
     ADMIN_APPROVAL_LABELS[String(status || 'pending').toLowerCase()] || String(status || 'Pending');
   /** FILE STATUS → Installation: Pending | In Progress | Approved */
@@ -284,7 +318,14 @@ export const paymentExcelJourneyApiFields = (q: Record<string, unknown>) => {
       'meter_installation_pending',
       'mco',
       'completed'
-    ].includes(instKey)
+    ].includes(instKey) ||
+    [
+      'pending_metering',
+      'metering_in_progress',
+      'metering_approved',
+      'meter_installation_pending',
+      'mco'
+    ].includes(meteringKey)
       ? 'Approved'
       : 'Not Started');
 

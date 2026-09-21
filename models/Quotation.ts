@@ -104,6 +104,14 @@ interface QuotationAttributes {
   baldevRemarks?: string | null;
   meteringId?: string | null;
   meteringActionAt?: Date | null;
+  /** Independent metering pipeline (never reused for installation_status). */
+  meteringStatus?:
+    | 'pending_metering'
+    | 'metering_in_progress'
+    | 'metering_approved'
+    | 'meter_installation_pending'
+    | 'mco'
+    | null;
   meteringApprovedAt?: Date | null;
   meteringRemarks?: string | null;
   meteringAuthorizedRepresentative?: string | null;
@@ -239,6 +247,13 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public baldevRemarks!: string | null;
   public meteringId!: string | null;
   public meteringActionAt!: Date | null;
+  public meteringStatus!:
+    | 'pending_metering'
+    | 'metering_in_progress'
+    | 'metering_approved'
+    | 'meter_installation_pending'
+    | 'mco'
+    | null;
   public meteringApprovedAt!: Date | null;
   public meteringRemarks!: string | null;
   public meteringAuthorizedRepresentative!: string | null;
@@ -584,6 +599,12 @@ Quotation.init(
     meteringActionAt: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+    meteringStatus: {
+      type: DataTypes.STRING(64),
+      allowNull: true,
+      defaultValue: null,
+      field: 'meteringStatus'
     },
     meteringApprovedAt: {
       type: DataTypes.DATE,

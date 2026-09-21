@@ -1,6 +1,9 @@
 import { Quotation } from '../models/index-quotation';
 import { normalizeInstallStatus } from './installationRevert';
-import { normalizeMeteringWorkflowStatus } from './meteringWorkflowApi';
+import {
+  normalizeMeteringWorkflowStatus,
+  resolvePersistedMeteringStatus
+} from './meteringWorkflowApi';
 
 const EARLY_METERING = new Set(['pending_metering', 'metering_in_progress', '']);
 
@@ -28,35 +31,30 @@ export class RetrieveFromMeteringError extends Error {
   }
 }
 
-const currentStages = (quotation: {
-  installationStatus?: string | null;
-  installation_status?: string | null;
-}) => {
-  const install = normalizeInstallStatus(
-    quotation.installationStatus ?? quotation.installation_status
-  );
-  return { install, metering: install };
-};
-
-/** Meter Pending → installer_approved; keep Payment Management release flags. */
+/** Meter Pending → clear metering_status; keep installation_status as installer_approved. */
 export const buildRetrieveFromMeteringPatch = (quotation: {
   installationStatus?: string | null;
   installation_status?: string | null;
+  meteringStatus?: string | null;
+  metering_status?: string | null;
+  installerApprovedAt?: Date | string | null;
 }): Record<string, unknown> => {
-  const { install } = currentStages(quotation);
+  const metering =
+    resolvePersistedMeteringStatus(quotation) ||
+    normalizeInstallStatus(quotation.installationStatus ?? quotation.installation_status);
 
   const inEarly =
-    EARLY_METERING.has(install) ||
-    install === 'pending_metering' ||
-    install === 'metering_in_progress';
+    EARLY_METERING.has(metering) ||
+    metering === 'pending_metering' ||
+    metering === 'metering_in_progress';
 
   if (!inEarly) {
     throw new RetrieveFromMeteringError(
-      `Cannot retrieve from metering while stage is '${install || 'unset'}'. Use late-stage revert flows.`
+      `Cannot retrieve from metering while stage is '${metering || 'unset'}'. Use late-stage revert flows.`
     );
   }
 
-  if (LATE_METERING.has(install)) {
+  if (LATE_METERING.has(metering)) {
     throw new RetrieveFromMeteringError(
       'Quotation is past Meter Pending — retrieve not allowed.',
       409,
@@ -64,8 +62,11 @@ export const buildRetrieveFromMeteringPatch = (quotation: {
     );
   }
 
-  return {
-    installationStatus: 'installer_approved',
+  const install = normalizeInstallStatus(
+    quotation.installationStatus ?? quotation.installation_status
+  );
+  const patch: Record<string, unknown> = {
+    meteringStatus: null,
     meteringApprovedAt: null,
     mcoAt: null,
     meterInstallationPendingAt: null,
@@ -73,6 +74,21 @@ export const buildRetrieveFromMeteringPatch = (quotation: {
     meteringWccAfterDiscomAt: null,
     meteringActionAt: null
   };
+
+  // Heal leaked metering off installation_status; keep installer_approved when set.
+  if (
+    install === 'pending_metering' ||
+    install === 'metering_in_progress' ||
+    install === 'metering_approved' ||
+    install === 'meter_installation_pending' ||
+    install === 'mco'
+  ) {
+    patch.installationStatus = quotation.installerApprovedAt
+      ? 'installer_approved'
+      : 'installer_approved';
+  }
+
+  return patch;
 };
 
 export const applyRetrieveFromMetering = async (quotation: Quotation): Promise<Quotation> => {
@@ -82,7 +98,9 @@ export const applyRetrieveFromMetering = async (quotation: Quotation): Promise<Q
   return quotation;
 };
 
-export const isRetrieveFromMeteringRequest = (body: Record<string, unknown> | null | undefined): boolean => {
+export const isRetrieveFromMeteringRequest = (
+  body: Record<string, unknown> | null | undefined
+): boolean => {
   if (!body) return false;
   const truthy = (v: unknown) => v === true || v === 'true' || v === 1 || v === '1';
   if (truthy(body.retrieveFromMetering)) return true;

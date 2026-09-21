@@ -1,18 +1,31 @@
 /**
- * Metering sub-workflow vs installation pipeline (§V).
- * `installer_approved` is NOT `metering_approved` — UI must use `meteringStatus` for MCO/Approved tabs.
- * See BACKEND_METER_INSTALLATION_PENDING.md for `meter_installation_pending`.
+ * Metering sub-workflow vs installation pipeline.
+ * Persist metering stages on quotations.meteringStatus only — never on installationStatus.
+ * See BACKEND_METER_INSTALLATION_PENDING.md for meter_installation_pending.
  */
 
 export const METER_INSTALLATION_PENDING_STATUS = 'meter_installation_pending' as const;
 
-const METERING_CANONICAL_STATUSES = new Set([
+export const METERING_CANONICAL_STATUSES = new Set([
   'pending_metering',
   'metering_in_progress',
   'metering_approved',
   METER_INSTALLATION_PENDING_STATUS,
   'meter_install_pending', // read alias
   'mco'
+]);
+
+export const INSTALLATION_ONLY_STATUSES = new Set([
+  'pending_installer',
+  'installer_in_progress',
+  'installer_partial_approved',
+  'partial_approved',
+  'installer_approved',
+  'installer_rejected',
+  'pending_baldev',
+  'baldev_approved',
+  'baldev_rejected',
+  'completed'
 ]);
 
 /** Normalize frontend alias `meter_install_pending` → canonical status. */
@@ -28,11 +41,43 @@ export const normalizeMeteringWorkflowStatus = (
   return s;
 };
 
-/** Derive metering tab stage from persisted installationStatus. */
+export const isMeteringWorkflowStatus = (raw: string | null | undefined): boolean => {
+  const n = normalizeMeteringWorkflowStatus(raw);
+  return Boolean(n && METERING_CANONICAL_STATUSES.has(n));
+};
+
+/**
+ * Resolve persisted metering stage: prefer meteringStatus column, fallback to legacy
+ * installationStatus when it still holds a metering value (pre-migration rows).
+ */
+export const resolvePersistedMeteringStatus = (q: {
+  meteringStatus?: string | null;
+  metering_status?: string | null;
+  installationStatus?: string | null;
+  installation_status?: string | null;
+}): string | null => {
+  const fromCol = normalizeMeteringWorkflowStatus(
+    q.meteringStatus ?? q.metering_status ?? null
+  );
+  if (fromCol && METERING_CANONICAL_STATUSES.has(fromCol)) {
+    return fromCol === 'meter_install_pending' ? METER_INSTALLATION_PENDING_STATUS : fromCol;
+  }
+  const fromInstall = normalizeMeteringWorkflowStatus(
+    q.installationStatus ?? q.installation_status ?? null
+  );
+  if (fromInstall && METERING_CANONICAL_STATUSES.has(fromInstall)) {
+    return fromInstall === 'meter_install_pending'
+      ? METER_INSTALLATION_PENDING_STATUS
+      : fromInstall;
+  }
+  return null;
+};
+
+/** @deprecated Prefer resolvePersistedMeteringStatus — kept for call-site compatibility. */
 export const deriveMeteringStatus = (
-  installationStatus: string | null | undefined
+  installationOrMeteringStatus: string | null | undefined
 ): string | null => {
-  const inst = normalizeMeteringWorkflowStatus(installationStatus);
+  const inst = normalizeMeteringWorkflowStatus(installationOrMeteringStatus);
   if (!inst) return null;
   if (inst === 'meter_install_pending') return METER_INSTALLATION_PENDING_STATUS;
   if (METERING_CANONICAL_STATUSES.has(inst)) {
@@ -47,6 +92,7 @@ export const isMeteringApprovedInstallationStatus = (
 
 export const meteringWorkflowApiFields = (q: {
   installationStatus?: string | null;
+  meteringStatus?: string | null;
   meteringApprovedAt?: Date | string | null;
   mcoAt?: Date | string | null;
   completionAt?: Date | string | null;
@@ -54,15 +100,24 @@ export const meteringWorkflowApiFields = (q: {
   meteringWccAfterDiscom?: boolean | null;
   meteringWccAfterDiscomAt?: Date | string | null;
 }) => {
-  const rawInst = q.installationStatus ?? null;
-  const normalized = normalizeMeteringWorkflowStatus(rawInst) || rawInst;
-  const meteringStatus = deriveMeteringStatus(rawInst);
-  const mcoStatus = normalized === 'mco' ? 'mco' : null;
+  const rawInstall = q.installationStatus ?? null;
+  // Never echo a metering stage as installationStatus once columns are split.
+  const installNorm = normalizeMeteringWorkflowStatus(rawInstall) || rawInstall;
+  const installationStatus =
+    installNorm && METERING_CANONICAL_STATUSES.has(installNorm)
+      ? 'installer_approved'
+      : installNorm;
+
+  const meteringStatus = resolvePersistedMeteringStatus({
+    meteringStatus: q.meteringStatus,
+    installationStatus: rawInstall
+  });
+  const mcoStatus = meteringStatus === 'mco' ? 'mco' : null;
   const wccAfterDiscom = Boolean(q.meteringWccAfterDiscom);
 
   return {
-    installationStatus: normalized,
-    installation_status: normalized,
+    installationStatus: installationStatus || null,
+    installation_status: installationStatus || null,
     meteringStatus,
     metering_status: meteringStatus,
     meteringStage: meteringStatus,

@@ -1584,6 +1584,37 @@ Optional dedicated `GET …/customer-journey` with `stageDates` not shipped.
 | `POST …/revert-installation` | Done |
 | Installer queue `?status=approved` excludes reverted rows | Done (filters on `installationStatus`) |
 
+### Upload-on-pick (immediate S3, not batch on Complete) — Sep 2026
+
+| Item | Status |
+|------|--------|
+| `POST /api/installer/quotations/:id/documents/upload` (+ admin aliases) | Done |
+| Multipart: `field`+`file` / bag+order / per-slot; `saveMediaOnly` / `persistImagesOnly` / `force` / `allowFromPendingInstaller` | Done |
+| S3 key `quotation-workflow/{id}/site_completion_image-{field}-{ts}.ext`; merge slots; no wipe | Done |
+| Do **not** set `installer_approved`; status stays `pending_installer` | Done |
+| Response `{ url, publicUrl, field }` (presigned GET) | Done |
+| Complete: ≥1 site photo → `installer_approved`; PI-only not enough | Done |
+
+### Payment save ≠ Approved Installation — Sep 2026
+
+| Item | Status |
+|------|--------|
+| PUT/PATCH installments, payment-details, payment-mode never write install fields | Done |
+| `paymentStatus=completed` does not set `installer_approved` | Done |
+| `GET ?status=approved` = `installer_approved` only | Done |
+| Journey label ignores leftover `installerApprovedAt` while still pending | Done |
+
+### Installation ⟂ Metering columns — Sep 2026
+
+| Item | Status |
+|------|--------|
+| `meteringStatus` column (migration `20260921170000`) | Done |
+| Never store `pending_metering` on `installation_status` | Done |
+| Revert from leaked `pending_metering` → 200; leave `metering_status` | Done |
+| Complete → `installer_approved` only (no Meter Pending) | Done |
+| Send to Metering → `metering_status=pending_metering` only | Done |
+| Metering queues filter `meteringStatus` | Done |
+
 ---
 
 ## §AI — Admin Calling Reports **exact counts** by date filter — Aug 2026

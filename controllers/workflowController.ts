@@ -16,8 +16,13 @@ import { toDateOnlyStringOrNull, quotationPaymentApiFields } from '../utils/quot
 import { getInstallationTeamIdFromRequest } from '../utils/installationTeamRole';
 import {
   buildPublicWorkflowFileUrl,
-  mapInstallationDocumentsForApi
+  mapInstallationDocumentsForApi,
+  resolveInstallationMediaViewUrl
 } from '../utils/installationDocumentsApi';
+import {
+  loadHasAtLeastOneSiteCompletionPhoto,
+  installerApprovalMissingSitePhotoMessage
+} from '../utils/installationApprovalPhotos';
 import {
   buildMcoDocApiFields,
   buildMeterDocumentApiFields,
@@ -30,7 +35,8 @@ import {
 import {
   METER_INSTALLATION_PENDING_STATUS,
   meteringWorkflowApiFields,
-  normalizeMeteringWorkflowStatus
+  normalizeMeteringWorkflowStatus,
+  resolvePersistedMeteringStatus
 } from '../utils/meteringWorkflowApi';
 import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { resolveImageContentTypeForUpload } from '../utils/uploadMimeTypes';
@@ -104,24 +110,38 @@ const getS3Client = () => {
   return new AWS.S3({ region });
 };
 
-const uploadFileToS3 = async (file: Express.Multer.File, quotationId: string, docType: string) => {
+const uploadFileToS3 = async (
+  file: Express.Multer.File,
+  quotationId: string,
+  docType: string,
+  slot?: string
+) => {
   const bucket = normalizeAwsEnvValue(process.env.AWS_BUCKET_NAME, 'cbpl-bajaj-node');
   if (!bucket) throw new Error('AWS_BUCKET_NAME is not configured');
-  const ext = path.extname(file.originalname || '');
-  const key = `quotation-workflow/${quotationId}/${docType}-${Date.now()}-${Math.round(Math.random() * 1e8)}${ext}`;
-  await getS3Client().putObject({
-    Bucket: bucket,
-    Key: key,
-    Body: file.buffer,
-    ContentType: resolveImageContentTypeForUpload(file)
-  }).promise();
+  const ext = path.extname(file.originalname || '') || '.jpg';
+  const safeSlot = String(slot || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .slice(0, 64);
+  const key =
+    docType === 'site_completion_image' && safeSlot
+      ? `quotation-workflow/${quotationId}/site_completion_image-${safeSlot}-${Date.now()}${ext}`
+      : `quotation-workflow/${quotationId}/${docType}-${Date.now()}-${Math.round(Math.random() * 1e8)}${ext}`;
+  await getS3Client()
+    .putObject({
+      Bucket: bucket,
+      Key: key,
+      Body: file.buffer,
+      ContentType: resolveImageContentTypeForUpload(file)
+    })
+    .promise();
   return key;
 };
 
 const normalizeWorkflowFileUrl = (value: unknown): string | null => buildPublicWorkflowFileUrl(value);
 
-const mapWorkflowDocumentsForFrontend = async (docs: any[]) =>
-  (await mapInstallationDocumentsForApi(docs)).documents;
+const mapWorkflowDocumentsForFrontend = async (docs: any[], quotationId?: string) =>
+  (await mapInstallationDocumentsForApi(docs, quotationId)).documents;
 
 const mapAssignedVisitors = (assignments: any[]) =>
   (assignments || []).map((a: any) => {
@@ -214,8 +234,23 @@ const getWorkflowQueue = async (
         : requestedStatuses[0] || targetStatus;
 
     if (meteringQueue) {
-      // §L.1 — metering pipeline rows appear without Payment Management release (admin early send).
-      where.installationStatus = installationStatusFilter;
+      // Metering queue reads meteringStatus (independent of installation_status).
+      // Legacy fallback: also match installationStatus still holding a metering stage.
+      const meteringClause =
+        requestedStatuses.length > 1
+          ? {
+              [Op.or]: [
+                { meteringStatus: { [Op.in]: requestedStatuses } },
+                { installationStatus: { [Op.in]: requestedStatuses } }
+              ]
+            }
+          : {
+              [Op.or]: [
+                { meteringStatus: requestedStatuses[0] || targetStatus },
+                { installationStatus: requestedStatuses[0] || targetStatus }
+              ]
+            };
+      where[Op.and] = [...(where[Op.and] || []), meteringClause];
     } else if (releaseRequired) {
       // Source-of-truth: only rows sent from Payment Management (flag or release timestamp).
       where[Op.and] = [
@@ -392,11 +427,12 @@ const getWorkflowQueue = async (
               )
             : [];
           const installationPayload = includeMedia
-            ? await mapInstallationDocumentsForApi(rawInstallationDocs)
+            ? await mapInstallationDocumentsForApi(rawInstallationDocs, q.id)
             : {
-                documents: [],
-                installationDocuments: [],
-                installationPhotoUrls: [],
+                documents: {},
+                installationDocuments: {},
+                installationPhotoUrls: [] as string[],
+                siteCompletionImages: [] as any[],
                 installationFieldUrls: {}
               };
           const latestMeterDoc = includeMedia
@@ -440,6 +476,7 @@ const getWorkflowQueue = async (
             }),
             ...meteringWorkflowApiFields({
               installationStatus: q.installationStatus,
+              meteringStatus: (q as any).meteringStatus,
               meteringApprovedAt: q.meteringApprovedAt,
               mcoAt: q.mcoAt,
               completionAt: q.completionAt,
@@ -530,6 +567,8 @@ const getWorkflowQueue = async (
             installationDocuments: installationPayload.installationDocuments,
             installationPhotoUrls: installationPayload.installationPhotoUrls,
             installation_photo_urls: installationPayload.installationPhotoUrls,
+            siteCompletionImages: installationPayload.siteCompletionImages,
+            site_completion_images: installationPayload.siteCompletionImages,
             ...installationPayload.installationFieldUrls,
             createdAt: q.createdAt,
             validUntil: q.validUntil,
@@ -539,6 +578,7 @@ const getWorkflowQueue = async (
               status: q.status,
               ...meteringWorkflowApiFields({
                 installationStatus: q.installationStatus,
+                meteringStatus: (q as any).meteringStatus,
                 meteringApprovedAt: q.meteringApprovedAt,
                 mcoAt: q.mcoAt,
                 completionAt: q.completionAt,
@@ -657,10 +697,15 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
       return;
     }
 
-    const current = quotation.installationStatus || '';
+    const current =
+      resolvePersistedMeteringStatus({
+        meteringStatus: (quotation as any).meteringStatus,
+        installationStatus: quotation.installationStatus
+      }) ||
+      quotation.installationStatus ||
+      '';
     const valid: Record<string, string[]> = {
-      // Fallback compatibility: when queue includes pre-metering records,
-      // allow metering to move via start -> approve (or direct approve).
+      // Metering actions validate against meteringStatus (legacy install fallback via resolve).
       start: ['pending_metering', 'pending_installer', 'installer_in_progress', 'installer_approved'],
       approve: [
         'metering_in_progress',
@@ -684,6 +729,16 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
       meteringId: req.user?.id || req.dealer?.id || quotation.meteringId || null,
       meteringActionAt: new Date()
     };
+    // Heal leaked metering stage off installation_status when advancing metering
+    if (
+      ['pending_metering', 'metering_in_progress', 'metering_approved', METER_INSTALLATION_PENDING_STATUS, 'mco'].includes(
+        String(quotation.installationStatus || '')
+      )
+    ) {
+      patch.installationStatus = quotation.installerApprovedAt
+        ? 'installer_approved'
+        : 'installer_approved';
+    }
     if (remarks !== undefined) {
       patch.meteringRemarks = (remarks as string | undefined) || null;
     }
@@ -693,7 +748,7 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         return 'To MCO requires meter_installation_pending (or legacy metering_approved).';
       }
       if (act === 'approve' && !valid.approve.includes(stage)) {
-        return 'Metering approve is not allowed for the current installation stage.';
+        return 'Metering approve is not allowed for the current metering stage.';
       }
       return 'Metering action not allowed for current stage';
     };
@@ -707,7 +762,7 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         return;
       }
 
-      if (action === 'start') patch.installationStatus = 'metering_in_progress';
+      if (action === 'start') patch.meteringStatus = 'metering_in_progress';
       if (action === 'approve') {
         const detailsErrors = await collectMeteringApproveErrors(quotation, quotationId);
         if (detailsErrors.length > 0) {
@@ -721,14 +776,14 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
           });
           return;
         }
-        patch.installationStatus = 'metering_approved';
+        patch.meteringStatus = 'metering_approved';
         patch.meteringApprovedAt = new Date();
         // Land in Meter in Discom (not WCC Pending)
         patch.meteringWccAfterDiscom = false;
         patch.meteringWccAfterDiscomAt = null;
       }
       if (action === 'send_to_mco') {
-        patch.installationStatus = 'mco';
+        patch.meteringStatus = 'mco';
         patch.mcoAt = new Date();
         patch.meteringWccAfterDiscom = false;
         patch.meteringWccAfterDiscomAt = null;
@@ -760,22 +815,24 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
           });
           return;
         }
+        // Final confirmation handoff — installation column only; clear metering terminal
         patch.installationStatus = 'pending_baldev';
+        patch.meteringStatus = 'mco';
       }
       if (action === 'move_back') {
         if (current === METER_INSTALLATION_PENDING_STATUS) {
-          patch.installationStatus = 'metering_approved';
+          patch.meteringStatus = 'metering_approved';
         } else {
-          patch.installationStatus = current === 'mco' ? 'metering_approved' : 'pending_metering';
+          patch.meteringStatus = current === 'mco' ? 'metering_approved' : 'pending_metering';
         }
       }
     } else {
       // Direct body fallback: metering_approved | meter_installation_pending | mco
       const rawTarget =
-        parseTrimmedString(body.installationStatus) ||
-        parseTrimmedString(body.installation_status) ||
         parseTrimmedString(body.meteringStatus) ||
         parseTrimmedString(body.metering_status) ||
+        parseTrimmedString(body.installationStatus) ||
+        parseTrimmedString(body.installation_status) ||
         parseTrimmedString(body.status);
       const target = normalizeMeteringWorkflowStatus(rawTarget) || '';
 
@@ -788,9 +845,9 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
               'Direct status must be metering_approved, meter_installation_pending, or mco when action is omitted',
             details: [
               {
-                field: 'installationStatus',
+                field: 'meteringStatus',
                 message:
-                  'Use action enum, or installationStatus/meteringStatus = metering_approved | meter_installation_pending | mco'
+                  'Use action enum, or meteringStatus = metering_approved | meter_installation_pending | mco'
               }
             ]
           }
@@ -801,7 +858,7 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
       if (target === 'metering_approved') {
         // Undo from Meter Installation Pending → Meter in Discom, or approve path
         if (current === METER_INSTALLATION_PENDING_STATUS) {
-          patch.installationStatus = 'metering_approved';
+          patch.meteringStatus = 'metering_approved';
         } else {
           if (!valid.approve.includes(current)) {
             res.status(409).json({
@@ -822,7 +879,7 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
             });
             return;
           }
-          patch.installationStatus = 'metering_approved';
+          patch.meteringStatus = 'metering_approved';
           patch.meteringApprovedAt = new Date();
           patch.meteringWccAfterDiscom = false;
           patch.meteringWccAfterDiscomAt = null;
@@ -833,27 +890,26 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
             success: false,
             error: {
               code: 'WF_003',
-              message: 'meter_installation_pending is only allowed from metering_approved'
+              message: 'meter_installation_pending requires metering_approved'
             }
           });
           return;
         }
-        patch.installationStatus = METER_INSTALLATION_PENDING_STATUS;
-        if (!(quotation as any).meterInstallationPendingAt) {
-          patch.meterInstallationPendingAt = new Date();
-        }
+        patch.meteringStatus = METER_INSTALLATION_PENDING_STATUS;
+        patch.meterInstallationPendingAt =
+          (quotation as any).meterInstallationPendingAt || new Date();
         patch.meteringWccAfterDiscom = false;
         patch.meteringWccAfterDiscomAt = null;
       } else if (target === 'mco') {
-        if (!valid.send_to_mco.includes(current)) {
+        if (!valid.send_to_mco.includes(current) && current !== 'mco') {
           res.status(409).json({
             success: false,
             error: { code: 'WF_003', message: wf003Message('send_to_mco', current) }
           });
           return;
         }
-        patch.installationStatus = 'mco';
-        patch.mcoAt = new Date();
+        patch.meteringStatus = 'mco';
+        patch.mcoAt = quotation.mcoAt || new Date();
         patch.meteringWccAfterDiscom = false;
         patch.meteringWccAfterDiscomAt = null;
       }
@@ -868,6 +924,7 @@ export const meteringStatusUpdate = async (req: Request, res: Response): Promise
         id: quotation.id,
         ...meteringWorkflowApiFields({
           installationStatus: quotation.installationStatus,
+          meteringStatus: (quotation as any).meteringStatus,
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
@@ -1012,7 +1069,7 @@ export const baldevDecision = async (req: Request, res: Response): Promise<void>
       }
 
       await quotation.update({
-        installationStatus: markCompleted === true ? 'completed' : 'pending_metering',
+        installationStatus: markCompleted === true ? 'completed' : 'baldev_approved',
         baldevId: req.user?.id || null,
         baldevActionAt: new Date(),
         baldevRemarks: remarks || null,
@@ -1434,8 +1491,13 @@ export const uploadInstallerDocument = async (req: Request, res: Response): Prom
       return;
     }
 
-    const fieldName = parseTrimmedString(req.body?.field);
-    const file = req.file as Express.Multer.File | undefined;
+    const body = (req.body || {}) as Record<string, unknown>;
+    const saveMediaOnly =
+      parseTruthyFlag(body.saveMediaOnly) === true ||
+      parseTruthyFlag(body.persistImagesOnly) === true ||
+      parseTruthyFlag(body.save_media_only) === true ||
+      parseTruthyFlag(body.persist_images_only) === true;
+
     const allowedFields = new Set([
       'homeFrontPhoto',
       'homeWithPersonPhoto',
@@ -1447,6 +1509,36 @@ export const uploadInstallerDocument = async (req: Request, res: Response): Prom
       'otherImages',
       'piUpload'
     ]);
+
+    const allFiles = flattenMulterFiles(req);
+    let fieldName = parseTrimmedString(body.field) || parseTrimmedString(body.slot);
+    let file: Express.Multer.File | undefined =
+      (req.file as Express.Multer.File | undefined) ||
+      allFiles.find((f) => f.fieldname === 'file') ||
+      undefined;
+
+    // Per-field part: homeFrontPhoto=<binary>
+    if (!file) {
+      const perField = allFiles.find((f) => allowedFields.has(f.fieldname));
+      if (perField) {
+        file = perField;
+        if (!fieldName) fieldName = perField.fieldname;
+      }
+    }
+
+    // Aggregate bag + order JSON: installerCompletionImages + ["homeFrontPhoto"]
+    if (!file || !fieldName) {
+      const order =
+        parseInstallerCompletionImageFieldOrderJson(body) ||
+        parseStringList(body.installerCompletionImageFieldOrderJson);
+      const bag = allFiles.filter((f) => f.fieldname === 'installerCompletionImages');
+      if (bag.length > 0) {
+        file = bag[0];
+        const orderKey = order[0];
+        if (orderKey && allowedFields.has(orderKey)) fieldName = orderKey;
+        else if (!fieldName) fieldName = 'otherImages';
+      }
+    }
 
     if (!fieldName || !allowedFields.has(fieldName)) {
       res.status(400).json({
@@ -1472,24 +1564,110 @@ export const uploadInstallerDocument = async (req: Request, res: Response): Prom
       return;
     }
 
-    const docType = INSTALLER_FIELD_DOC_MAP[fieldName].docType;
-    const url = await uploadFileToS3(file, quotationId, docType);
-    const urlKey = `${fieldName}Url`;
+    const map = INSTALLER_FIELD_DOC_MAP[fieldName];
+    const docType = map.docType;
+    const slot = map.slot || fieldName;
+    const key = await uploadFileToS3(file, quotationId, docType, slot);
 
+    const actorId = workflowActorId(req);
+    const actorRole = workflowActorRole(req);
+    const doc = await QuotationInstallationDoc.create({
+      id: uuidv4(),
+      quotationId,
+      docType: docType as any,
+      fileUrl: key,
+      uploadedByUserId: actorId,
+      uploadedByRole: actorRole,
+      remarks: parseTrimmedString(body.installerRemarks) || parseTrimmedString(body.remarks) || null,
+      metadata: {
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        field: fieldName,
+        slot,
+        uploadField: file.fieldname,
+        saveMediaOnly: saveMediaOnly || undefined
+      },
+      uploadedAt: new Date()
+    });
+
+    // Merge already-saved URLs from SPA without wiping other slots.
+    const existingRaw =
+      body.existingInstallationImageUrlsJson ?? body.existing_installation_image_urls_json;
+    if (typeof existingRaw === 'string' && existingRaw.trim()) {
+      try {
+        const parsed = JSON.parse(existingRaw) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (const [slotKey, val] of Object.entries(parsed)) {
+            if (!allowedFields.has(slotKey) || slotKey === fieldName) continue;
+            const urls = Array.isArray(val) ? val : val != null ? [val] : [];
+            for (const item of urls) {
+              const url = normalizeWorkflowFileUrl(item);
+              if (!url) continue;
+              const exists = await QuotationInstallationDoc.count({
+                where: { quotationId, fileUrl: url }
+              });
+              if (exists > 0) continue;
+              const slotMap = INSTALLER_FIELD_DOC_MAP[slotKey];
+              if (!slotMap) continue;
+              await QuotationInstallationDoc.create({
+                id: uuidv4(),
+                quotationId,
+                docType: slotMap.docType as any,
+                fileUrl: url,
+                uploadedByUserId: actorId,
+                uploadedByRole: actorRole,
+                remarks: 'existingInstallationImageUrlsJson',
+                metadata: { field: slotKey, slot: slotMap.slot || slotKey, source: 'existing_urls_json' },
+                uploadedAt: new Date()
+              });
+            }
+          }
+        }
+      } catch {
+        // ignore invalid JSON — primary upload already saved
+      }
+    }
+
+    // Immediate pick-upload: never set installer_approved. Status stays pending_installer
+    // so leftover photos after Revert do not put the row back on Approved.
+
+    const publicUrl =
+      (await resolveInstallationMediaViewUrl(key)) ||
+      (await resolveInstallationMediaViewUrl(doc.fileUrl));
+    if (!publicUrl) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'SYS_001', message: 'Uploaded but could not generate a browsable publicUrl' }
+      });
+      return;
+    }
+
+    const urlKey = `${fieldName}Url`;
     res.status(200).json({
       success: true,
       data: {
         field: fieldName,
-        url,
-        fileUrl: url,
-        [urlKey]: url,
+        slot,
+        key,
+        url: publicUrl,
+        publicUrl,
+        public_url: publicUrl,
+        fileUrl: publicUrl,
+        [urlKey]: publicUrl,
+        installationStatus: quotation.installationStatus || 'pending_installer',
+        installation_status: quotation.installationStatus || 'pending_installer',
+        installerApprovedAt: (quotation as any).installerApprovedAt || null,
         documents: {
-          [fieldName]: url
+          [fieldName]: publicUrl
         }
       }
     });
   } catch (error) {
-    logError('Upload installer document error', error, { quotationId: req.params.quotationId, field: req.body?.field });
+    logError('Upload installer document error', error, {
+      quotationId: req.params.quotationId,
+      field: req.body?.field
+    });
     res.status(500).json({ success: false, error: { code: 'SYS_001', message: 'Internal server error' } });
   }
 };
@@ -1669,15 +1847,26 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
       });
     }
 
-    const currentStatus = String(quotation.installationStatus || '').trim();
+    const currentMetering =
+      resolvePersistedMeteringStatus({
+        meteringStatus: (quotation as any).meteringStatus,
+        installationStatus: quotation.installationStatus
+      }) || '';
     const statusPatch: Record<string, unknown> = {};
-    if (currentStatus !== 'mco') {
+    if (currentMetering !== 'mco') {
       // WCC save in metering path should land in Meter Installation Pending.
-      statusPatch.installationStatus = METER_INSTALLATION_PENDING_STATUS;
+      statusPatch.meteringStatus = METER_INSTALLATION_PENDING_STATUS;
       statusPatch.meterInstallationPendingAt =
         (quotation as any).meterInstallationPendingAt || new Date();
       statusPatch.meteringWccAfterDiscom = false;
       statusPatch.meteringWccAfterDiscomAt = null;
+      if (
+        ['pending_metering', 'metering_in_progress', 'metering_approved', METER_INSTALLATION_PENDING_STATUS, 'mco'].includes(
+          String(quotation.installationStatus || '')
+        )
+      ) {
+        statusPatch.installationStatus = 'installer_approved';
+      }
     }
 
     await quotation.update({
@@ -1730,6 +1919,7 @@ export const saveMeteringDetails = async (req: Request, res: Response): Promise<
         quotationId: quotation.id,
         ...meteringWorkflowApiFields({
           installationStatus: quotation.installationStatus,
+          meteringStatus: (quotation as any).meteringStatus,
           meteringApprovedAt: quotation.meteringApprovedAt,
           mcoAt: quotation.mcoAt,
           completionAt: quotation.completionAt,
@@ -2194,27 +2384,58 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     }
 
     const requestedInstallStatus = parseTrimmedString(body.installationStatus);
+    const saveMediaOnly =
+      parseTruthyFlag(body.saveMediaOnly) === true ||
+      parseTruthyFlag(body.persistImagesOnly) === true ||
+      parseTruthyFlag(body.save_media_only) === true ||
+      parseTruthyFlag(body.persist_images_only) === true;
     const partialFlag =
       parseTruthyFlag(body.installationPartialApproved) === true ||
       parseTruthyFlag(body.installation_partial_approved) === true ||
       isInstallationPartialApprovedStatus(requestedInstallStatus);
-    const markInstallerApproved = requestedInstallStatus === 'installer_approved';
+    // Immediate pick / saveMediaOnly must not flip to installer_approved.
+    const markInstallerApproved =
+      !saveMediaOnly && requestedInstallStatus === 'installer_approved';
     const markInstallerPartial =
       !markInstallerApproved &&
+      !saveMediaOnly &&
       (requestedInstallStatus === INSTALLATION_PARTIAL_STATUS || partialFlag);
 
     if (markInstallerApproved) {
-      if (!isAdmin) {
-        const siteImages = await QuotationInstallationDoc.count({
-          where: { quotationId, docType: 'site_completion_image' }
-        });
-        if (siteImages < 1) {
-          res.status(400).json({
-            success: false,
-            error: { code: 'WF_002', message: 'At least one site completion image is required before approval' }
-          });
-          return;
+      // Any single site photo is enough (admin and installer). PI-only is not.
+      // saveMediaOnly / persistImagesOnly uploads must NOT set installer_approved by themselves.
+      const slotsThisRequest: string[] = [];
+      for (const doc of createdDocs) {
+        const meta = (doc.metadata || {}) as Record<string, unknown>;
+        const slot = meta.slot ?? meta.field;
+        if (typeof slot === 'string' && slot.trim()) slotsThisRequest.push(slot.trim());
+        else if (String(doc.docType || '') === 'site_completion_image') {
+          slotsThisRequest.push('otherImages');
         }
+      }
+      for (const ref of urlDocs) {
+        if (ref.slot && String(ref.slot).trim()) slotsThisRequest.push(String(ref.slot).trim());
+        else if (ref.docType === 'site_completion_image') slotsThisRequest.push('otherImages');
+      }
+      const hasSitePhoto = await loadHasAtLeastOneSiteCompletionPhoto(
+        quotationId,
+        slotsThisRequest
+      );
+      if (!hasSitePhoto) {
+        res.status(400).json({
+          success: false,
+          error: {
+            code: 'WF_002',
+            message: installerApprovalMissingSitePhotoMessage,
+            details: [
+              {
+                field: 'siteCompletionPhoto',
+                message: 'At least one site photo required before Complete & Mark as Approved'
+              }
+            ]
+          }
+        });
+        return;
       }
       await quotation.update({
         installationStatus: 'installer_approved',
@@ -2236,8 +2457,9 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
         installationPartialApproved: true,
         installationPartialApprovedAt: new Date()
       } as any);
-    } else {
-      // §29: upload from pending without target status → at least move to in_progress
+    } else if (!saveMediaOnly) {
+      // §29: upload from pending without target status → at least move to in_progress.
+      // Immediate pick / saveMediaOnly must keep pending_installer (no approve, no bump).
       const currentAfter =
         String(quotation.installationStatus || '')
           .trim()
@@ -2266,7 +2488,8 @@ export const installerUploadDocuments = async (req: Request, res: Response): Pro
     });
 
     const installDocsPayload = await mapWorkflowDocumentsForFrontend(
-      allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+      allDocs.map((doc: any) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc)),
+      quotationId
     );
 
     res.status(createdDocs.length > 0 ? 201 : 200).json({

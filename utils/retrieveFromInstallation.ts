@@ -73,7 +73,8 @@ export const buildRetrieveFromInstallationPatch = (
     installationReleasedAt: null
   };
 
-  // installation_status is NOT NULL in DB — leave workflow as-is; queues gate on release flags.
+  // Queues gate on release flags (getInstallerQueue requires ready/released).
+  // installation_status is NOT NULL in DB — leave early workflow values as-is.
   return patch;
 };
 

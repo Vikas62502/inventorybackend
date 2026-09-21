@@ -329,7 +329,11 @@ const setCachedPresignedUrl = (key: string, url: string, expiresIn: number): voi
   });
 };
 
-export async function generatePublicUrl(key: string, expiresIn: number = 3600): Promise<string> {
+export async function generatePublicUrl(
+  key: string,
+  expiresIn: number = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800)
+): Promise<string> {
+  const ttl = Math.max(3600, Number(expiresIn) || 604800);
   const cached = getCachedPresignedUrl(key);
   if (cached) return cached;
 
@@ -337,14 +341,69 @@ export async function generatePublicUrl(key: string, expiresIn: number = 3600): 
     const url = getS3Client().getSignedUrl('getObject', {
       Bucket: BUCKET_NAME,
       Key: key,
-      Expires: expiresIn
+      Expires: ttl
     });
-    setCachedPresignedUrl(key, url, expiresIn);
+    setCachedPresignedUrl(key, url, ttl);
     return url;
   } catch (error) {
     logError('❌ Failed to generate S3 signed URL', error, { key });
     throw error;
   }
+}
+
+export type SiteCompletionImageApiItem = {
+  key: string;
+  publicUrl: string;
+  public_url: string;
+  url: string;
+};
+
+/**
+ * List site_completion_image objects under quotation-workflow/{quotationId}/
+ * and return fresh GetObject presigned URLs (TTL ≥ 3600s, default 604800s).
+ */
+export async function listSiteCompletionImagesForQuotation(
+  quotationId: string,
+  expiresIn: number = Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800)
+): Promise<SiteCompletionImageApiItem[]> {
+  const id = String(quotationId || '').trim();
+  if (!id) return [];
+
+  const prefix = `quotation-workflow/${id}/`;
+  const ttl = Math.max(3600, Number(expiresIn) || 604800);
+  const out: SiteCompletionImageApiItem[] = [];
+
+  try {
+    let ContinuationToken: string | undefined;
+    do {
+      const listed = await getS3Client()
+        .listObjectsV2({
+          Bucket: BUCKET_NAME,
+          Prefix: prefix,
+          ContinuationToken
+        })
+        .promise();
+
+      for (const obj of listed.Contents || []) {
+        const key = String(obj.Key || '').trim();
+        if (!key || !key.includes('site_completion_image')) continue;
+        const publicUrl = await generatePublicUrl(key, ttl);
+        out.push({
+          key,
+          publicUrl,
+          public_url: publicUrl,
+          url: publicUrl
+        });
+      }
+
+      ContinuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+  } catch (error) {
+    logError('❌ Failed to list site completion images', error, { quotationId: id, prefix });
+    return out;
+  }
+
+  return out;
 }
 
 /**

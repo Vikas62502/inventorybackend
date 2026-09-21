@@ -78,6 +78,7 @@ import {
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
 import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { installationPartialApiFields } from '../utils/installationPartialApi';
+import { omitInstallationFieldsFromPaymentPatch } from '../utils/paymentInstallationGuard';
 import { lookupQuotationCustomerByPhone } from '../utils/customerPhoneLookup';
 import {
   loadQuotationPaymentPhases,
@@ -1816,7 +1817,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         documents: {},
         installationDocuments: {},
         installationFieldUrls: {},
-        installationPhotoUrls: [] as string[]
+        installationPhotoUrls: [] as string[],
+        siteCompletionImages: [] as any[]
       };
       const meterRef = (q as any).meterDocumentImageUrl || null;
       const meterDocumentFields = await buildMeterDocumentApiFields(meterRef);
@@ -1897,6 +1899,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installer_approved_at: (q as any).installerApprovedAt || null,
         ...meteringWorkflowApiFields({
           installationStatus: (q as any).installationStatus || 'pending_installer',
+          meteringStatus: (q as any).meteringStatus,
           meteringApprovedAt: (q as any).meteringApprovedAt,
           mcoAt: (q as any).mcoAt,
           completionAt: (q as any).completionAt,
@@ -1920,6 +1923,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,
         installation_photo_urls: installationPayload.installationPhotoUrls,
+        siteCompletionImages: installationPayload.siteCompletionImages,
+        site_completion_images: installationPayload.siteCompletionImages,
         documents: {
           ...(resolvedDocuments || {}),
           ...installationPayload.documents
@@ -2393,7 +2398,10 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
     const rawInstallationDocs = installationDocs.map((doc: any) =>
       typeof doc.toJSON === 'function' ? doc.toJSON() : doc
     );
-    const installationPayload = await mapInstallationDocumentsForApi(rawInstallationDocs);
+    const installationPayload = await mapInstallationDocumentsForApi(
+      rawInstallationDocs,
+      quotation.id
+    );
     const latestMeterDoc = getLatestMeterDocMeta(rawInstallationDocs);
     const meterDocumentFields = await buildMeterDocumentApiFields(
       resolveMeterStoredRef(quotationAny.meterDocumentImageUrl, rawInstallationDocs),
@@ -2450,6 +2458,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         }),
         ...meteringWorkflowApiFields({
           installationStatus: quotationAny.installationStatus || 'pending_installer',
+          meteringStatus: (quotationAny as any).meteringStatus,
           meteringApprovedAt: quotationAny.meteringApprovedAt,
           mcoAt: quotationAny.mcoAt,
           completionAt: quotationAny.completionAt,
@@ -2474,6 +2483,8 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         installationDocuments: installationPayload.installationDocuments,
         installationPhotoUrls: installationPayload.installationPhotoUrls,
         installation_photo_urls: installationPayload.installationPhotoUrls,
+        siteCompletionImages: installationPayload.siteCompletionImages,
+        site_completion_images: installationPayload.siteCompletionImages,
         ...installationPayload.installationFieldUrls,
         visits: serializedVisits,
         location: primaryVisit?.location || null,
@@ -3809,6 +3820,8 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
 
 export const updateQuotationPaymentDetails = async (req: Request, res: Response): Promise<void> => {
   try {
+    // Payment / installment save only — never mutates installation_status / installer_approved_at.
+    // paymentStatus=completed is not installer Complete (POST …/documents).
     const { quotationId } = req.params;
     const {
       paymentMode,
@@ -4005,21 +4018,23 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         });
       }
 
-      await quotation.update({
-        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
-        paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-        paymentStatus: resolvedPaymentStatus,
-        paidAmount: totalPaidAmount,
-        paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
-        paymentPhases: mergedPhases,
-        remainingAmount: remainingStored,
-        ...settlementDiscountPatch,
-        ...siteCostFields,
-        ...(settlingNow ? {} : settlementFields),
-        ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
-        paymentPlanUpdatedBy: actorId,
-        paymentPlanUpdatedAt: new Date()
-      });
+      await quotation.update(
+        omitInstallationFieldsFromPaymentPatch({
+          paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+          paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+          paymentStatus: resolvedPaymentStatus,
+          paidAmount: totalPaidAmount,
+          paymentDate: latestPaymentDate ? new Date(latestPaymentDate) : quotation.paymentDate,
+          paymentPhases: mergedPhases,
+          remainingAmount: remainingStored,
+          ...settlementDiscountPatch,
+          ...siteCostFields,
+          ...(settlingNow ? {} : settlementFields),
+          ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
+          paymentPlanUpdatedBy: actorId,
+          paymentPlanUpdatedAt: new Date()
+        }) as any
+      );
     } else if (settlingRequest) {
       // Flag-only / settlement-shaped Final Settlement (fallback): persist the write-off itself so
       // this call alone settles even if PATCH /pricing never ran. Do NOT touch installments.
@@ -4043,15 +4058,17 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         actorId
       });
 
-      await quotation.update({
-        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
-        paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-        ...settlementPatch,
-        ...siteCostFields,
-        ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
-        paymentPlanUpdatedBy: actorId,
-        paymentPlanUpdatedAt: new Date()
-      });
+      await quotation.update(
+        omitInstallationFieldsFromPaymentPatch({
+          paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+          paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+          ...settlementPatch,
+          ...siteCostFields,
+          ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
+          paymentPlanUpdatedBy: actorId,
+          paymentPlanUpdatedAt: new Date()
+        }) as any
+      );
     } else {
       // Status-only / site-cost-only update — do not touch installments; skip VAL_012.
       const discountAmt = Number((quotation as any).discountAmount || 0);
@@ -4098,18 +4115,20 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
             ? paymentStatusFromBody
             : reconciled.paymentStatus;
 
-      await quotation.update({
-        paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
-        paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-        ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined
-          ? { paymentStatus: resolvedPaymentStatus, remainingAmount: remainingStored }
-          : {}),
-        ...siteCostFields,
-        ...settlementFields,
-        ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
-        paymentPlanUpdatedBy: actorId,
-        paymentPlanUpdatedAt: new Date()
-      });
+      await quotation.update(
+        omitInstallationFieldsFromPaymentPatch({
+          paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
+          paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
+          ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined
+            ? { paymentStatus: resolvedPaymentStatus, remainingAmount: remainingStored }
+            : {}),
+          ...siteCostFields,
+          ...settlementFields,
+          ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
+          paymentPlanUpdatedBy: actorId,
+          paymentPlanUpdatedAt: new Date()
+        }) as any
+      );
     }
 
     await quotation.reload();
@@ -4140,6 +4159,11 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         ...quotationPaymentApiFields(rowPlain),
         ...quotationAdminMetadataFields(rowPlain),
         ...quotationAmountApiFields(rowPlain),
+        // Echo install fields unchanged so clients keep payment vs install independent.
+        installationStatus: (quotation as any).installationStatus || null,
+        installation_status: (quotation as any).installationStatus || null,
+        installerApprovedAt: (quotation as any).installerApprovedAt || null,
+        installer_approved_at: (quotation as any).installerApprovedAt || null,
         paymentStatus: reconciledOut.paymentStatus,
         subtotal: Number(quotation.subtotal || 0),
         discountAmount: discountAmtOut,
