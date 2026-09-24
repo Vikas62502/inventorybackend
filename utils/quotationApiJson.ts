@@ -3,6 +3,7 @@ import { quotationProductPdfDisplayApiFields, quotationProductInaApiFields } fro
 import { computeSystemKwFromProducts, formatSystemSizeKw } from './quotationSystemKw';
 import { serializeSiteCostFields } from './cashLoanAmounts';
 import { quotationOfficeLocationApiFields } from './moduleFieldPermissions';
+import { parseBankDocumentNames } from './meteringWorkflowApi';
 
 export type QuotationStatusHistoryEntry = { status: string; at: string };
 
@@ -398,6 +399,26 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
   const bankProcessDoneRaw = q.bankProcessDone ?? q.bank_process_done ?? false;
   const bankProcessDone = bankProcessDoneRaw === true || bankProcessDoneRaw === 'true' || bankProcessDoneRaw === 1;
   const bankProcessDoneAt = (q.bankProcessDoneAt ?? q.bank_process_done_at ?? null) as string | Date | null;
+  const bankAssignedPersonNameRaw = q.bankAssignedPersonName ?? q.bank_assigned_person_name ?? null;
+  const bankAssignedPersonName =
+    bankAssignedPersonNameRaw == null || String(bankAssignedPersonNameRaw).trim() === ''
+      ? null
+      : String(bankAssignedPersonNameRaw).trim();
+  const bankRemarksRaw = q.bankRemarks ?? q.bank_remarks ?? null;
+  const bankRemarks =
+    bankRemarksRaw == null || String(bankRemarksRaw).trim() === ''
+      ? null
+      : String(bankRemarksRaw).trim();
+  const bankLocationRaw = q.bankLocation ?? q.bank_location ?? null;
+  const bankLocation =
+    bankLocationRaw == null || String(bankLocationRaw).trim() === ''
+      ? null
+      : String(bankLocationRaw).trim();
+  const bankDocumentNamesParsed = parseBankDocumentNames(
+    q.bankDocumentNames ?? q.bank_document_names ?? null
+  );
+  const bankDocumentNames =
+    bankDocumentNamesParsed && bankDocumentNamesParsed.length > 0 ? bankDocumentNamesParsed : null;
   // Final Settlement audit flags — FE hides the "Submit final settlement" button when truthy.
   const finalSettlementAppliedRaw = q.finalSettlementApplied ?? q.final_settlement_applied ?? false;
   const finalSettlementApplied = finalSettlementAppliedRaw === true || finalSettlementAppliedRaw === 'true';
@@ -431,6 +452,14 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     bank_process_done: bankProcessDone,
     bankProcessDoneAt,
     bank_process_done_at: bankProcessDoneAt,
+    bankAssignedPersonName,
+    bank_assigned_person_name: bankAssignedPersonName,
+    bankRemarks,
+    bank_remarks: bankRemarks,
+    bankLocation,
+    bank_location: bankLocation,
+    bankDocumentNames,
+    bank_document_names: bankDocumentNames,
     finalSettlementApplied,
     final_settlement_applied: finalSettlementApplied,
     finalSettlementAmount,

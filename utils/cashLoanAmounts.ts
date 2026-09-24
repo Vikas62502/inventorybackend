@@ -209,6 +209,26 @@ export function remainingBySide(args: {
   };
 }
 
+/** Echo loan/cash remaining on GET list/detail (Admin Banking tabs filter client-side). */
+export function serializeSideRemainingApiFields(args: {
+  loanAmount?: number | null;
+  cashAmount?: number | null;
+  phases: Array<{ paidAmount?: number; paymentMode?: string | null }>;
+}): {
+  loanRemaining: number;
+  loan_remaining: number;
+  cashRemaining: number;
+  cash_remaining: number;
+} {
+  const { loanRemaining, cashRemaining } = remainingBySide(args);
+  return {
+    loanRemaining,
+    loan_remaining: loanRemaining,
+    cashRemaining,
+    cash_remaining: cashRemaining
+  };
+}
+
 /** Fields to merge into GET / list serializers. */
 export function serializeLoanCashFields(q: Record<string, unknown>) {
   const paymentType =

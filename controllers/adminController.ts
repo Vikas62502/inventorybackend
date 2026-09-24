@@ -57,10 +57,11 @@ import {
   meteringWorkflowApiFields,
   normalizeMeteringWorkflowStatus,
   parseMeteringWccAfterDiscomFlag,
-  parseBankProcessDoneFlag,
   isMeteringWorkflowStatus,
   resolvePersistedMeteringStatus,
-  buildMeteringWccAfterDiscomPatch
+  buildMeteringWccAfterDiscomPatch,
+  buildBankProcessPatch,
+  hasBankProcessRouteFields
 } from '../utils/meteringWorkflowApi';
 import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
@@ -105,7 +106,9 @@ import {
 } from '../utils/adminProductNeeded';
 import {
   resolveApproveLoanCashAmounts,
-  pickQuotationSubtotalForPayments
+  pickQuotationSubtotalForPayments,
+  parseInrAmount,
+  serializeSideRemainingApiFields
 } from '../utils/cashLoanAmounts';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
@@ -681,6 +684,23 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
           const filePaymentType = String(
             (q as any).filePaymentType ?? (q as any).file_payment_type ?? ''
           ).trim();
+          const loanCashFields = deriveLoanCashAmountFields(
+            filePaymentType || (q as any).paymentType,
+            amountFields.subtotal,
+            phases,
+            {
+              loanAmount: (q as any).loanAmount,
+              cashAmount: (q as any).cashAmount,
+              loan_amount: (q as any).loan_amount,
+              cash_amount: (q as any).cash_amount
+            }
+          );
+          const effectiveLoanAmount =
+            loanCashFields.loanAmount ??
+            parseInrAmount((q as any).loanAmount ?? (q as any).loan_amount);
+          const effectiveCashAmount =
+            loanCashFields.cashAmount ??
+            parseInrAmount((q as any).cashAmount ?? (q as any).cash_amount);
           return {
             id: q.id,
             dealerId: q.dealerId,
@@ -705,11 +725,11 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             ...quotationAdminMetadataFields(row),
             ...amountFields,
             ...adminQuotationPricingNestedFields(amountFields),
-            ...deriveLoanCashAmountFields(filePaymentType || (q as any).paymentType, amountFields.subtotal, phases, {
-              loanAmount: (q as any).loanAmount,
-              cashAmount: (q as any).cashAmount,
-              loan_amount: (q as any).loan_amount,
-              cash_amount: (q as any).cash_amount
+            ...loanCashFields,
+            ...serializeSideRemainingApiFields({
+              loanAmount: effectiveLoanAmount,
+              cashAmount: effectiveCashAmount,
+              phases
             }),
             ...adminQuotationStatusUpdatedAtFields({
               updatedAt: (q as any).updatedAt,
@@ -723,6 +743,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
             paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
             remaining: remainingAmount,
             remainingAmount,
+            remaining_amount: remainingAmount,
             installments: phases,
             paymentPhases: phases,
             payment_phases: phases,
@@ -1044,7 +1065,6 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       pickStatus('meteringStatus', 'metering_status', 'status') ||
       null;
     const wccAfterDiscomFlag = parseMeteringWccAfterDiscomFlag(body);
-    const bankDoneFlag = parseBankProcessDoneFlag(body);
 
     const quotation = await Quotation.findByPk(quotationId);
     if (!quotation) {
@@ -1057,7 +1077,7 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
 
     const workflowModule =
       resolveWorkflowModuleForInstallationStatus(requested) ||
-      (wccAfterDiscomFlag !== undefined ? 'metering' : bankDoneFlag !== undefined ? 'metering' : null);
+      (wccAfterDiscomFlag !== undefined || hasBankProcessRouteFields(body) ? 'metering' : null);
 
     if (!hasAdminQuotationAccess(req)) {
       if (!workflowModule) {
@@ -1072,16 +1092,8 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       }
     }
 
-    // §17 SPA fallback: installation-status body with only bankProcessDone → bank-process handler
-    if (
-      !requested &&
-      wccAfterDiscomFlag === undefined &&
-      (bankDoneFlag !== undefined ||
-        body.bankName !== undefined ||
-        body.bank_name !== undefined ||
-        body.bankIfsc !== undefined ||
-        body.bank_ifsc !== undefined)
-    ) {
+    // §17 SPA fallback: installation-status body with only bank-process fields → bank-process handler
+    if (!requested && wccAfterDiscomFlag === undefined && hasBankProcessRouteFields(body)) {
       await updateQuotationBankProcess(req, res);
       return;
     }
@@ -1095,13 +1107,9 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     }
 
     // §17 Parallel bank track — may accompany a metering stage change; never moves stage itself.
-    if (bankDoneFlag !== undefined) {
-      await quotation.update({
-        bankProcessDone: bankDoneFlag,
-        bankProcessDoneAt: bankDoneFlag
-          ? (quotation as any).bankProcessDoneAt || new Date()
-          : null
-      } as any);
+    const bankPatch = buildBankProcessPatch(body, quotation as any);
+    if (Object.keys(bankPatch).length > 0) {
+      await quotation.update(bankPatch as any);
     }
 
     const currentStatus = String(quotation.installationStatus || 'pending_installer').trim();
@@ -1160,14 +1168,10 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
         });
         return;
       }
-      const patch: Record<string, unknown> = { ...applied.patch };
-      if (bankDoneFlag === true) {
-        patch.bankProcessDone = true;
-        patch.bankProcessDoneAt = (quotation as any).bankProcessDoneAt || now;
-      } else if (bankDoneFlag === false) {
-        patch.bankProcessDone = false;
-        patch.bankProcessDoneAt = null;
-      }
+      const patch: Record<string, unknown> = {
+        ...applied.patch,
+        ...buildBankProcessPatch(body, quotation as any)
+      };
       await quotation.update(patch as any);
       await respondWithQuotation();
       return;
@@ -1683,9 +1687,9 @@ export const updateMeteringWccAfterDiscom = async (req: Request, res: Response):
 };
 
 /**
- * §17 Bank process (parallel track) — save bank details + optional move to Pending Payment.
- * Does NOT change metering/installation stage.
- * PATCH /admin/quotations/:id/bank-process (also payment-details fallbacks).
+ * §17 / Admin Banking §41 — save bank details + optional mark submitted.
+ * Does NOT change metering/installation stage. Re-submit when already done → 200.
+ * PATCH /admin/quotations/:id/bank-process (also payment-details / quotations PATCH fallbacks).
  */
 export const updateQuotationBankProcess = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -1712,48 +1716,15 @@ export const updateQuotationBankProcess = async (req: Request, res: Response): P
       return;
     }
 
-    const patch: Record<string, unknown> = {};
-    const bankNameRaw = body.bankName ?? body.bank_name;
-    if (typeof bankNameRaw === 'string') {
-      const trimmed = bankNameRaw.trim();
-      if (trimmed) patch.bankName = trimmed;
-    }
-    const bankIfscRaw = body.bankIfsc ?? body.bank_ifsc;
-    if (typeof bankIfscRaw === 'string') {
-      const trimmed = bankIfscRaw.trim();
-      if (trimmed) patch.bankIfsc = trimmed;
-    }
-
-    const paymentTypeRaw = body.paymentType ?? body.payment_type ?? body.paymentMode ?? body.payment_mode;
-    if (typeof paymentTypeRaw === 'string' && paymentTypeRaw.trim()) {
-      const norm = paymentTypeRaw
-        .trim()
-        .toLowerCase()
-        .replace(/-/g, '_')
-        .replace(/\+/g, '_');
-      const paymentType =
-        norm === 'cash_loan' || norm === 'cashloan' ? 'mix' : norm === 'loan' || norm === 'cash' || norm === 'mix' ? norm : null;
-      if (paymentType) {
-        patch.paymentType = paymentType;
-        patch.paymentMode = paymentType;
-      }
-    }
-
-    const doneFlag = parseBankProcessDoneFlag(body);
-    if (doneFlag === true) {
-      patch.bankProcessDone = true;
-      patch.bankProcessDoneAt = (quotation as any).bankProcessDoneAt || new Date();
-    } else if (doneFlag === false) {
-      patch.bankProcessDone = false;
-      patch.bankProcessDoneAt = null;
-    }
+    const patch = buildBankProcessPatch(body, quotation as any);
 
     if (Object.keys(patch).length === 0) {
       res.status(400).json({
         success: false,
         error: {
           code: 'VAL_001',
-          message: 'Provide bankName, bankIfsc, paymentType, and/or bankProcessDone'
+          message:
+            'Provide bankName, bankIfsc, paymentType, bankProcessDone, and/or bank assigned person / remarks / location / document names'
         }
       });
       return;
@@ -2064,6 +2035,27 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       quotation.systemType,
       quotationAny.systemKw ?? row.system_kw
     );
+    const amountFields = quotationAmountApiFields(row);
+    const filePaymentType = String(
+      quotationAny.filePaymentType ?? quotationAny.file_payment_type ?? ''
+    ).trim();
+    const loanCashFields = deriveLoanCashAmountFields(
+      filePaymentType || quotationAny.paymentType,
+      amountFields.subtotal,
+      phases,
+      {
+        loanAmount: quotationAny.loanAmount,
+        cashAmount: quotationAny.cashAmount,
+        loan_amount: quotationAny.loan_amount,
+        cash_amount: quotationAny.cash_amount
+      }
+    );
+    const effectiveLoanAmount =
+      loanCashFields.loanAmount ??
+      parseInrAmount(quotationAny.loanAmount ?? quotationAny.loan_amount);
+    const effectiveCashAmount =
+      loanCashFields.cashAmount ??
+      parseInrAmount(quotationAny.cashAmount ?? quotationAny.cash_amount);
 
     res.json({
       success: true,
@@ -2076,11 +2068,18 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         ...productFields,
         ...quotationPaymentApiFields(row),
         ...quotationAdminMetadataFields(row),
-        ...quotationAmountApiFields(row),
+        ...amountFields,
+        ...loanCashFields,
+        ...serializeSideRemainingApiFields({
+          loanAmount: effectiveLoanAmount,
+          cashAmount: effectiveCashAmount,
+          phases
+        }),
         paymentStatus: paymentStatusOut || null,
         paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,
         remaining: remainingAmount,
         remainingAmount,
+        remaining_amount: remainingAmount,
         installments: phases,
         paymentPhases: phases,
         payment_phases: phases,

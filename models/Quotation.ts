@@ -128,6 +128,11 @@ interface QuotationAttributes {
   /** Bank process dual-track (§17): false → Bank Process tab; true → Pending Payment */
   bankProcessDone?: boolean;
   bankProcessDoneAt?: Date | null;
+  /** Admin Banking (§41) Submitted-row details */
+  bankAssignedPersonName?: string | null;
+  bankRemarks?: string | null;
+  bankLocation?: string | null;
+  bankDocumentNames?: string[] | null;
   meterInstallationPhotoUrl?: string | null;
   meterInstallationPhotoName?: string | null;
   plantLivePhotoUrl?: string | null;
@@ -151,7 +156,7 @@ interface QuotationAttributes {
 
 interface QuotationCreationAttributes extends Optional<
   QuotationAttributes,
-  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'loanAmount' | 'cashAmount' | 'siteCost' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'finalSettlementRemarks' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson' | 'callingLeadId'
+  'id' | 'status' | 'discount' | 'createdAt' | 'updatedAt' | 'centralSubsidy' | 'stateSubsidy' | 'totalSubsidy' | 'amountAfterSubsidy' | 'discountAmount' | 'systemKw' | 'sourceQuotationId' | 'isCurrent' | 'notes' |   'paymentMode' | 'paymentType' | 'loanAmount' | 'cashAmount' | 'siteCost' | 'bankName' | 'bankIfsc' | 'subsidyChequeDetails' | 'fileLoginStatus' | 'filePaymentType' | 'fileBankName' | 'fileBankIfsc' | 'fileSubsidyChequeDetails' | 'fileLoginAt' | 'statusApprovedAt'   | 'statusHistory' | 'systemHistory' | 'subsidyCheques' | 'remainingAmount' | 'paidAmount' | 'paymentDate' | 'paymentStatus' | 'finalSettlementAmount' | 'finalSettlementApplied' | 'finalSettlementAt' | 'finalSettlementBy' | 'finalSettlementRemarks' | 'paymentPhases' | 'paymentPlanUpdatedBy' | 'paymentPlanUpdatedAt' | 'approvedAt' | 'installationStatus' | 'installerId' | 'installerActionAt' | 'installerInProgressAt' |   'installerApprovedAt' | 'installerRemarks' | 'installationPartialApproved' | 'installationPartialApprovedAt' | 'installationReadyForInstaller' | 'installationReleasedAt' | 'installationScheduledAt' | 'installationTeamId' |   'baldevId' | 'baldevActionAt' | 'baldevRemarks' | 'meteringId' | 'meteringActionAt' | 'meteringApprovedAt' | 'meteringRemarks' | 'meteringAuthorizedRepresentative' | 'discomName' | 'meterType' | 'meterNo' | 'solarMeterNo' | 'netMeterNo' | 'meterDocumentImageUrl' | 'mcoAt' | 'completionAt' | 'meteringWccAfterDiscom' | 'meteringWccAfterDiscomAt' | 'bankProcessDone' | 'bankProcessDoneAt' | 'bankAssignedPersonName' | 'bankRemarks' | 'bankLocation' | 'bankDocumentNames' | 'siteLengthCm' | 'siteWidthCm' | 'siteHeightCm' | 'backLegFt' | 'midLegFt' | 'frontLegFt' | 'extraExpensesTotal' | 'extraExpensesJson' | 'callingLeadId'
 > {}
 
 class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> implements QuotationAttributes {
@@ -269,6 +274,10 @@ class Quotation extends Model<QuotationAttributes, QuotationCreationAttributes> 
   public meteringWccAfterDiscomAt!: Date | null;
   public bankProcessDone!: boolean;
   public bankProcessDoneAt!: Date | null;
+  public bankAssignedPersonName!: string | null;
+  public bankRemarks!: string | null;
+  public bankLocation!: string | null;
+  public bankDocumentNames!: string[] | null;
   public meterInstallationPhotoUrl!: string | null;
   public meterInstallationPhotoName!: string | null;
   public plantLivePhotoUrl!: string | null;
@@ -667,6 +676,22 @@ Quotation.init(
     },
     bankProcessDoneAt: {
       type: DataTypes.DATE,
+      allowNull: true
+    },
+    bankAssignedPersonName: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    bankRemarks: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    bankLocation: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    bankDocumentNames: {
+      type: DataTypes.JSONB,
       allowNull: true
     },
     meterInstallationPhotoUrl: {

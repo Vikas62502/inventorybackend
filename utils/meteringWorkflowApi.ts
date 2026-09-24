@@ -267,3 +267,120 @@ export const parseBankProcessDoneFlag = (
   if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
   return undefined;
 };
+
+const parseOptionalBankString = (raw: unknown): string | null | undefined => {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? null : trimmed;
+};
+
+/** Normalize Admin Banking document names (array, JSON string, or comma list). */
+export const parseBankDocumentNames = (raw: unknown): string[] | undefined => {
+  if (raw === undefined) return undefined;
+  if (raw === null) return [];
+  const fromArray = (arr: unknown[]): string[] =>
+    arr.map((v) => String(v ?? '').trim()).filter(Boolean);
+  if (Array.isArray(raw)) return fromArray(raw);
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) return fromArray(parsed);
+    } catch {
+      /* treat as single name or comma list */
+    }
+    if (trimmed.includes(',')) return fromArray(trimmed.split(','));
+    return [trimmed];
+  }
+  return undefined;
+};
+
+/** True when the body is an Admin Banking / bank-process submit (not bankName-only). */
+export const isBankProcessRequestBody = (
+  body: Record<string, unknown> | null | undefined
+): boolean => {
+  if (!body || typeof body !== 'object') return false;
+  return (
+    parseBankProcessDoneFlag(body) !== undefined ||
+    body.bankAssignedPersonName !== undefined ||
+    body.bank_assigned_person_name !== undefined ||
+    body.bankRemarks !== undefined ||
+    body.bank_remarks !== undefined ||
+    body.bankLocation !== undefined ||
+    body.bank_location !== undefined ||
+    body.bankDocumentNames !== undefined ||
+    body.bank_document_names !== undefined
+  );
+};
+
+/** Bank-process routing: done/detail fields or bank name/IFSC. */
+export const hasBankProcessRouteFields = (
+  body: Record<string, unknown> | null | undefined
+): boolean => {
+  if (!body || typeof body !== 'object') return false;
+  return (
+    isBankProcessRequestBody(body) ||
+    body.bankName !== undefined ||
+    body.bank_name !== undefined ||
+    body.bankIfsc !== undefined ||
+    body.bank_ifsc !== undefined
+  );
+};
+
+/** Persistable bank-process columns. Does not touch metering/installation stage. */
+export const buildBankProcessPatch = (
+  body: Record<string, unknown> | null | undefined,
+  quotation?: { bankProcessDoneAt?: Date | null } | null
+): Record<string, unknown> => {
+  const patch: Record<string, unknown> = {};
+  if (!body) return patch;
+
+  const bankName = parseOptionalBankString(body.bankName ?? body.bank_name);
+  if (bankName) patch.bankName = bankName;
+  const bankIfsc = parseOptionalBankString(body.bankIfsc ?? body.bank_ifsc);
+  if (bankIfsc) patch.bankIfsc = bankIfsc;
+
+  const paymentTypeRaw = body.paymentType ?? body.payment_type ?? body.paymentMode ?? body.payment_mode;
+  if (typeof paymentTypeRaw === 'string' && paymentTypeRaw.trim()) {
+    const norm = paymentTypeRaw
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, '_')
+      .replace(/\+/g, '_');
+    const paymentType =
+      norm === 'cash_loan' || norm === 'cashloan'
+        ? 'mix'
+        : norm === 'loan' || norm === 'cash' || norm === 'mix'
+          ? norm
+          : null;
+    if (paymentType) {
+      patch.paymentType = paymentType;
+      patch.paymentMode = paymentType;
+    }
+  }
+
+  const assigned = parseOptionalBankString(
+    body.bankAssignedPersonName ?? body.bank_assigned_person_name
+  );
+  if (assigned !== undefined) patch.bankAssignedPersonName = assigned;
+  const remarks = parseOptionalBankString(body.bankRemarks ?? body.bank_remarks);
+  if (remarks !== undefined) patch.bankRemarks = remarks;
+  const location = parseOptionalBankString(body.bankLocation ?? body.bank_location);
+  if (location !== undefined) patch.bankLocation = location;
+  const docs = parseBankDocumentNames(body.bankDocumentNames ?? body.bank_document_names);
+  if (docs !== undefined) patch.bankDocumentNames = docs;
+
+  const doneFlag = parseBankProcessDoneFlag(body);
+  if (doneFlag === true) {
+    patch.bankProcessDone = true;
+    patch.bankProcessDoneAt = quotation?.bankProcessDoneAt || new Date();
+  } else if (doneFlag === false) {
+    patch.bankProcessDone = false;
+    patch.bankProcessDoneAt = null;
+  }
+
+  return patch;
+};

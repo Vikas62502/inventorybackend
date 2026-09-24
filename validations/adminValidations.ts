@@ -165,7 +165,15 @@ export const bankProcessSchema = z
     bankProcessDone: z.union([z.boolean(), z.string(), z.number()]).optional(),
     bank_process_done: z.union([z.boolean(), z.string(), z.number()]).optional(),
     moveToPendingPayment: z.union([z.boolean(), z.string(), z.number()]).optional(),
-    move_to_pending_payment: z.union([z.boolean(), z.string(), z.number()]).optional()
+    move_to_pending_payment: z.union([z.boolean(), z.string(), z.number()]).optional(),
+    bankAssignedPersonName: z.string().max(255).optional().nullable(),
+    bank_assigned_person_name: z.string().max(255).optional().nullable(),
+    bankRemarks: z.string().max(10000).optional().nullable(),
+    bank_remarks: z.string().max(10000).optional().nullable(),
+    bankLocation: z.string().max(255).optional().nullable(),
+    bank_location: z.string().max(255).optional().nullable(),
+    bankDocumentNames: z.union([z.array(z.string()), z.string()]).optional().nullable(),
+    bank_document_names: z.union([z.array(z.string()), z.string()]).optional().nullable()
   })
   .passthrough();
 

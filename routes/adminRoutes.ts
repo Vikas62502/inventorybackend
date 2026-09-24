@@ -83,6 +83,7 @@ import {
 } from '../validations/quotationValidations';
 import { adminUpdateDealerSchema } from '../validations/dealerValidations';
 import { getAdminVisits } from '../controllers/visitController';
+import { hasBankProcessRouteFields } from '../utils/meteringWorkflowApi';
 
 const router: Router = express.Router();
 
@@ -95,15 +96,7 @@ function isSiteCostOnlyPaymentDetailsBody(body: Record<string, unknown> | null |
     body.costOfSite !== undefined ||
     body.cost_of_site !== undefined;
   if (!hasSite) return false;
-  const hasBank =
-    body.bankProcessDone !== undefined ||
-    body.bank_process_done !== undefined ||
-    body.bankName !== undefined ||
-    body.bank_name !== undefined ||
-    body.bankIfsc !== undefined ||
-    body.bank_ifsc !== undefined ||
-    body.moveToPendingPayment !== undefined ||
-    body.move_to_pending_payment !== undefined;
+  const hasBank = hasBankProcessRouteFields(body);
   return !hasBank;
 }
 

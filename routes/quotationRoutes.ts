@@ -78,6 +78,7 @@ import {
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { rescheduleVisitSchema } from '../validations/visitValidations';
 import { updateQuotationBankProcess } from '../controllers/adminController';
+import { isBankProcessRequestBody } from '../utils/meteringWorkflowApi';
 
 const INSTALLER_COMPLETION_FILE_FIELDS = new Set([
   'installerCompletionImages',
@@ -869,7 +870,18 @@ router.patch('/:quotationId/products', authorizeDealerOrAccountManager, validate
 router.post('/:quotationId/revert-system', authorizeDealerOrAccountManager, revertQuotationSystem);
 router.post('/:quotationId/restore-current', authorizeDealerOrAccountManager, restoreQuotationCurrent);
 router.post('/:quotationId/set-current', authorizeDealerOrAccountManager, restoreQuotationCurrent);
-router.patch('/:quotationId', authorizeDealerOrAccountManager, restoreQuotationCurrent);
+router.patch('/:quotationId', (req, res) => {
+  if (isBankProcessRequestBody(req.body as Record<string, unknown>)) {
+    return authorizeMeteringOrAdmin(req, res, () => {
+      validate(bankProcessSchema)(req, res, () => {
+        void updateQuotationBankProcess(req, res);
+      });
+    });
+  }
+  return authorizeDealerOrAccountManager(req, res, () => {
+    void restoreQuotationCurrent(req, res);
+  });
+});
 
 /**
  * @swagger
@@ -965,7 +977,20 @@ router.patch('/:quotationId/pricing', authorizeDealerOrAccountManager, validate(
 router.post('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(finalSettlementSchema), submitQuotationFinalSettlement);
 router.post('/:quotationId/revert-final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
 router.delete('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
-router.patch('/:quotationId/payment-details', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
+router.patch('/:quotationId/payment-details', (req, res) => {
+  if (isBankProcessRequestBody(req.body as Record<string, unknown>)) {
+    return authorizeMeteringOrAdmin(req, res, () => {
+      validate(bankProcessSchema)(req, res, () => {
+        void updateQuotationBankProcess(req, res);
+      });
+    });
+  }
+  return authorizeAccountManagerOrAdminPayment(req, res, () => {
+    validate(updatePaymentDetailsSchema)(req, res, () => {
+      void updateQuotationPaymentDetails(req, res);
+    });
+  });
+});
 /** §30 optional alias — same handler as payment-details (siteCost-only body OK). */
 router.patch('/:quotationId/site-cost', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/installments', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);

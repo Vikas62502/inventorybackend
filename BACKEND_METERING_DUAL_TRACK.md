@@ -34,7 +34,8 @@ A loan/mix row can appear in **both** a Meter tab and a Bank tab at once. Markin
 | 2 | Persist + echo `meteringWccAfterDiscom` | Done (existing) |
 | 3 | Discom → WCC → MIP → mco transitions | Done (existing) |
 | 4 | Persist + echo `bankProcessDone` / `bank_process_done` (+ `At`) | **Done** |
-| 5 | `PATCH …/bank-process` (+ payment-details fallbacks) | **Done** |
+| 4b | Persist + echo Admin Banking details (assigned person, remarks, location, document names) | **Done** |
+| 5 | `PATCH …/bank-process` (+ payment-details / `PATCH /quotations/:id` fallbacks) | **Done** |
 | 6 | Authorize `installer` (+ installation-team) on metering/bank/WCC routes | **Done** |
 | 7 | Echo `paymentType` / `payment_type` on queue rows | **Done** |
 
@@ -63,14 +64,31 @@ See `BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`.
 -- Sequelize attribute names (camelCase) on `quotations`:
 --   bankProcessDone BOOLEAN NOT NULL DEFAULT FALSE
 --   bankProcessDoneAt TIMESTAMP NULL
+-- Applied via migration 20260924120000-add-bank-process-detail-fields.js
+--   bankAssignedPersonName VARCHAR(255) NULL
+--   bankRemarks TEXT NULL
+--   bankLocation VARCHAR(255) NULL
+--   bankDocumentNames JSONB NULL   -- string[]
 ```
 
 ### B.2 Tab filters (frontend)
+
+**Metering (right track)**
 
 | UI tab | Filter |
 |--------|--------|
 | Bank Process | metering-visible **and** payment ∈ `{loan, mix}` **and** `bankProcessDone !== true` |
 | Pending Payment | metering-visible **and** payment ∈ `{loan, mix}` **and** `bankProcessDone === true` |
+
+**Admin Banking**
+
+| UI tab | Filter |
+|--------|--------|
+| Pending from the bank | payment ∈ `{loan, mix}` **and** `bankProcessDone !== true` **and** 1st loan installment `paidAmount` > 0 **and** loan remaining > 0 |
+| Submitted | `bankProcessDone === true` **and** 1st loan installment `paidAmount` > 0 **and** loan remaining > 0 — row details = assigned person / remarks / location / document names |
+| Completed | loan remaining ₹0 from Accounts payment — **no extra complete flag** |
+
+**Client-side only:** Admin Banking tabs, Filters, and Download run on the frontend against the admin quotations list GET. Backend does **not** add Banking tab query filters or download APIs.
 
 Accept payment aliases: `cash_loan`, `cash+loan` → treat as `mix` (API normalizes on echo).
 
@@ -89,10 +107,27 @@ Every admin / metering / installer queue row includes:
   "bankProcessDoneAt": null,
   "bank_process_done_at": null,
   "bankName": "…",
-  "bankIfsc": "…"
+  "bankIfsc": "…",
+  "bankAssignedPersonName": null,
+  "bank_assigned_person_name": null,
+  "bankRemarks": null,
+  "bank_remarks": null,
+  "bankLocation": null,
+  "bank_location": null,
+  "bankDocumentNames": null,
+  "bank_document_names": null
 }
 ```
 
+**Admin Banking list hide-rules — do not strip from `GET /api/admin/quotations`:**
+
+| Field(s) | Why FE needs them |
+|----------|-------------------|
+| `installments` / `paymentPhases` / `payment_phases` with `paidAmount` + `paymentMode` | Identify loan-side phase 1; hide when 1st loan paid = ₹0 |
+| `remaining` / `remainingAmount` / `remaining_amount` | Overall remaining |
+| `loanRemaining` / `loan_remaining` (`loanAmount − sum(loan paid)`) | Pending/Submitted require remaining > 0; Completed = loan remaining ₹0 |
+
+No server-side Banking tab filtering — FE hides rows using the fields above.
 ### B.4 Save bank details + move to Pending Payment
 
 **Preferred:**
@@ -107,7 +142,12 @@ Content-Type: application/json
   "bankIfsc": "…",
   "paymentType": "loan",
   "bankProcessDone": true,
-  "moveToPendingPayment": true
+  "bank_process_done": true,
+  "moveToPendingPayment": true,
+  "bankAssignedPersonName": "…",
+  "bankRemarks": "…",
+  "bankLocation": "…",
+  "bankDocumentNames": ["file1.pdf"]
 }
 ```
 
@@ -117,15 +157,17 @@ Content-Type: application/json
 |---------------|------|
 | `PATCH /api/admin/quotations/:id/payment-details` | metering dual-track (`authorizeMeteringOrAdmin`) |
 | `PATCH /api/quotations/:id/bank-process` | same |
+| `PATCH /api/quotations/:id` | bank-process body only (`bankProcessDone` / detail fields) |
+| `PATCH /api/quotations/:id/payment-details` | bank-process body only |
 | `PATCH /api/metering/quotations/:id/bank-process` | `authorizeMetering` (includes installer) |
 | `PATCH /api/metering/quotations/:id/payment-details` | same |
 | `PATCH /api/admin/quotations/:id/installation-status` | admin; body may include `bankProcessDone` without changing stage when status omitted |
 
-**On `bankProcessDone: true` / `moveToPendingPayment: true`:**
-1. Persist bank fields (`bankName`, `bankIfsc`, optional `paymentType`)
+**On `bankProcessDone: true` / `moveToPendingPayment: true` / `bank_process_done: true`:**
+1. Persist bank fields (`bankName`, `bankIfsc`, optional `paymentType`, assigned person, remarks, location, document names)
 2. Set `bankProcessDone = true`, `bankProcessDoneAt = NOW()` (keep existing At if already set)
 3. Do **not** change metering stage
-4. Return updated JSON including `bankProcessDone: true`
+4. Return updated JSON including `bankProcessDone: true` + detail fields
 
 **Idempotent:** Re-PATCH when already done → **200**.
 
@@ -208,4 +250,5 @@ curl -s "$BASE/api/metering/quotations" -H "Authorization: Bearer $INSTALLER_JWT
 ```bash
 yarn migrate
 # 20260725120000-bank-process-done.js
+# 20260924120000-add-bank-process-detail-fields.js
 ```

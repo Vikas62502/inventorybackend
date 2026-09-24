@@ -86,6 +86,7 @@
 | 74 | High | Sheet auto-sync cron every **30 min** | **Done** | §48 / REQUIRED §AZ / `sheetAutoSyncCron` |
 | 75 | High | PDF panel range clear on uncheck (INA / Waaree) | **Done** | §48.3 / REQUIRED §BA (FE HANDOFF §48) |
 | 76 | High | Final settlement → PostgreSQL — gap-only `d`, absolute SET, Completed survives refresh, Revert | **Done** | §49 / REQUIRED §BB |
+| 77 | High | Admin Banking list GET — installments + loanRemaining for client-side hide | **Done** | §50 / dual-track §B |
 
 **Deploy before QA:**
 
@@ -103,6 +104,7 @@ yarn migrate
 | `20260605120000-add-unit-column-to-products.js` | `products.unit` for stock display (Meters, Quantity, Pieces; bootstrap also ensures) |
 | `20260606120000-ensure-calling-remark-text-columns.js` | `callRemark` TEXT on assignments + action history (§E.2) |
 | `20260725120000-bank-process-done.js` | `bankProcessDone` / `bankProcessDoneAt` for Metering dual track (§17) |
+| `20260924120000-add-bank-process-detail-fields.js` | Admin Banking assigned person / remarks / location / document names (§17 / dual-track §B) |
 | `20260803120000-add-loan-cash-amount-to-quotations.js` | `loan_amount` / `cash_amount` for Cash + loan approve (§28) |
 | `20260806120000-add-site-cost-to-quotations.js` | `site_cost` for Account Management Cost of site (§30) |
 | `20260808120000-seed-pricing-tables-aug-2026.js` | Seed Aug 2026 FE pricing catalog into `system_config.pricing_tables` (§2.6.4) |
@@ -2378,9 +2380,9 @@ curl -sS -X POST "$API/hr/leads/upload-csv" \
 
 | Piece | Implementation |
 |-------|----------------|
-| Columns | `bankProcessDone`, `bankProcessDoneAt` — migration `20260725120000-bank-process-done.js` |
-| GET echo | `quotationPaymentApiFields` → `paymentType`, `bankProcessDone`, bank name/IFSC |
-| PATCH bank | `updateQuotationBankProcess` — `/admin|metering|quotations/…/bank-process` (+ payment-details fallbacks) |
+| Columns | `bankProcessDone`, `bankProcessDoneAt` — `20260725120000-bank-process-done.js`; Admin Banking details (`bankAssignedPersonName`, `bankRemarks`, `bankLocation`, `bankDocumentNames`) — `20260924120000-add-bank-process-detail-fields.js` |
+| GET echo | `quotationPaymentApiFields` → `paymentType`, `bankProcessDone`(+At), bank name/IFSC, assigned person / remarks / location / document names; list also echoes `installments`/`paymentPhases` + `loanRemaining` for Admin Banking hide-rules (§50) |
+| PATCH bank | `updateQuotationBankProcess` — `/admin|metering|quotations/…/bank-process` (+ payment-details + `PATCH /quotations/:id` fallbacks) |
 | Installer auth | `authorizeMetering` / `authorizeMeteringOrAdmin` allow `installer` + installation-team; WCC + bank routes before admin-only gate |
 
 **QA:** Loan row in Meter + Bank Process; mark bank done → Pending Payment, same Meter tab after refresh; Installer Metering queue no AUTH_004.
@@ -3210,4 +3212,45 @@ Clear `finalSettlementApplied` / amount / remarks / at / by; restore `discountAm
 1. Settle → hard refresh → still **Completed**, Remaining **₹0**, correct `d` (JYOTI 5,000 / ARTI 1,000), Submit hidden, Revert visible.
 2. Not in **Pending & Partial** after refresh.
 3. Revert → refresh → Pending/Partial again, Remaining restored, Submit visible.
+
+---
+
+## 50. Admin Banking list GET — fields for client-side hide (§B) — Sep 2026
+
+**Status: implemented** — dual-track **§B** · keep existing Banking submit (`PATCH …/bank-process`, echo `bankProcessDone` + assigned person / docs)
+
+Admin Banking (**Pending / Submitted / Completed**) filters and Download stay on the **frontend**. No new Banking tab APIs and **no server-side tab filtering**.
+
+### What `GET /api/admin/quotations` must return (do not strip)
+
+| Field(s) | Banking UI use |
+|----------|----------------|
+| `installments` / `paymentPhases` / `payment_phases` with phase `paidAmount` + `paymentMode` | Loan-side phase 1 `paidAmount` — 1st installment ₹0 stays **out** of Pending/Submitted |
+| `remaining` / `remainingAmount` / `remaining_amount` | Overall remaining |
+| `loanRemaining` / `loan_remaining` | `loanAmount − sum(paidAmount where paymentMode === loan)`; Pending/Submitted need remaining > 0; **Completed** = loan remaining ₹0 (no extra complete flag) |
+
+Also keep: `paymentType` / `payment_type`, `bankProcessDone` / `bank_process_done`, bank detail fields (assigned person, remarks, location, document names).
+
+### Admin Banking tabs (client-side)
+
+| Tab | Rules |
+|-----|--------|
+| Pending | payment ∈ `{loan, mix}` **and** `bankProcessDone !== true` **and** 1st loan installment paid > 0 **and** loan remaining > 0 |
+| Submitted | `bankProcessDone === true` **and** 1st loan installment paid > 0 **and** loan remaining > 0 |
+| Completed | loan remaining ₹0 |
+
+Filters + Download: frontend only.
+
+### Code
+
+- `controllers/adminController.ts` → `getAllQuotations` / `getAdminQuotationById` — always attach phases + remaining + `serializeSideRemainingApiFields`
+- `utils/cashLoanAmounts.ts` → `remainingBySide` / `serializeSideRemainingApiFields`
+- `utils/quotationApiJson.ts` → `quotationPaymentApiFields` (bank process echo; does not strip installments)
+- Docs: `BACKEND_METERING_DUAL_TRACK.md` §B
+
+### QA / Done when
+
+1. List GET includes `installments`/`paymentPhases` with `paidAmount`/`paymentMode` and `loanRemaining`/`remainingAmount` (not stripped for metering or other `operationalView`).
+2. FE can hide unpaid-1st and zero-remaining rows client-side; Completed shows loan remaining ₹0.
+3. `PATCH …/bank-process` still echoes `bankProcessDone` + assigned person / docs.
 
