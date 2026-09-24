@@ -87,6 +87,8 @@
 | 75 | High | PDF panel range clear on uncheck (INA / Waaree) | **Done** | §48.3 / REQUIRED §BA (FE HANDOFF §48) |
 | 76 | High | Final settlement → PostgreSQL — gap-only `d`, absolute SET, Completed survives refresh, Revert | **Done** | §49 / REQUIRED §BB |
 | 77 | High | Admin Banking list GET — installments + loanRemaining for client-side hide | **Done** | §50 / dual-track §B |
+| 78 | High | Admin Banking Filters — Installation Approved (FE-only) | **Done** | §52 / dual-track §B |
+| 79 | High | Admin Banking access key `banking` + field permissions | **Done** | §53 / `BACKEND_USER_ACCESS.ts` / field perms |
 
 **Deploy before QA:**
 
@@ -3253,4 +3255,99 @@ Filters + Download: frontend only.
 1. List GET includes `installments`/`paymentPhases` with `paidAmount`/`paymentMode` and `loanRemaining`/`remainingAmount` (not stripped for metering or other `operationalView`).
 2. FE can hide unpaid-1st and zero-remaining rows client-side; Completed shows loan remaining ₹0.
 3. `PATCH …/bank-process` still echoes `bankProcessDone` + assigned person / docs.
+
+---
+
+## 52. Admin **Banking** Filters — Installation Approved (FE-only) — Sep 2026
+
+**Status: no backend change** — frontend Admin → **Banking** → Filters · `components/admin-banking-panel.tsx` · `isInstallationApprovedForAdminTab`
+
+No new API. The **Installation Approved** filter is client-side (same rule as the Installation tab).
+
+### What `GET /api/admin/quotations` must keep echoing (do not strip)
+
+| Field(s) | Banking filter use |
+|----------|--------------------|
+| `installationStatus` / `installation_status` | Treat as approved when ∈ `{installer_approved, pending_baldev, baldev_approved}` |
+| `installerApprovedAt` / `installer_approved_at` | Same Approved signal as Installation tab (timestamp present) |
+
+Already returned by `getAllQuotations` via `meteringWorkflowApiFields` + explicit `installerApprovedAt` (same payload as Installation). Do **not** strip for Banking / metering / other `operationalView`.
+
+### Not required
+
+- No `?installationApproved=` (or similar) query param
+- No server-side Banking filter endpoints
+
+### Code (echo only — unchanged for this ticket)
+
+- `controllers/adminController.ts` → `getAllQuotations`
+- `utils/meteringWorkflowApi.ts` → `meteringWorkflowApiFields`
+- Docs: `BACKEND_METERING_DUAL_TRACK.md` §B
+
+### QA / Done when
+
+1. List GET includes `installationStatus` / `installation_status` and `installerApprovedAt` / `installer_approved_at` on Banking-loaded rows.
+2. FE Installation Approved filter can match `installer_approved` / `pending_baldev` / `baldev_approved` without a new API.
+
+---
+
+## 53. Admin **Banking** access key + field permissions — Sep 2026
+
+**Status: implemented** — `BACKEND_USER_ACCESS.ts` · `BACKEND_USER_FIELD_PERMISSIONS.ts` · dual-track §B
+
+No new Banking routes. Persist `banking` on user access, echo on login, allow Banking users on existing Admin quotation list + bank-process PATCH.
+
+### P0 — Zod / ACCESS_KEYS
+
+`access` / `permissions` arrays must accept `banking` (aliases `bank` / `bank_process` → `banking`).
+
+Do **not** invent role `"banking"`. Keep existing role (`dealer` / `account-management` / …). Only-banking users stay `account-management`.
+
+### Persist + echo
+
+On `PUT /admin/dealers/:id` and `PUT /admin/account-managers/:id`:
+
+```json
+{
+  "access": ["quotation", "banking"],
+  "permissions": ["quotation", "banking"],
+  "moduleFieldPermissions": {
+    "banking": {
+      "level": "write",
+      "scope": "selected_users",
+      "selectedUserIds": ["dealer-uuid-1", "dealer-uuid-2"]
+    }
+  }
+}
+```
+
+Echo on GET dealers / account-managers and `POST /auth/login` (`user.access` + `user.moduleFieldPermissions.banking`).
+
+### Routes
+
+| Action | Allow |
+|--------|--------|
+| Load Banking list | `admin` **or** `access` has `banking` on `GET /admin/quotations` (workflow module + selected_users scope) |
+| Submit bank process | `PATCH …/bank-process` — `authorizeBankingOrMeteringOrAdmin`; field write via `moduleFieldPermissions.banking` |
+| Field access read | GET 200; PATCH 403 |
+| Field access write | GET + PATCH 200 |
+| `scope: selected_users` | Only those dealer IDs (server filters list + PATCH record scope) |
+
+Body unchanged (§41 / dual-track §B): `bankProcessDone`, `bankAssignedPersonName`, …
+
+### Code
+
+- `utils/userAccess.ts` — `ACCESS_KEYS` + aliases
+- `utils/moduleFieldPermissions.ts` — `banking` module key + list scope
+- `validations/workflowPermissionValidations.ts` — Zod `banking`
+- `middleware/authQuotation.ts` — `authorizeBankingOrMeteringOrAdmin`
+- `controllers/adminController.ts` — bank-process write module `banking` when access has banking
+- `routes/adminRoutes.ts` / `routes/quotationRoutes.ts` — bank-process auth
+
+### QA
+
+1. Edit User → check Banking + Field access Write → Update 200; re-open → still checked / Write.
+2. Login → `access` includes `"banking"` → Banking tab opens.
+3. Selected one → only those dealers’ loan files.
+4. Read only → list OK, Submit bank process **403**.
 

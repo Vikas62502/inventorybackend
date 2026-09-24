@@ -31,6 +31,9 @@ export const modulePermissionRuleSchema = z.object({
 export const moduleFieldPermissionsSchema = z
   .object({
     accounts: modulePermissionRuleSchema.optional(),
+    banking: modulePermissionRuleSchema.optional(),
+    bank: modulePermissionRuleSchema.optional(),
+    bank_process: modulePermissionRuleSchema.optional(),
     installation: modulePermissionRuleSchema.optional(),
     metering: modulePermissionRuleSchema.optional(),
     final_confirmation: modulePermissionRuleSchema.optional(),

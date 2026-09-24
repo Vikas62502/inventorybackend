@@ -41,7 +41,14 @@ export type ModulePermissionScope =
   | "selected_users"
   | "office_only"
 
-export type WorkflowModuleKey = "installation" | "metering" | "final_confirmation"
+export type WorkflowModuleKey =
+  | "accounts"
+  | "banking"
+  | "installation"
+  | "metering"
+  | "final_confirmation"
+  | "visitor_reports"
+  | "calling_reports"
 
 export type ModulePermissionRule = {
   level: ModulePermissionLevel
@@ -55,6 +62,16 @@ export type ModuleFieldPermissions = Partial<Record<WorkflowModuleKey, ModulePer
  * Example persisted on user row (JSONB column or JSON text):
  */
 export const EXAMPLE_MODULE_FIELD_PERMISSIONS: ModuleFieldPermissions = {
+  accounts: {
+    level: "write",
+    scope: "everyone",
+    selectedUserIds: [],
+  },
+  banking: {
+    level: "write",
+    scope: "selected_users",
+    selectedUserIds: ["dealer-uuid-1", "dealer-uuid-2"],
+  },
   installation: {
     level: "read",
     scope: "everyone",
@@ -109,6 +126,8 @@ export const EXAMPLE_MODULE_FIELD_PERMISSIONS: ModuleFieldPermissions = {
  * })
  *
  * const moduleFieldPermissionsSchema = z.object({
+ *   accounts: modulePermissionRuleSchema.optional(),
+ *   banking: modulePermissionRuleSchema.optional(),
  *   installation: modulePermissionRuleSchema.optional(),
  *   metering: modulePermissionRuleSchema.optional(),
  *   final_confirmation: modulePermissionRuleSchema.optional(),
@@ -281,6 +300,7 @@ export const EXAMPLE_LOGIN_USER_FRAGMENT = {
  * | moduleFieldPermissions key | access[] key | Route |
  * |----------------------------|--------------|-------|
  * | accounts | accounts | /dashboard/account-management |
+ * | banking | banking | Admin → Banking (reuses GET /admin/quotations + PATCH …/bank-process) |
  * | installation | installation | /dashboard/installer |
  * | metering | metering | /dashboard/metering |
  * | final_confirmation | final_confirmation | /dashboard/baldev |
@@ -296,6 +316,7 @@ export const EXAMPLE_LOGIN_USER_FRAGMENT = {
  * | Module | Example routes | Rule |
  * |--------|----------------|------|
  * | accounts | PATCH payment-details / site-cost / installments, final-settlement, installation-release, retrieve-from-installation, approved pricing/discount | canWriteWorkflowModule(accounts) + record scope |
+ * | banking | PATCH …/bank-process (Admin Banking submit) | canWriteWorkflowModule(banking) + record scope; read → GET list 200, PATCH 403 |
  * | installation | POST …/installer/quotations/:id/documents, PATCH operational install stage | canWriteWorkflowModule(installation) + record scope |
  * | metering | PATCH metering stage, meter document upload | canWriteWorkflowModule(metering) + record scope |
  * | final_confirmation | POST …/baldev/quotations/:id/final-confirmation-documents, final approve | canWriteWorkflowModule(final_confirmation) + record scope |

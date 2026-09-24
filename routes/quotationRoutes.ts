@@ -60,6 +60,7 @@ import {
   authorizeQuotationDocumentsEditor,
   authorizeInstallerOrAdmin,
   authorizeMeteringOrAdmin,
+  authorizeBankingOrMeteringOrAdmin,
   authorizeAdmin,
   rejectAccountManager
 } from '../middleware/authQuotation';
@@ -872,7 +873,7 @@ router.post('/:quotationId/restore-current', authorizeDealerOrAccountManager, re
 router.post('/:quotationId/set-current', authorizeDealerOrAccountManager, restoreQuotationCurrent);
 router.patch('/:quotationId', (req, res) => {
   if (isBankProcessRequestBody(req.body as Record<string, unknown>)) {
-    return authorizeMeteringOrAdmin(req, res, () => {
+    return authorizeBankingOrMeteringOrAdmin(req, res, () => {
       validate(bankProcessSchema)(req, res, () => {
         void updateQuotationBankProcess(req, res);
       });
@@ -979,7 +980,7 @@ router.post('/:quotationId/revert-final-settlement', authorizeDealerOrAccountMan
 router.delete('/:quotationId/final-settlement', authorizeDealerOrAccountManager, validate(revertFinalSettlementSchema), revertQuotationFinalSettlement);
 router.patch('/:quotationId/payment-details', (req, res) => {
   if (isBankProcessRequestBody(req.body as Record<string, unknown>)) {
-    return authorizeMeteringOrAdmin(req, res, () => {
+    return authorizeBankingOrMeteringOrAdmin(req, res, () => {
       validate(bankProcessSchema)(req, res, () => {
         void updateQuotationBankProcess(req, res);
       });
@@ -996,10 +997,10 @@ router.patch('/:quotationId/site-cost', authorizeAccountManagerOrAdminPayment, v
 router.patch('/:quotationId/installments', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.put('/:quotationId/installments', authorizeAccountManagerOrAdminPayment, validate(updatePaymentDetailsSchema), updateQuotationPaymentDetails);
 router.patch('/:quotationId/payment-mode', authorizeAccountManagerOrAdminPayment, validate(updatePaymentModeSchema), updateQuotationPaymentDetails);
-/** §17 Bank process dual-track (SPA fallbacks + installer/metering JWT). */
+/** §17 / §53 Bank process (SPA fallbacks + installer/metering/banking JWT). */
 router.patch(
   '/:quotationId/bank-process',
-  authorizeMeteringOrAdmin,
+  authorizeBankingOrMeteringOrAdmin,
   validate(bankProcessSchema),
   updateQuotationBankProcess
 );

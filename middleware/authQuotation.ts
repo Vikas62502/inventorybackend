@@ -619,6 +619,46 @@ export const authorizeMeteringOrAdmin = (req: Request, res: Response, next: Next
   });
 };
 
+/**
+ * Admin Banking bank-process + metering dual-track bank path.
+ * requireAnyAccess(['admin', 'banking']) plus metering/installer dual-track roles.
+ */
+export const authorizeBankingOrMeteringOrAdmin = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  if (
+    req.dealer?.role === 'admin' ||
+    hasAdminPanelAccess(req) ||
+    allowByAccess(req, 'admin') ||
+    allowByAccess(req, 'banking') ||
+    allowByAccess(req, 'metering')
+  ) {
+    next();
+    return;
+  }
+  if (
+    req.user &&
+    (req.user.role === 'admin' ||
+      req.user.role === 'super-admin' ||
+      req.user.role === 'super-admin-manager' ||
+      req.user.role === 'metering' ||
+      req.user.role === 'meter' ||
+      req.user.role === 'metering-team' ||
+      req.user.role === 'mco' ||
+      req.user.role === 'installer' ||
+      isInstallationTeamJwtRole(req.user.role))
+  ) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    success: false,
+    error: { code: 'AUTH_004', message: 'Insufficient permissions' }
+  });
+};
+
 /** Inventory System roles that may edit any quotation (products/pricing), same as `authorizeAdmin` inventory branch. */
 const isInventorySystemAdminRole = (role: string | undefined): boolean =>
   isInventoryAdminLikeRole(role);

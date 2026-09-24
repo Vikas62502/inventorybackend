@@ -51,6 +51,7 @@ export const ACCESS_KEYS = [
   "admin",
   "quotation",
   "accounts",
+  "banking",
   "installation",
   "metering",
   "final_confirmation",
@@ -68,6 +69,8 @@ const ACCESS_TO_ROLE: Record<AccessKey, string> = {
   admin: "admin",
   quotation: "dealer",
   accounts: "account-management",
+  // Banking is a grant — never invent role "banking"; only-banking stays account-management
+  banking: "account-management",
   installation: "installer",
   metering: "metering",
   final_confirmation: "baldev",
@@ -81,6 +84,7 @@ const ACCESS_TO_ROLE: Record<AccessKey, string> = {
 const PRIMARY_PRIORITY: AccessKey[] = [
   "admin",
   "accounts",
+  // banking is intentionally omitted — grant only, keeps account-management role
   "installation",
   "metering",
   "final_confirmation",
@@ -102,6 +106,7 @@ export function normalizeAccess(raw: unknown): AccessKey[] {
       .toLowerCase()
       .replace(/[\s-]+/g, "_")
     if (key === "account_management" || key === "account" || key === "payments") key = "accounts"
+    if (key === "bank" || key === "bank_process" || key === "bankprocess") key = "banking"
     if (key === "installer" || key === "install") key = "installation"
     if (key === "baldev" || key === "final" || key === "confirmation") key = "final_confirmation"
     if (key === "dealer" || key === "quotations") key = "quotation"

@@ -51,7 +51,8 @@ import {
   authenticate,
   authorizeAdmin,
   authorizeAccountManagerOrAdminPayment,
-  authorizeMeteringOrAdmin
+  authorizeMeteringOrAdmin,
+  authorizeBankingOrMeteringOrAdmin
 } from '../middleware/authQuotation';
 import { requireAdminAccess, requireAnyAccess } from '../utils/userAccess';
 import { validate } from '../middleware/validate';
@@ -128,14 +129,14 @@ router.patch(
 );
 router.patch(
   '/quotations/:quotationId/bank-process',
-  authorizeMeteringOrAdmin,
+  authorizeBankingOrMeteringOrAdmin,
   validate(bankProcessSchema),
   updateQuotationBankProcess
 );
 /**
  * §17 Bank process OR §30 siteCost-only (FE tries this path as Cost-of-site fallback).
  * Site-cost-only → payment-details handler (does not wipe installments).
- * Otherwise → bank process (metering / admin / installer).
+ * Otherwise → bank process (metering / admin / installer / banking).
  */
 router.patch('/quotations/:quotationId/payment-details', (req, res) => {
   if (isSiteCostOnlyPaymentDetailsBody(req.body as Record<string, unknown>)) {
@@ -145,7 +146,7 @@ router.patch('/quotations/:quotationId/payment-details', (req, res) => {
       });
     });
   }
-  return authorizeMeteringOrAdmin(req, res, () => {
+  return authorizeBankingOrMeteringOrAdmin(req, res, () => {
     validate(bankProcessSchema)(req, res, () => {
       void updateQuotationBankProcess(req, res);
     });

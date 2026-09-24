@@ -8,6 +8,7 @@ export type OfficeLocation = (typeof OFFICE_LOCATIONS)[number];
 
 export type WorkflowModuleKey =
   | 'accounts'
+  | 'banking'
   | 'installation'
   | 'metering'
   | 'final_confirmation'
@@ -32,6 +33,7 @@ export const DEFAULT_MODULE_PERMISSION: ModulePermissionRule = {
 
 export const WORKFLOW_MODULE_KEYS: WorkflowModuleKey[] = [
   'accounts',
+  'banking',
   'installation',
   'metering',
   'final_confirmation',
@@ -94,6 +96,11 @@ export const normalizeModuleFieldPermissions = (raw: unknown): ModuleFieldPermis
   const o = raw as Record<string, unknown>;
   const out: ModuleFieldPermissions = {};
   if (o.accounts != null) out.accounts = normalizeModulePermissionRule(o.accounts);
+  if (o.banking != null) out.banking = normalizeModulePermissionRule(o.banking);
+  if (out.banking == null && o.bank != null) out.banking = normalizeModulePermissionRule(o.bank);
+  if (out.banking == null && o.bank_process != null) {
+    out.banking = normalizeModulePermissionRule(o.bank_process);
+  }
   if (o.installation != null) out.installation = normalizeModulePermissionRule(o.installation);
   if (o.metering != null) out.metering = normalizeModulePermissionRule(o.metering);
   if (o.final_confirmation != null) out.final_confirmation = normalizeModulePermissionRule(o.final_confirmation);
@@ -170,6 +177,7 @@ export const getModulePermissionRule = (
 
 export const WORKFLOW_MODULE_ACCESS_KEYS: Array<{ module: WorkflowModuleKey; accessKey: AccessKey }> = [
   { module: 'accounts', accessKey: 'accounts' },
+  { module: 'banking', accessKey: 'banking' },
   { module: 'installation', accessKey: 'installation' },
   { module: 'metering', accessKey: 'metering' },
   { module: 'final_confirmation', accessKey: 'final_confirmation' },
@@ -275,6 +283,7 @@ export const resolveWorkflowModuleFromOperationalView = (
     return 'final_confirmation';
   }
   if (key === 'accounts' || key === 'account') return 'accounts';
+  if (key === 'banking' || key === 'bank' || key === 'bank_process') return 'banking';
   return null;
 };
 

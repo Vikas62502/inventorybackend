@@ -88,7 +88,7 @@ See `BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md`.
 | Submitted | `bankProcessDone === true` **and** 1st loan installment `paidAmount` > 0 **and** loan remaining > 0 — row details = assigned person / remarks / location / document names |
 | Completed | loan remaining ₹0 from Accounts payment — **no extra complete flag** |
 
-**Client-side only:** Admin Banking tabs, Filters, and Download run on the frontend against the admin quotations list GET. Backend does **not** add Banking tab query filters or download APIs.
+**Client-side only:** Admin Banking tabs, Filters (incl. **Installation Approved**), and Download run on the frontend against the admin quotations list GET. Backend does **not** add Banking tab query filters or download APIs.
 
 Accept payment aliases: `cash_loan`, `cash+loan` → treat as `mix` (API normalizes on echo).
 
@@ -126,8 +126,10 @@ Every admin / metering / installer queue row includes:
 | `installments` / `paymentPhases` / `payment_phases` with `paidAmount` + `paymentMode` | Identify loan-side phase 1; hide when 1st loan paid = ₹0 |
 | `remaining` / `remainingAmount` / `remaining_amount` | Overall remaining |
 | `loanRemaining` / `loan_remaining` (`loanAmount − sum(loan paid)`) | Pending/Submitted require remaining > 0; Completed = loan remaining ₹0 |
+| `installationStatus` / `installation_status` | Banking Filters → Installation Approved (`installer_approved` / `pending_baldev` / `baldev_approved`) — FE-only (§52) |
+| `installerApprovedAt` / `installer_approved_at` | Same Approved signal as Installation tab |
 
-No server-side Banking tab filtering — FE hides rows using the fields above.
+No server-side Banking tab filtering — FE hides / filters rows using the fields above.
 ### B.4 Save bank details + move to Pending Payment
 
 **Preferred:**

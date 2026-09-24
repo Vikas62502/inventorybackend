@@ -166,7 +166,7 @@ const respondWorkflowQuotation = async (quotation: Quotation, res: Response): Pr
   });
 };
 
-/** §17 — Admin / metering / installer may update WCC flag + bank process. */
+/** §17 — Admin / metering / installer may update WCC flag (Admin Banking uses banking access separately). */
 const hasMeteringDualTrackAccess = (req: Request): boolean => {
   if (hasAdminQuotationAccess(req)) return true;
   const role = req.user?.role;
@@ -180,6 +180,21 @@ const hasMeteringDualTrackAccess = (req: Request): boolean => {
     isInstallationTeamJwtRole(role)
   );
 };
+
+const userAccessLikeFromReq = (req: Request) => ({
+  role: req.user?.role ?? req.dealer?.role,
+  access: (req.user as any)?.access ?? (req.dealer as any)?.access,
+  permissions: (req.user as any)?.permissions ?? (req.dealer as any)?.permissions,
+  username: req.user?.username ?? req.dealer?.username
+});
+
+/** Admin Banking tab — access contains `banking` (or admin panel). */
+const hasBankingAccess = (req: Request): boolean =>
+  hasAdminPanelAccess(req) || canAccessSection(userAccessLikeFromReq(req), 'banking');
+
+/** Bank-process PATCH: metering dual-track OR banking grant. */
+const canSubmitBankProcess = (req: Request): boolean =>
+  hasMeteringDualTrackAccess(req) || hasBankingAccess(req);
 
 /**
  * Admin Send to Metering — allowed from statuses.
@@ -310,6 +325,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       !hasFullWorkflowList &&
       !hasWorkflowModuleAccess &&
       !hasAdminPanelAccess(req) &&
+      !canAccessSection(accessUser, 'banking') &&
       !isInventoryAgent &&
       !isQuotationDealer
     ) {
@@ -1693,7 +1709,7 @@ export const updateMeteringWccAfterDiscom = async (req: Request, res: Response):
  */
 export const updateQuotationBankProcess = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!hasMeteringDualTrackAccess(req)) {
+    if (!canSubmitBankProcess(req)) {
       res.status(403).json({
         success: false,
         error: { code: 'AUTH_004', message: 'Insufficient permissions' }
@@ -1712,7 +1728,11 @@ export const updateQuotationBankProcess = async (req: Request, res: Response): P
       return;
     }
 
-    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, 'metering', quotation))) {
+    // Admin Banking field access uses module `banking`; metering dual-track uses `metering`.
+    const writeModule = canAccessSection(userAccessLikeFromReq(req), 'banking')
+      ? 'banking'
+      : 'metering';
+    if (!(await enforceWorkflowFieldWriteOrRespond(req, res, writeModule, quotation))) {
       return;
     }
 
