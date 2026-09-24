@@ -81,7 +81,15 @@ PATCH /api/admin/quotations/{id}/metering-wcc-after-discom
 
 Fallback on `installation-status` / `workflow-status` with same flag while stage stays `metering_approved`.
 
-**Validation:** Reject `true` unless stage is `metering_approved` **and** installation fully approved (not `installer_partial_approved`).
+**Validation (Sep 2026 — live Admin bug):** do **not** 400 with
+`meteringWccAfterDiscom can only be set when stage is metering_approved`.
+
+When setting `meteringWccAfterDiscom: true`:
+- `pending_metering` / `metering_in_progress` / empty → promote `meteringStatus` to `metering_approved`, then set flag → **200**
+- already `metering_approved` → set flag only → **200**
+- `meter_installation_pending` / `mco` / later → **409**
+
+Still require customer installation fully approved (not partial).
 
 **Clear** on `meter_installation_pending`, `mco`, `pending_metering`, and earlier stages.
 

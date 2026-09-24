@@ -151,6 +151,107 @@ export const parseMeteringWccAfterDiscomFlag = (
   return undefined;
 };
 
+/** Stages past Meter in Discom — cannot set WCC-after-discom (409). */
+export const LATE_METERING_FOR_WCC = new Set([
+  METER_INSTALLATION_PENDING_STATUS,
+  'meter_install_pending',
+  'meter_install',
+  'mco',
+  'pending_baldev',
+  'baldev_approved',
+  'baldev_rejected',
+  'completed'
+]);
+
+export type MeteringWccAfterDiscomPatchResult =
+  | { ok: true; patch: Record<string, unknown> }
+  | { ok: false; status: 400 | 409; message: string };
+
+/**
+ * Meter in Discom → WCC Pending (Sep 2026):
+ * - pending_metering / metering_in_progress / empty → promote meteringStatus to
+ *   metering_approved, then set flag
+ * - already metering_approved → set flag only
+ * - meter_installation_pending / mco / later → 409
+ * Never 400 with "can only be set when stage is metering_approved".
+ */
+export const buildMeteringWccAfterDiscomPatch = (
+  quotation: {
+    installationStatus?: string | null;
+    installation_status?: string | null;
+    meteringStatus?: string | null;
+    metering_status?: string | null;
+    installerApprovedAt?: Date | string | null;
+    installationPartialApproved?: boolean | null;
+    meteringApprovedAt?: Date | string | null;
+    meteringWccAfterDiscomAt?: Date | string | null;
+  },
+  flag: boolean,
+  opts: {
+    now?: Date;
+    isPartialApproved?: (status: string | null | undefined) => boolean;
+  } = {}
+): MeteringWccAfterDiscomPatchResult => {
+  const now = opts.now || new Date();
+  if (!flag) {
+    return {
+      ok: true,
+      patch: {
+        meteringWccAfterDiscom: false,
+        meteringWccAfterDiscomAt: null
+      }
+    };
+  }
+
+  const stage = resolvePersistedMeteringStatus(quotation) || '';
+  const installRaw =
+    quotation.installationStatus ?? quotation.installation_status ?? null;
+
+  if (LATE_METERING_FOR_WCC.has(stage)) {
+    return {
+      ok: false,
+      status: 409,
+      message: `Cannot move to WCC Pending when metering stage is '${stage}'`
+    };
+  }
+
+  const isPartial =
+    opts.isPartialApproved?.(installRaw) ||
+    Boolean(quotation.installationPartialApproved);
+  if (isPartial || !quotation.installerApprovedAt) {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        'Customer installation must be completed and approved before moving to WCC Pending (installer_partial_approved is not allowed)'
+    };
+  }
+
+  const patch: Record<string, unknown> = {};
+
+  if (stage !== 'metering_approved') {
+    const earlyOrEmpty =
+      !stage || stage === 'pending_metering' || stage === 'metering_in_progress';
+    if (!earlyOrEmpty) {
+      return {
+        ok: false,
+        status: 409,
+        message: `Cannot move to WCC Pending when metering stage is '${stage || 'unset'}'`
+      };
+    }
+    // Auto-promote early / empty → metering_approved (To Discom equivalent), then flag.
+    patch.meteringStatus = 'metering_approved';
+    patch.meteringApprovedAt = quotation.meteringApprovedAt || now;
+    if (isMeteringWorkflowStatus(installRaw)) {
+      patch.installationStatus = 'installer_approved';
+    }
+  }
+
+  patch.meteringWccAfterDiscom = true;
+  patch.meteringWccAfterDiscomAt = quotation.meteringWccAfterDiscomAt || now;
+  return { ok: true, patch };
+};
+
 /** Parse bank-process-done flag from request body (camel / snake / moveToPendingPayment). */
 export const parseBankProcessDoneFlag = (
   body: Record<string, unknown> | null | undefined

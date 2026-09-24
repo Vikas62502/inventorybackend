@@ -59,7 +59,8 @@ import {
   parseMeteringWccAfterDiscomFlag,
   parseBankProcessDoneFlag,
   isMeteringWorkflowStatus,
-  resolvePersistedMeteringStatus
+  resolvePersistedMeteringStatus,
+  buildMeteringWccAfterDiscomPatch
 } from '../utils/meteringWorkflowApi';
 import { paymentExcelJourneyApiFields } from '../utils/paymentExcelJourneyStatus';
 import { isInstallationTeamJwtRole } from '../utils/installationTeamRole';
@@ -1106,45 +1107,6 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
     const currentStatus = String(quotation.installationStatus || 'pending_installer').trim();
     const now = new Date();
 
-    const installationApprovedForPostDiscomWcc = (): boolean => {
-      if (
-        isInstallationPartialApprovedStatus(quotation.installationStatus) ||
-        Boolean((quotation as any).installationPartialApproved)
-      ) {
-        return false;
-      }
-      return Boolean(quotation.installerApprovedAt);
-    };
-
-    const applyWccAfterDiscomPatch = (
-      patch: Record<string, unknown>,
-      flag: boolean,
-      stageForGate: string = currentStatus
-    ): { ok: true } | { ok: false; message: string } => {
-      if (flag) {
-        if (stageForGate !== 'metering_approved') {
-          return {
-            ok: false,
-            message: 'meteringWccAfterDiscom can only be set when stage is metering_approved'
-          };
-        }
-        if (!installationApprovedForPostDiscomWcc()) {
-          return {
-            ok: false,
-            message:
-              'Customer installation must be completed and approved before moving to WCC Pending (installer_partial_approved is not allowed)'
-          };
-        }
-        patch.meteringWccAfterDiscom = true;
-        patch.meteringWccAfterDiscomAt =
-          (quotation as any).meteringWccAfterDiscomAt || now;
-      } else {
-        patch.meteringWccAfterDiscom = false;
-        patch.meteringWccAfterDiscomAt = null;
-      }
-      return { ok: true };
-    };
-
     const respondWithQuotation = async () => {
       await quotation.reload();
       const row = typeof quotation.toJSON === 'function' ? quotation.toJSON() : (quotation as any);
@@ -1181,21 +1143,24 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       });
     };
 
-    // Flag-only update (stay on metering_approved / clear flag)
+    // Flag-only update — auto-promote early/empty → metering_approved then set flag.
     if (!requested && wccAfterDiscomFlag !== undefined) {
-      const patch: Record<string, unknown> = {};
-      const applied = applyWccAfterDiscomPatch(patch, wccAfterDiscomFlag);
+      const applied = buildMeteringWccAfterDiscomPatch(quotation as any, wccAfterDiscomFlag, {
+        now,
+        isPartialApproved: isInstallationPartialApprovedStatus
+      });
       if (!applied.ok) {
-        res.status(400).json({
+        res.status(applied.status).json({
           success: false,
           error: {
-            code: 'VAL_001',
+            code: applied.status === 409 ? 'WF_003' : 'VAL_001',
             message: applied.message,
             details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
           }
         });
         return;
       }
+      const patch: Record<string, unknown> = { ...applied.patch };
       if (bankDoneFlag === true) {
         patch.bankProcessDone = true;
         patch.bankProcessDoneAt = (quotation as any).bankProcessDoneAt || now;
@@ -1369,18 +1334,30 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       }
 
       if (wccAfterDiscomFlag !== undefined && nextStatus === 'metering_approved') {
-        const applied = applyWccAfterDiscomPatch(meteringPatch, wccAfterDiscomFlag, nextStatus);
+        const applied = buildMeteringWccAfterDiscomPatch(
+          {
+            ...(quotation as any),
+            meteringStatus: 'metering_approved',
+            installationStatus: currentStatus
+          },
+          wccAfterDiscomFlag,
+          {
+            now,
+            isPartialApproved: isInstallationPartialApprovedStatus
+          }
+        );
         if (!applied.ok) {
-          res.status(400).json({
+          res.status(applied.status).json({
             success: false,
             error: {
-              code: 'VAL_001',
+              code: applied.status === 409 ? 'WF_003' : 'VAL_001',
               message: applied.message,
               details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
             }
           });
           return;
         }
+        Object.assign(meteringPatch, applied.patch);
       }
 
       await quotation.update(meteringPatch as any);
@@ -1444,37 +1421,24 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       patch.baldevActionAt = quotation.baldevActionAt || now;
     }
 
-    // WCC flag only applies when metering is already metering_approved (column).
+    // WCC flag: auto-promote early/empty → metering_approved, then set flag (Sep 2026).
     if (wccAfterDiscomFlag !== undefined) {
-      const currentMetering =
-        resolvePersistedMeteringStatus({
-          meteringStatus: (quotation as any).meteringStatus,
-          installationStatus: currentStatus
-        }) || '';
-      if (currentMetering === 'metering_approved') {
-        const applied = applyWccAfterDiscomPatch(patch, wccAfterDiscomFlag, 'metering_approved');
-        if (!applied.ok) {
-          res.status(400).json({
-            success: false,
-            error: {
-              code: 'VAL_001',
-              message: applied.message,
-              details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
-            }
-          });
-          return;
-        }
-      } else if (wccAfterDiscomFlag === true) {
-        res.status(400).json({
+      const applied = buildMeteringWccAfterDiscomPatch(quotation as any, wccAfterDiscomFlag, {
+        now,
+        isPartialApproved: isInstallationPartialApprovedStatus
+      });
+      if (!applied.ok) {
+        res.status(applied.status).json({
           success: false,
           error: {
-            code: 'VAL_001',
-            message: 'meteringWccAfterDiscom can only be set when stage is metering_approved',
-            details: [{ field: 'meteringWccAfterDiscom', message: 'Requires metering_approved' }]
+            code: applied.status === 409 ? 'WF_003' : 'VAL_001',
+            message: applied.message,
+            details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
           }
         });
         return;
       }
+      Object.assign(patch, applied.patch);
     }
 
     await quotation.update(patch as any);
@@ -1555,7 +1519,10 @@ export const retrieveQuotationFromMetering = async (req: Request, res: Response)
       return;
     }
 
-    await applyRetrieveFromMetering(quotation);
+    await applyRetrieveFromMetering(
+      quotation,
+      (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+    );
     await respondWorkflowQuotation(quotation, res);
   } catch (error) {
     if (error instanceof RetrieveFromMeteringError) {
@@ -1669,47 +1636,24 @@ export const updateMeteringWccAfterDiscom = async (req: Request, res: Response):
       return;
     }
 
-    const currentStatus = String(quotation.installationStatus || '').trim();
     const now = new Date();
-    const patch: Record<string, unknown> = {};
-
-    if (flag) {
-      if (currentStatus !== 'metering_approved') {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message: 'meteringWccAfterDiscom can only be set when stage is metering_approved',
-            details: [{ field: 'meteringWccAfterDiscom', message: 'Requires metering_approved' }]
-          }
-        });
-        return;
-      }
-      if (
-        isInstallationPartialApprovedStatus(quotation.installationStatus) ||
-        Boolean((quotation as any).installationPartialApproved) ||
-        !quotation.installerApprovedAt
-      ) {
-        res.status(400).json({
-          success: false,
-          error: {
-            code: 'VAL_001',
-            message:
-              'Customer installation must be completed and approved before moving to WCC Pending (installer_partial_approved is not allowed)',
-            details: [{ field: 'meteringWccAfterDiscom', message: 'Installation not fully approved' }]
-          }
-        });
-        return;
-      }
-      patch.meteringWccAfterDiscom = true;
-      patch.meteringWccAfterDiscomAt =
-        (quotation as any).meteringWccAfterDiscomAt || now;
-    } else {
-      patch.meteringWccAfterDiscom = false;
-      patch.meteringWccAfterDiscomAt = null;
+    const applied = buildMeteringWccAfterDiscomPatch(quotation as any, flag, {
+      now,
+      isPartialApproved: isInstallationPartialApprovedStatus
+    });
+    if (!applied.ok) {
+      res.status(applied.status).json({
+        success: false,
+        error: {
+          code: applied.status === 409 ? 'WF_003' : 'VAL_001',
+          message: applied.message,
+          details: [{ field: 'meteringWccAfterDiscom', message: applied.message }]
+        }
+      });
+      return;
     }
 
-    await quotation.update(patch as any);
+    await quotation.update(applied.patch as any);
     await quotation.reload();
 
     res.json({

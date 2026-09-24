@@ -33,7 +33,7 @@ import {
   patchHrSheetSourceSchema,
   hrSheetSourceLeadsQuerySchema
 } from '../validations/hrSheetSourceValidations';
-import { canAccessSection, hasAdminPanelAccess, requireAnyAccess } from '../utils/userAccess';
+import { requireAnyAccess } from '../utils/userAccess';
 
 const router: Router = express.Router();
 
@@ -42,34 +42,10 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 });
 
-const authorizeHrLeadAccess = (req: Request, res: Response, next: NextFunction): void => {
-  const role = String(req.user?.role || req.dealer?.role || '').toLowerCase();
-  const allowed =
-    role === 'hr' ||
-    role === 'human_resources' ||
-    role === 'admin' ||
-    role === 'super-admin' ||
-    role === 'super-admin-manager' ||
-    canAccessSection(
-      {
-        role: req.user?.role ?? req.dealer?.role,
-        access: (req.user as any)?.access ?? req.dealer?.access,
-        username: req.user?.username ?? req.dealer?.username
-      },
-      'hr'
-    ) ||
-    hasAdminPanelAccess(req);
-  if (!allowed) {
-    res.status(403).json({
-      success: false,
-      error: { code: 'AUTH_004', message: 'Insufficient permissions' }
-    });
-    return;
-  }
-  next();
-};
+/** Admin + HR (super-admin via hasAdminPanelAccess inside requireAnyAccess). */
+const authorizeHrOrAdmin = requireAnyAccess(['hr', 'admin']);
 
-/** HR JWT or `x-cron-secret` matching `CRON_SECRET` (sheet auto-sync). */
+/** HR/admin JWT or `x-cron-secret` matching `CRON_SECRET` (sheet auto-sync). */
 const authenticateHrOrCron = (req: Request, res: Response, next: NextFunction): void => {
   const cronSecret = String(process.env.CRON_SECRET || '').trim();
   const headerSecret = String(req.headers['x-cron-secret'] || '').trim();
@@ -78,7 +54,7 @@ const authenticateHrOrCron = (req: Request, res: Response, next: NextFunction): 
     next();
     return;
   }
-  authenticate(req, res, () => authorizeHrLeadAccess(req, res, next));
+  authenticate(req, res, () => authorizeHrOrAdmin(req, res, next));
 };
 
 /**
@@ -106,9 +82,11 @@ router.get(
   getHrCallingActions
 );
 
-router.use(authorizeHrLeadAccess);
+router.use(authorizeHrOrAdmin);
 
 router.get('/dealers', getHrDealersForAssignment);
+/** Same list handler — SPA may POST search/filters in body. */
+router.post('/dealers', getHrDealersForAssignment);
 router.get('/assignable-dealers', getHrDealersForAssignment);
 router.get('/dealer-pool', getHrDealersForAssignment);
 router.get('/assignment/dealers', getHrDealersForAssignment);

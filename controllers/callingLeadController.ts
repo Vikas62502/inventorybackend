@@ -4888,7 +4888,8 @@ export const getHrDealersForAssignment = async (req: Request, res: Response): Pr
         : includeInactive
           ? undefined
           : true;
-    const search = String(req.query.search || '').trim();
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const search = String(req.query.search || body.search || body.q || '').trim();
 
     const union = await listQuotationAssignable({
       search: search || undefined,

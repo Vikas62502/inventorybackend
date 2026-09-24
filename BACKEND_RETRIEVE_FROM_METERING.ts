@@ -59,10 +59,21 @@ function requireAdmin(req, res) {
 
 /**
  * Apply retrieve-from-metering: early metering → installer_approved.
+ * Apply retrieve-from-metering: Meter Pending → installer_approved.
  * Keep Payment Management release flags (installation_ready_for_installer).
+ *
+ * Allowed: pending_metering, metering_in_progress, empty metering + installer_approved,
+ * or force/adminOverride/allowRevert when meteringStage is missing.
  */
-export async function applyRetrieveFromMetering(quotation) {
+export async function applyRetrieveFromMetering(quotation, body = {}) {
   const { install, metering } = currentStages(quotation)
+  const force =
+    body?.force === true ||
+    body?.force === "true" ||
+    body?.adminOverride === true ||
+    body?.adminOverride === "true" ||
+    body?.allowRevert === true ||
+    body?.allowRevert === "true"
 
   const inEarly =
     EARLY_METERING.has(metering) ||
@@ -70,11 +81,12 @@ export async function applyRetrieveFromMetering(quotation) {
     metering === "pending_metering" ||
     install === "pending_metering" ||
     metering === "metering_in_progress" ||
-    install === "metering_in_progress"
+    install === "metering_in_progress" ||
+    (!metering && (install === "installer_approved" || force))
 
   if (!inEarly) {
     const err = new Error(
-      `Cannot retrieve from metering while stage is '${metering || install || "unset"}'. Use late-stage revert flows.`,
+      `This quotation is not in early Meter Pending (stage '${metering || install || "unset"}').`,
     )
     err.status = 409
     err.code = "WF_RETRIEVE_METERING_001"
@@ -95,6 +107,9 @@ export async function applyRetrieveFromMetering(quotation) {
     metering_status: null,
     meteringStage: null,
     metering_stage: null,
+    meteringWccAfterDiscom: false,
+    metering_wcc_after_discom: false,
+    meteringWccAfterDiscomAt: null,
     pendingMeteringAt: null,
     pending_metering_at: null,
     // Do NOT clear installation_ready_for_installer / installation_released_at.
@@ -130,7 +145,7 @@ export async function postAdminRetrieveFromMetering(req, res) {
       return res.status(404).json({ success: false, error: { code: "RES_001", message: "Not found" } })
     }
 
-    await applyRetrieveFromMetering(quotation)
+    await applyRetrieveFromMetering(quotation, req.body || {})
     const data = quotationToApiJson(quotation)
     return res.json({ success: true, data })
   } catch (e) {
