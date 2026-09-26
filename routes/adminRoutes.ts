@@ -5,6 +5,7 @@ import {
   updateQuotationStatus,
   updateQuotationInstallationStatus,
   sendQuotationToMetering,
+  meteringHandoff,
   revertQuotationInstallationToPending,
   retrieveQuotationFromMetering,
   retrieveQuotationFromInstallation,
@@ -289,6 +290,16 @@ router.post(
   '/quotations/:quotationId/send-to-metering',
   validate(sendToMeteringSchema),
   sendQuotationToMetering
+);
+router.patch(
+  '/quotations/:quotationId/metering-handoff',
+  validate(sendToMeteringSchema),
+  meteringHandoff
+);
+router.post(
+  '/quotations/:quotationId/metering-handoff',
+  validate(sendToMeteringSchema),
+  meteringHandoff
 );
 router.patch(
   '/quotations/:quotationId/retrieve-from-metering',

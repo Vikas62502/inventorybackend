@@ -8,18 +8,13 @@
  *   - Admin → Quotations → **Retrieve** (when in early metering)
  *   - Admin → Metering → Meter Pending → **Retrieve**
  *   - `lib/api.ts` → `retrieveQuotationFromMetering`
- *   - `lib/operational-install-queue.ts` → `canRetrieveFromMeteringPipeline`
+ *   - `lib/operational-install-queue.ts` → `canRetrieveFromMeteringPipeline`,
+ *     `markAdminMeteringRetrieved` (browser overlay only — GET must persist)
  *
- * Product:
- *   Pull a quotation back from Meter Pending before Discom / WCC / MCO so admin can
- *   fix installation or re-send to Metering later.
+ * Persist on the server. SPA overlay only hides the row in this browser; a refresh
+ * still puts it back on Meter Pending if GET returns pending_metering.
  *
- * NOT the same as:
- *   - Admin Installation **Revert** (approved → pending_installer) — see
- *     `BACKEND_INSTALLATION_REVERT.ts`
- *   - **Retrieve from Installation** (undo Send to Installer) — see
- *     `BACKEND_RETRIEVE_FROM_INSTALLATION.ts`
- *
+ * HANDOFF §40 / REQUIRED §AN · §BC
  * =============================================================================
  */
 
@@ -73,7 +68,9 @@ export async function applyRetrieveFromMetering(quotation, body = {}) {
     body?.adminOverride === true ||
     body?.adminOverride === "true" ||
     body?.allowRevert === true ||
-    body?.allowRevert === "true"
+    body?.allowRevert === "true" ||
+    body?.retrieveFromMetering === true ||
+    body?.retrieveFromMetering === "true"
 
   const inEarly =
     EARLY_METERING.has(metering) ||

@@ -8,7 +8,7 @@ import {
 
 const EARLY_METERING = new Set(['pending_metering', 'metering_in_progress']);
 
-/** Past Meter Pending — retrieve not allowed (409). */
+/** Discom / WCC / MCO / later — retrieve not allowed (409). */
 const PAST_METERING = new Set([
   'metering_approved',
   METER_INSTALLATION_PENDING_STATUS,
@@ -36,23 +36,33 @@ export class RetrieveFromMeteringError extends Error {
 
 const truthy = (v: unknown) => v === true || v === 'true' || v === 1 || v === '1';
 
+/**
+ * Honour force / adminOverride / allowRevert / retrieveFromMetering so Meter Pending
+ * rows with empty meteringStage do not 409.
+ */
 export const isRetrieveFromMeteringForce = (
   body: Record<string, unknown> | null | undefined
 ): boolean => {
   if (!body) return false;
-  // Do not treat retrieveFromMetering alone as force — it is only the request marker.
-  return truthy(body.force) || truthy(body.adminOverride) || truthy(body.allowRevert);
+  return (
+    truthy(body.force) ||
+    truthy(body.adminOverride) ||
+    truthy(body.allowRevert) ||
+    truthy(body.retrieveFromMetering)
+  );
 };
 
 /**
  * Apply retrieve-from-metering: Meter Pending → installer_approved.
- * Keep Payment Management release flags (installation_ready_for_installer).
- * Do not change quotations.status.
+ * Clears metering_status (null) — never copies installer_approved onto metering.
+ * Keep Payment Management release flags. Do not change quotations.status.
  *
  * Allowed from:
  * - pending_metering / metering_in_progress (metering column or leaked on install)
  * - empty metering + installer_approved
- * - force / adminOverride / allowRevert / retrieveFromMetering when meteringStage missing
+ * - force / retrieveFromMetering / adminOverride / allowRevert when meteringStage missing
+ *
+ * 409 only for Discom / WCC / MCO (and later).
  */
 export const buildRetrieveFromMeteringPatch = (
   quotation: {
@@ -82,14 +92,8 @@ export const buildRetrieveFromMeteringPatch = (
   const emptyMeteringInstallerApproved =
     !metering &&
     (install === 'installer_approved' || Boolean(quotation.installerApprovedAt));
-  const forceMissingStage =
-    force &&
-    !metering &&
-    (install === 'installer_approved' ||
-      install === 'pending_installer' ||
-      install === 'installer_in_progress' ||
-      install === '' ||
-      Boolean(quotation.installerApprovedAt));
+  // Missing meteringStage + force/retrieveFromMetering — allow (SPA Meter Pending overlay cases).
+  const forceMissingStage = force && !metering;
 
   if (!earlyMetering && !emptyMeteringInstallerApproved && !forceMissingStage) {
     throw new RetrieveFromMeteringError(
@@ -128,7 +132,29 @@ export const isRetrieveFromMeteringRequest = (
 ): boolean => {
   if (!body) return false;
   if (truthy(body.retrieveFromMetering)) return true;
-  const target = normalizeMeteringWorkflowStatus(String(body.target || ''));
-  if (target === 'installer_approved' && truthy(body.allowRevert)) return true;
+
+  // metering-handoff / overlay: target installer_approved + allowRevert (not a metering stage write)
+  const targetRaw = String(
+    body.target ?? body.installationStatus ?? body.installation_status ?? ''
+  ).trim();
+  const target = normalizeMeteringWorkflowStatus(targetRaw) || normalizeInstallStatus(targetRaw);
+  const meteringWrite = normalizeMeteringWorkflowStatus(
+    String(body.meteringStatus ?? body.metering_status ?? '')
+  );
+  if (
+    meteringWrite &&
+    (EARLY_METERING.has(meteringWrite) ||
+      meteringWrite === 'metering_approved' ||
+      PAST_METERING.has(meteringWrite))
+  ) {
+    return false;
+  }
+  if (
+    target === 'installer_approved' &&
+    truthy(body.allowRevert) &&
+    String(body.handoff || '').toLowerCase() !== 'metering'
+  ) {
+    return true;
+  }
   return false;
 };

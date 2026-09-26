@@ -2929,26 +2929,35 @@ Structured `installationImageCaptureMetaJson` persist (§AJ) — optional follow
 
 ## 40. Admin **Retrieve from Metering** (Meter Pending → Installation approved) — Sep 2026
 
-**Status: implemented** — FE REQUIRED §AN / `BACKEND_RETRIEVE_FROM_METERING.ts` (FE HANDOFF §39)
+**Status: implemented** — FE REQUIRED §AN / §BC / `BACKEND_RETRIEVE_FROM_METERING.ts` (FE HANDOFF §39 / §AL)
+
+SPA `markAdminMeteringRetrieved` is **browser overlay only**. Persist on the server so refresh does not put the row back on Meter Pending.
 
 | Item | Detail |
 |------|--------|
 | Route | `PATCH\|POST /api/admin/quotations/:id/retrieve-from-metering` |
-| From | `pending_metering`, `metering_in_progress` |
-| To | `installation_status = installer_approved`; clear metering timestamps |
-| Keep | `installation_ready_for_installer`, `installation_released_at`, `quotations.status` |
-| Block | `metering_approved`, `meter_installation_pending`, `mco`, etc. → **409** |
+| Alt | `PATCH\|POST …/metering-handoff` with `retrieveFromMetering: true` |
+| Also | `installation-status` / `workflow-status` with `retrieveFromMetering: true` → same clear write (not install-only) |
+| From | `pending_metering`, `metering_in_progress`, empty metering + `installer_approved`, or force / `retrieveFromMetering` when `meteringStage` missing |
+| Write | `installation_status = installer_approved`; `metering_status` / stage = **null**; clear WCC + metering timestamps |
+| Keep | `installation_ready_for_installer`, `installation_released_at`, `quotations.status` (approved) |
+| Block | Discom / WCC / MCO (`metering_approved`, MIP, `mco`, …) → **409** |
 | Auth | Admin (quotation admin or inventory admin) |
 
-**Code:** `utils/retrieveFromMetering.ts`, `controllers/adminController.ts` → `retrieveQuotationFromMetering`
+**Do not** copy `installer_approved` onto `metering_status` via generic `PATCH …/installation-status`. Dedicated retrieve (or `retrieveFromMetering: true`) clears metering.
+
+Meter Pending queue = `pending_metering` / `metering_in_progress` only — **not** `installer_approved` with empty metering.
+
+**Code:** `utils/retrieveFromMetering.ts`, `controllers/adminController.ts` → `retrieveQuotationFromMetering` / `meteringHandoff` / installation-status intercept
 
 ### QA
 
 1. Send to Metering → GET echoes `pending_metering`.
-2. Retrieve → **200**; GET echoes `installer_approved`, metering fields cleared.
-3. Meter Pending queue excludes row; Send to Metering available again.
-4. Retrieve when `metering_approved` → **409**.
-
+2. Retrieve → **200**; GET echoes `installer_approved`, `meteringStatus` null/empty.
+3. Hard refresh → row **not** on Meter Pending; Send to Metering available again.
+4. Empty `meteringStage` + `retrieveFromMetering` / `force` → **200** (not 409).
+5. Retrieve when `metering_approved` / MCO → **409**.
+6. Plain `PATCH installationStatus=installer_approved` without retrieve flag does **not** clear metering.
 ---
 
 ## 41. **Retrieve from Installation** (undo Send to Installer) — Sep 2026

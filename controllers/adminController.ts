@@ -82,6 +82,7 @@ import {
 } from '../utils/installationApprovalPhotos';
 import {
   applyRetrieveFromMetering,
+  isRetrieveFromMeteringRequest,
   RetrieveFromMeteringError
 } from '../utils/retrieveFromMetering';
 import {
@@ -138,21 +139,32 @@ const hasRetrieveFromInstallationAccess = (req: Request): boolean => {
 const respondWorkflowQuotation = async (quotation: Quotation, res: Response): Promise<void> => {
   await quotation.reload();
   const row = typeof quotation.toJSON === 'function' ? quotation.toJSON() : (quotation as any);
+  const meteringFields = meteringWorkflowApiFields({
+    installationStatus: quotation.installationStatus,
+    meteringStatus: (quotation as any).meteringStatus,
+    meteringApprovedAt: quotation.meteringApprovedAt,
+    mcoAt: quotation.mcoAt,
+    completionAt: quotation.completionAt,
+    meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
+    meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
+    meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
+  });
+  // After retrieve-from-metering, echo empty metering (never installer_approved on metering_*).
+  const meteringCleared = !(quotation as any).meteringStatus;
   res.json({
     success: true,
     data: {
       id: quotation.id,
       status: quotation.status,
-      ...meteringWorkflowApiFields({
-        installationStatus: quotation.installationStatus,
-        meteringStatus: (quotation as any).meteringStatus,
-        meteringApprovedAt: quotation.meteringApprovedAt,
-        mcoAt: quotation.mcoAt,
-        completionAt: quotation.completionAt,
-        meterInstallationPendingAt: (quotation as any).meterInstallationPendingAt,
-        meteringWccAfterDiscom: (quotation as any).meteringWccAfterDiscom,
-        meteringWccAfterDiscomAt: (quotation as any).meteringWccAfterDiscomAt
-      }),
+      ...meteringFields,
+      ...(meteringCleared
+        ? {
+            meteringStatus: null,
+            metering_status: null,
+            meteringStage: null,
+            metering_stage: null
+          }
+        : {}),
       ...serializeInstallationReleaseFields(row),
       installerApprovedAt: quotation.installerApprovedAt || null,
       installer_approved_at: quotation.installerApprovedAt || null,
@@ -1091,6 +1103,32 @@ export const updateQuotationInstallationStatus = async (req: Request, res: Respo
       return;
     }
 
+    // Dedicated retrieve — clear metering_status; never copy installer_approved onto metering.
+    // SPA may hit installation-status / metering-handoff with retrieveFromMetering: true.
+    if (isRetrieveFromMeteringRequest(body)) {
+      if (!hasAdminQuotationAccess(req)) {
+        res.status(403).json({
+          success: false,
+          error: { code: 'AUTH_004', message: 'Insufficient permissions. Admin access required.' }
+        });
+        return;
+      }
+      try {
+        await applyRetrieveFromMetering(quotation, body);
+        await respondWorkflowQuotation(quotation, res);
+      } catch (error) {
+        if (error instanceof RetrieveFromMeteringError) {
+          res.status(error.status).json({
+            success: false,
+            error: { code: error.code, message: error.message }
+          });
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+
     const workflowModule =
       resolveWorkflowModuleForInstallationStatus(requested) ||
       (wccAfterDiscomFlag !== undefined || hasBankProcessRouteFields(body) ? 'metering' : null);
@@ -1493,9 +1531,14 @@ export const revertQuotationInstallationToPending = async (req: Request, res: Re
 /**
  * Preferred Admin "Send to Metering" — writes meteringStatus only.
  * Does not require installer_approved. Does not overwrite installation_status.
+ * If body has retrieveFromMetering / allowRevert pull-back → retrieve instead.
  */
 export const sendQuotationToMetering = async (req: Request, res: Response): Promise<void> => {
   const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+  if (isRetrieveFromMeteringRequest(body)) {
+    await retrieveQuotationFromMetering(req, res);
+    return;
+  }
   req.body = {
     ...body,
     meteringStatus: 'pending_metering',
@@ -1513,6 +1556,19 @@ export const sendQuotationToMetering = async (req: Request, res: Response): Prom
   // Ensure pickStatus finds meteringStatus
   if (!req.body.meteringStatus) req.body.meteringStatus = 'pending_metering';
   await updateQuotationInstallationStatus(req, res);
+};
+
+/**
+ * PATCH|POST /admin/quotations/:quotationId/metering-handoff
+ * Send to Metering OR retrieve-from-metering when retrieveFromMetering: true.
+ */
+export const meteringHandoff = async (req: Request, res: Response): Promise<void> => {
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+  if (isRetrieveFromMeteringRequest(body)) {
+    await retrieveQuotationFromMetering(req, res);
+    return;
+  }
+  await sendQuotationToMetering(req, res);
 };
 
 /**

@@ -1665,15 +1665,37 @@ FE should call these with Bearer instead of Google directly.
 
 ## §AN — Admin **Retrieve from Metering** — Sep 2026
 
-**Status: implemented** — see `BACKEND_RETRIEVE_FROM_METERING.ts`, HANDOFF **§40** (FE §AL / FE HANDOFF §39).
+**Status: implemented** — see `BACKEND_RETRIEVE_FROM_METERING.ts`, HANDOFF **§40** (FE §AL / FE HANDOFF §39). Hardened **§BC**.
 
 | Item | Status |
 |------|--------|
 | `PATCH\|POST /api/admin/quotations/:id/retrieve-from-metering` | Done |
-| Early metering → `installer_approved`; clear metering fields | Done |
+| `PATCH\|POST …/metering-handoff` + `retrieveFromMetering: true` | Done |
+| `installation-status` with `retrieveFromMetering` → clear metering (not install-only) | Done |
+| Early / empty + force → `installer_approved`; clear `metering_status` | Done |
 | Keep release flags + `quotations.status` | Done |
-| Late metering → **409** | Done |
-| GET echoes updated stages | Done |
+| Late metering (Discom / WCC / MCO) → **409** | Done |
+| GET echoes cleared metering; Meter Pending excludes row after refresh | Done |
+
+---
+
+## §BC — Retrieve from Metering must persist (no overlay-only) — Sep 2026
+
+**Problem:** SPA `markAdminMeteringRetrieved` hides the row in one browser; refresh restores Meter Pending when GET still returns `pending_metering`.
+
+**Required write (same transaction):**
+
+| Field | Value |
+|-------|--------|
+| `installation_status` | `installer_approved` |
+| `metering_status` / stage | **null** (not `installer_approved`, not `pending_metering`) |
+| metering timestamps / WCC flag | cleared |
+| `installation_ready_for_installer` | unchanged |
+| `quotations.status` | unchanged (`approved`) |
+
+Honour `force` / `retrieveFromMetering` when `meteringStage` is empty → **200**. **409** only for Discom / WCC / MCO.
+
+Generic `PATCH …/installation-status` with `installer_approved` alone must **not** copy that value onto `metering_status` or clear metering — dedicated retrieve (or `retrieveFromMetering: true`) is required.
 
 ---
 
