@@ -125,6 +125,59 @@ const ensureUnifiedUserProfileColumns = async (): Promise<void> => {
   }
 };
 
+/** Idempotent: §BD Subvendors + ledger (mirrors 20260928120000-create-subvendors-and-ledger.js). */
+const ensureSubvendorTables = async (): Promise<void> => {
+  try {
+    await sequelize.query(`
+      CREATE TABLE IF NOT EXISTS subvendors (
+        id            UUID PRIMARY KEY,
+        kind          VARCHAR(32) NOT NULL CHECK (kind IN ('office_inside', 'office_outside')),
+        dealer_id     VARCHAR(50) NULL REFERENCES dealers(id) ON DELETE SET NULL,
+        name          VARCHAR(255) NOT NULL,
+        contact_name  VARCHAR(255) NOT NULL DEFAULT '',
+        mobile        VARCHAR(32)  NOT NULL DEFAULT '',
+        email         VARCHAR(255) NOT NULL DEFAULT '',
+        city          VARCHAR(128) NOT NULL DEFAULT '',
+        category      VARCHAR(64)  NOT NULL DEFAULT 'Other',
+        notes         TEXT         NOT NULL DEFAULT '',
+        created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      );
+    `);
+    await sequelize.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS subvendors_office_inside_dealer_uidx
+        ON subvendors (dealer_id)
+        WHERE kind = 'office_inside' AND dealer_id IS NOT NULL;
+    `);
+    await sequelize.query('CREATE INDEX IF NOT EXISTS subvendors_kind_idx ON subvendors (kind);');
+    await sequelize.query(`
+      CREATE TABLE IF NOT EXISTS subvendor_ledger (
+        id               UUID PRIMARY KEY,
+        quotation_id     VARCHAR(50) NOT NULL UNIQUE REFERENCES quotations(id) ON DELETE CASCADE,
+        vendor_id        UUID NULL REFERENCES subvendors(id) ON DELETE SET NULL,
+        loan_amount      NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        received_amount  NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        remaining        NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        proposal         NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        cost_of_site     NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        file_charges     NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        pi               NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        gst_charges      NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        others           NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        updated_by       VARCHAR(50) NULL,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await sequelize.query(
+      'CREATE INDEX IF NOT EXISTS subvendor_ledger_vendor_idx ON subvendor_ledger (vendor_id);'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure subvendors / subvendor_ledger tables', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -139,6 +192,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureInstallationTeamsSchema();
     await ensureUserAccessColumns();
     await ensureUnifiedUserProfileColumns();
+    await ensureSubvendorTables();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

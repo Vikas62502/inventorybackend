@@ -89,6 +89,7 @@
 | 77 | High | Admin Banking list GET — installments + loanRemaining for client-side hide | **Done** | §50 / dual-track §B |
 | 78 | High | Admin Banking Filters — Installation Approved (FE-only) | **Done** | §52 / dual-track §B |
 | 79 | High | Admin Banking access key `banking` + field permissions | **Done** | §53 / `BACKEND_USER_ACCESS.ts` / field perms |
+| 80 | High | Subvendors + office-inside ledger (DB, not localStorage) | **Done** | §54 / REQUIRED §BD / `BACKEND_SUBVENDORS.ts` |
 
 **Deploy before QA:**
 
@@ -3359,4 +3360,48 @@ Body unchanged (§41 / dual-track §B): `bankProcessDone`, `bankAssignedPersonNa
 2. Login → `access` includes `"banking"` → Banking tab opens.
 3. Selected one → only those dealers’ loan files.
 4. Read only → list OK, Submit bank process **403**.
+
+---
+
+## 54. Subvendors + office-inside ledger (§BD) — Sep 2026
+
+**Status: implemented** — REQUIRED **§BD** · `BACKEND_SUBVENDORS.ts`
+
+FE `/dashboard/subvendors` no longer relies on localStorage. All routes are **admin JWT** (mounted after `router.use(authorizeAdmin)` → non-admin **403 `AUTH_004`**).
+
+### Migration
+
+`20260928120000-create-subvendors-and-ledger.js` (also ensured idempotently at boot by `ensureSubvendorTables()` in `config/sequelizeBootstrap.ts`).
+
+| Table | Notes |
+|-------|-------|
+| `subvendors` | UUID `id`, `kind` (`office_inside` / `office_outside`), `dealer_id` → `dealers.id` (SET NULL), `name`, `contact_name`, `mobile`, `email`, `city`, `category` (default `Other`), `notes`. Partial unique index: one `office_inside` per dealer |
+| `subvendor_ledger` | `quotation_id` UNIQUE → `quotations.id` (CASCADE), `vendor_id` → `subvendors.id` (SET NULL), `DECIMAL(14,2)` amounts, `updated_by` |
+
+### Endpoints (`/api/admin`)
+
+| Method | Path | Response |
+|--------|------|----------|
+| GET | `/subvendors?kind=` | `{ success, data: { subvendors } }` |
+| POST | `/subvendors` | 201 `{ success, data: { subvendor } }` |
+| PATCH | `/subvendors/:id` | `{ success, data: { subvendor } }` |
+| DELETE | `/subvendors/:id` | ledger rows kept; `vendor_id` → null |
+| GET | `/subvendors/ledger?vendorId=&search=` | `{ success, data: { items } }` |
+| PATCH | `/subvendors/ledger/:quotationId` | partial upsert → `{ success, data: { item } }` |
+
+Errors: `VAL_KIND`, `VAL_DEALER`, `VAL_NAME` (400) · `SUBVENDOR_DUP` (409) · `SUBVENDOR_404` / `QUOTATION_404` (404).
+
+### Code
+
+- `models/Subvendor.ts`, `models/SubvendorLedger.ts`, associations in `models/index-quotation.ts`
+- `utils/subvendorApi.ts` — `publicSubvendor`, `publicLedger`, `roundInr`, partial ledger parser
+- `controllers/subvendorController.ts`, `routes/adminRoutes.ts`
+
+### QA
+
+1. Add office inside (pick dealer) → 201; same dealer again → 409 `SUBVENDOR_DUP`.
+2. Add office outside without name → 400 `VAL_NAME`.
+3. Edit ledger Loan only → other columns unchanged after refresh.
+4. Delete vendor → ledger rows still listed, `vendorId: null`.
+5. Dealer / visitor JWT → 403.
 

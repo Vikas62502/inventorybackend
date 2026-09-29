@@ -17,6 +17,8 @@ import PricingRule from './PricingRule';
 import SystemConfig from './SystemConfig';
 import DealerRequest from './DealerRequest';
 import InstallationTeam from './InstallationTeam';
+import Subvendor from './Subvendor';
+import SubvendorLedger from './SubvendorLedger';
 
 // ================================================================================
 // DEALER ASSOCIATIONS
@@ -86,6 +88,16 @@ Visitor.hasMany(VisitAssignment, { foreignKey: 'visitorId', as: 'assignments' })
 VisitAssignment.belongsTo(Visitor, { foreignKey: 'visitorId', as: 'visitor' });
 
 // ================================================================================
+// SUBVENDOR ASSOCIATIONS
+// ================================================================================
+Dealer.hasOne(Subvendor, { foreignKey: 'dealerId', as: 'subvendor' });
+Subvendor.belongsTo(Dealer, { foreignKey: 'dealerId', as: 'dealer' });
+Subvendor.hasMany(SubvendorLedger, { foreignKey: 'vendorId', as: 'ledgerRows' });
+SubvendorLedger.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
+Quotation.hasOne(SubvendorLedger, { foreignKey: 'quotationId', as: 'subvendorLedger', onDelete: 'CASCADE' });
+SubvendorLedger.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
+
+// ================================================================================
 // SYNC DATABASE
 // ================================================================================
 export const syncDatabase = async (force: boolean = false): Promise<void> => {
@@ -116,6 +128,8 @@ export {
   PricingRule,
   SystemConfig,
   DealerRequest,
-  InstallationTeam
+  InstallationTeam,
+  Subvendor,
+  SubvendorLedger
 };
 

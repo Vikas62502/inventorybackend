@@ -19,6 +19,14 @@ import {
   getAdminProductNeeded
 } from '../controllers/adminController';
 import {
+  listSubvendors,
+  createSubvendor,
+  updateSubvendor,
+  deleteSubvendor,
+  listSubvendorLedger,
+  upsertSubvendorLedger
+} from '../controllers/subvendorController';
+import {
   updateQuotationInstallationRelease,
   updateQuotationInstallationScheduledAt,
   updateQuotationPaymentDetails,
@@ -200,6 +208,14 @@ router.get(
 
 // All routes below require admin authorization
 router.use(authorizeAdmin);
+
+/** §BD — Subvendors + office-inside ledger (see BACKEND_SUBVENDORS.ts). */
+router.get('/subvendors/ledger', listSubvendorLedger);
+router.patch('/subvendors/ledger/:quotationId', upsertSubvendorLedger);
+router.get('/subvendors', listSubvendors);
+router.post('/subvendors', createSubvendor);
+router.patch('/subvendors/:id', updateSubvendor);
+router.delete('/subvendors/:id', deleteSubvendor);
 
 /**
  * Admin Product Needed — installation-pending or file-login (not approved) aggregates.

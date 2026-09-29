@@ -2262,6 +2262,45 @@ Clear applied / amount / remarks / at / by; restore `discountAmount`, `remaining
 
 ---
 
+## §BD — Subvendors + office-inside ledger (DB, not localStorage) — Sep 2026
+
+**Status: implemented** — HANDOFF **§54** · `BACKEND_SUBVENDORS.ts`
+
+New tables `subvendors` + `subvendor_ledger` and admin-only APIs so the Subvendor page persists server-side.
+
+### Endpoints (admin JWT)
+
+- `GET /api/admin/subvendors` (optional `?kind=office_inside|office_outside`) → `{ success, data: { subvendors: [...] } }`
+- `POST /api/admin/subvendors` → 201
+- `PATCH /api/admin/subvendors/:id` · `DELETE /api/admin/subvendors/:id` (ledger rows kept, `vendor_id` → null)
+- `GET /api/admin/subvendors/ledger?vendorId=&search=` → `{ success, data: { items: [...] } }`
+  - `vendorId` = linked dealer id (matches `subvendors.dealer_id` or the quotation's dealer); a subvendor UUID is also accepted
+  - `search` = customer name / mobile, vendor name, quotation id (ILIKE)
+- `PATCH /api/admin/subvendors/ledger/:quotationId` — **partial upsert**: only keys present are written; missing keys never reset columns. Amounts rounded to whole INR. `vendor_id` = `office_inside` subvendor whose `dealer_id = quotation.dealerId` (or explicit valid `vendorId`)
+
+### Validation
+
+| Kind | Rule |
+|------|------|
+| `office_inside` | `dealerId` required + must exist (`VAL_DEALER`); blank name / mobile / email / city filled from dealer; one per dealer → 409 `SUBVENDOR_DUP` |
+| `office_outside` | `name` required (`VAL_NAME`); `dealerId` forced null |
+
+Input accepts camelCase or snake_case (`dealer_id`, `contact_name`, `loan_amount`, `received_amount`, `cost_of_site`, `file_charges`, `gst_charges`). Responses echo both.
+
+Errors: `AUTH_004` (403 non-admin) · `VAL_KIND` · `VAL_DEALER` · `VAL_NAME` · `SUBVENDOR_DUP` · `SUBVENDOR_404` · `QUOTATION_404`.
+
+### Done when
+
+- [x] Vendors + ledger survive refresh / other browsers
+- [x] Ledger PATCH with one field leaves others unchanged
+- [x] Duplicate office inside → 409
+- [x] Delete vendor keeps ledger rows
+- [x] Non-admin → 403
+
+**Code:** `models/Subvendor.ts`, `models/SubvendorLedger.ts`, `utils/subvendorApi.ts`, `controllers/subvendorController.ts`, `routes/adminRoutes.ts`, `database/migrations/20260928120000-create-subvendors-and-ledger.js`, `config/sequelizeBootstrap.ts`
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
