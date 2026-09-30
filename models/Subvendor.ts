@@ -14,6 +14,7 @@ interface SubvendorAttributes {
   city: string;
   category: string;
   notes: string;
+  profitRatio: number;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -29,6 +30,7 @@ interface SubvendorCreationAttributes
     | 'city'
     | 'category'
     | 'notes'
+    | 'profitRatio'
     | 'createdAt'
     | 'updatedAt'
   > {}
@@ -46,6 +48,7 @@ class Subvendor
   public city!: string;
   public category!: string;
   public notes!: string;
+  public profitRatio!: number;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -66,7 +69,13 @@ Subvendor.init(
     email: { type: DataTypes.STRING(255), allowNull: false, defaultValue: '' },
     city: { type: DataTypes.STRING(128), allowNull: false, defaultValue: '' },
     category: { type: DataTypes.STRING(64), allowNull: false, defaultValue: 'Other' },
-    notes: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' }
+    notes: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
+    profitRatio: {
+      type: DataTypes.DECIMAL(6, 2),
+      allowNull: false,
+      defaultValue: 0,
+      field: 'profit_ratio'
+    }
   },
   {
     sequelize,

@@ -373,6 +373,7 @@ const QUOTATION_PRODUCT_COLUMN_KEYS = [
   'hybridInverter',
   'batteryCapacity',
   'batteryPrice',
+  'includeLithiumBattery',
   'centralSubsidy',
   'stateSubsidy',
   'panelType',
@@ -416,6 +417,7 @@ const PRODUCT_SNAKE_TO_CAMEL: Record<string, (typeof QUOTATION_PRODUCT_COLUMN_KE
   hybrid_inverter: 'hybridInverter',
   battery_capacity: 'batteryCapacity',
   battery_price: 'batteryPrice',
+  include_lithium_battery: 'includeLithiumBattery',
   central_subsidy: 'centralSubsidy',
   state_subsidy: 'stateSubsidy',
   panel_type: 'panelType',
@@ -440,6 +442,9 @@ export const pickQuotationProductPersistPayload = (
     if (Object.prototype.hasOwnProperty.call(products, snake) && products[snake] !== undefined) {
       out[camel] = products[snake];
     }
+  }
+  if (out.includeLithiumBattery !== undefined) {
+    out.includeLithiumBattery = parseInaDcrPackageFlag(out.includeLithiumBattery) ?? false;
   }
 
   return out;

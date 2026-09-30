@@ -167,10 +167,20 @@ export const validateTataDcrProductSelection = (
     errors.push(`Invalid DC cable size: ${products.dcCableSize}`);
   }
 
-  if (products.acdb && catalog.acdb?.options?.length && !catalog.acdb.options.includes(String(products.acdb))) {
+  if (
+    products.acdb &&
+    !isAsPerTheSet(products.acdb) &&
+    catalog.acdb?.options?.length &&
+    !catalog.acdb.options.includes(String(products.acdb))
+  ) {
     errors.push(`Invalid ACDB option: ${products.acdb}`);
   }
-  if (products.dcdb && catalog.dcdb?.options?.length && !catalog.dcdb.options.includes(String(products.dcdb))) {
+  if (
+    products.dcdb &&
+    !isAsPerTheSet(products.dcdb) &&
+    catalog.dcdb?.options?.length &&
+    !catalog.dcdb.options.includes(String(products.dcdb))
+  ) {
     errors.push(`Invalid DCDB option: ${products.dcdb}`);
   }
 

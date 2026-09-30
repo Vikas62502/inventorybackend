@@ -28,6 +28,20 @@ export const roundInr = (value: unknown): number => {
 
 const str = (value: unknown): string => (value == null ? '' : String(value).trim());
 
+/** Profit ratio is a percent 0–100 with two decimals. Missing / invalid → 0. */
+export const roundProfitRatio = (value: unknown): number => {
+  if (value === undefined || value === null || value === '') return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(Math.min(100, Math.max(0, n)) * 100) / 100;
+};
+
+/** `undefined` when the body omits the key, so PATCH keeps the stored value. */
+export const parseSubvendorProfitRatio = (body: Record<string, unknown>): number | undefined => {
+  const raw = body.profitRatio !== undefined ? body.profitRatio : body.profit_ratio;
+  return raw === undefined ? undefined : roundProfitRatio(raw);
+};
+
 export const normalizeSubvendorKind = (raw: unknown): SubvendorKindValue | null => {
   const key = str(raw).toLowerCase().replace(/[\s-]+/g, '_');
   if (key === 'office_inside' || key === 'inside') return 'office_inside';
@@ -40,6 +54,7 @@ type RowLike = Record<string, any>;
 export const publicSubvendor = (row: RowLike) => {
   const dealerId = row.dealerId || row.dealer_id || '';
   const contactName = row.contactName || row.contact_name || '';
+  const profitRatio = roundProfitRatio(row.profitRatio ?? row.profit_ratio);
   return {
     id: row.id,
     kind: row.kind,
@@ -53,6 +68,8 @@ export const publicSubvendor = (row: RowLike) => {
     city: row.city || '',
     category: row.category || 'Other',
     notes: row.notes || '',
+    profitRatio,
+    profit_ratio: profitRatio,
     createdAt: row.createdAt || row.created_at,
     created_at: row.createdAt || row.created_at,
     updatedAt: row.updatedAt || row.updated_at,

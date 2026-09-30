@@ -190,6 +190,7 @@ const mapInstallerProducts = (products: any, customPanels: any[]) => {
     hybridInverter: products.hybridInverter || null,
     batteryCapacity: products.batteryCapacity || null,
     batteryPrice: products.batteryPrice !== undefined && products.batteryPrice !== null ? Number(products.batteryPrice) : null,
+    includeLithiumBattery: Boolean(products.includeLithiumBattery),
     structureType: products.structureType || null,
     structureSize: products.structureSize || null,
     meterBrand: products.meterBrand || null,

@@ -111,7 +111,8 @@ import {
   isCommercialRequestBody,
   readCommercialFlag,
   resolveCommercialFlag,
-  commercialFlagDefinedInBody
+  commercialFlagDefinedInBody,
+  parseInaDcrPackageFlag
 } from '../utils/quotationProductPdfDisplay';
 import {
   FINAL_CONFIRMATION_DOCUMENT_FIELDS,
@@ -1056,7 +1057,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       res.status(400).json({
         success: false,
         error: {
-          code: 'VAL_003',
+          code: 'VAL_PRODUCT',
           message: 'Invalid product selection',
           details: validation.errors.map(error => ({ message: error }))
         }
@@ -1410,9 +1411,15 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       dcdbPrice: products.dcdbPrice,
       earthingWireSize: products.earthingWireSize ?? products.earthing_wire_size ?? null,
       earthingWireBrand: products.earthingWireBrand ?? products.earthing_wire_brand ?? null,
-      hybridInverter: products.hybridInverter,
-      batteryCapacity: products.batteryCapacity,
-      batteryPrice: products.batteryPrice,
+      hybridInverter: products.hybridInverter ?? products.hybrid_inverter,
+      batteryCapacity: products.batteryCapacity ?? products.battery_capacity,
+      batteryPrice: products.batteryPrice ?? products.battery_price,
+      includeLithiumBattery:
+        parseInaDcrPackageFlag(products.includeLithiumBattery ?? products.include_lithium_battery) ??
+        Boolean(
+          String(products.batteryCapacity ?? products.battery_capacity ?? '').trim() ||
+            Number(products.batteryPrice ?? products.battery_price ?? 0) > 0
+        ),
       centralSubsidy: finalPricing.centralSubsidy,
       stateSubsidy: finalPricing.stateSubsidy,
       subtotal: finalPricing.subtotal,        // Set price (complete package price)
@@ -2847,7 +2854,7 @@ export const updateQuotationProducts = async (req: Request, res: Response): Prom
       res.status(400).json({
         success: false,
         error: {
-          code: 'VAL_003',
+          code: 'VAL_PRODUCT',
           message: 'Invalid product selection',
           details: validation.errors.map(error => ({ message: error }))
         }

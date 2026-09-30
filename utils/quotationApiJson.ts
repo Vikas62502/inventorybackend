@@ -190,6 +190,23 @@ function toPlainProductRow(value: unknown): Record<string, unknown> | null {
 }
 
 /** Full products blob for list/detail (admin kW, payment UI, PDF). */
+function lithiumBatteryApiFields(plainProducts: Record<string, any>) {
+  const includeLithiumBattery = Boolean(
+    plainProducts.includeLithiumBattery ?? plainProducts.include_lithium_battery ?? false
+  );
+  const hybridInverter = plainProducts.hybridInverter ?? plainProducts.hybrid_inverter ?? null;
+  const batteryCapacity = plainProducts.batteryCapacity ?? plainProducts.battery_capacity ?? null;
+  const rawPrice = plainProducts.batteryPrice ?? plainProducts.battery_price;
+  const batteryPrice = rawPrice !== undefined && rawPrice !== null ? Number(rawPrice) : null;
+  return {
+    includeLithiumBattery,
+    include_lithium_battery: includeLithiumBattery,
+    hybrid_inverter: hybridInverter,
+    battery_capacity: batteryCapacity,
+    battery_price: batteryPrice
+  };
+}
+
 export function quotationProductsApiFields(
   products: Record<string, unknown> | null | undefined,
   customPanels?: unknown[] | null
@@ -265,6 +282,7 @@ export function quotationProductsApiFields(
         : plainProducts.battery_price !== undefined && plainProducts.battery_price !== null
           ? Number(plainProducts.battery_price)
           : null,
+    ...lithiumBatteryApiFields(plainProducts),
     centralSubsidy: Number((plainProducts.centralSubsidy ?? plainProducts.central_subsidy) || 0),
     stateSubsidy: Number((plainProducts.stateSubsidy ?? plainProducts.state_subsidy) || 0),
     ...(panels.length > 0 ? { customPanels: panels } : {}),

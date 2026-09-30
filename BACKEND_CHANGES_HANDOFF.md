@@ -90,6 +90,9 @@
 | 78 | High | Admin Banking Filters — Installation Approved (FE-only) | **Done** | §52 / dual-track §B |
 | 79 | High | Admin Banking access key `banking` + field permissions | **Done** | §53 / `BACKEND_USER_ACCESS.ts` / field perms |
 | 80 | High | Subvendors + office-inside ledger (DB, not localStorage) | **Done** | §54 / REQUIRED §BD / `BACKEND_SUBVENDORS.ts` |
+| 81 | Medium | Subvendor profit ratio on create/edit | **Done** | §55 / REQUIRED §BE / `BACKEND_SUBVENDORS.ts` |
+| 82 | High | Accept ACDB/DCDB `As per the set` (Tata save 400) + `VAL_PRODUCT` | **Done** | §56 / REQUIRED §BF / `BACKEND_QUOTATION_ACDB_LITHIUM.ts` |
+| 83 | Medium | Persist include lithium battery on quotation products | **Done** | §56 / REQUIRED §BG / `BACKEND_QUOTATION_ACDB_LITHIUM.ts` |
 
 **Deploy before QA:**
 
@@ -3404,4 +3407,35 @@ Errors: `VAL_KIND`, `VAL_DEALER`, `VAL_NAME` (400) · `SUBVENDOR_DUP` (409) · `
 3. Edit ledger Loan only → other columns unchanged after refresh.
 4. Delete vendor → ledger rows still listed, `vendorId: null`.
 5. Dealer / visitor JWT → 403.
+
+---
+
+## 55. Subvendor profit ratio (§BE) — Sep 2026
+
+**Status: implemented** — REQUIRED **§BE** · `BACKEND_SUBVENDORS.ts`
+
+| Item | Detail |
+|------|--------|
+| Column | `subvendors.profit_ratio NUMERIC(6,2) NOT NULL DEFAULT 0` — migration `20260929120000-add-profit-ratio-to-subvendors.js` + boot ensure |
+| Input | `profitRatio` / `profit_ratio` on `POST` / `PATCH /admin/subvendors[/:id]`; `roundProfitRatio` → 0–100, 2 dp, empty / invalid → 0 |
+| PATCH | Key omitted → stored value kept |
+| Output | `publicSubvendor` always echoes `profitRatio` + `profit_ratio` (0 when unset) |
+
+QA: POST 12.345 → 12.35; PATCH `{ notes }` → still 12.35; PATCH `{ profitRatio: "" }` → 0.
+
+---
+
+## 56. Quotation ACDB/DCDB `As per the set` (§BF) + lithium battery (§BG) — Sep 2026
+
+**Status: implemented** — REQUIRED **§BF** / **§BG** · `BACKEND_QUOTATION_ACDB_LITHIUM.ts`
+
+| Item | Detail |
+|------|--------|
+| §BF cause | Tata DCR validator rejected `acdb` / `dcdb` = `As per the set`; now uses `isAsPerTheSet` like the generic path |
+| §BF error code | Catalog failures → `VAL_PRODUCT` (was `VAL_003`) on POST `/quotations` + PATCH `…/products` |
+| §BG column | `quotation_products."includeLithiumBattery"` BOOLEAN default false; migration `20260930120000-…` + boot ensure (one-time backfill) |
+| §BG input | `includeLithiumBattery` / `include_lithium_battery` (+ snake battery aliases); POST infers from battery fields when omitted; PATCH only when sent |
+| §BG output | `products.includeLithiumBattery` + `include_lithium_battery`, battery fields camel + snake |
+
+QA: Tata package with ACDB/DCDB `As per the set` → save 200; tick lithium battery (100kWh / Vsole / 2006000) → refresh keeps values.
 

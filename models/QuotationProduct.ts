@@ -55,6 +55,7 @@ interface QuotationProductAttributes {
   hybridInverter?: string | null;
   batteryCapacity?: string | null;
   batteryPrice?: number | null;
+  includeLithiumBattery?: boolean;
 
   // Subsidies
   centralSubsidy: number;
@@ -78,7 +79,7 @@ interface QuotationProductAttributes {
   finalAmount?: number | null;     // Final amount (Subtotal - Subsidy, discount NOT applied)
 }
 
-interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'earthingWireSize' | 'earthingWireBrand' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'pdfCommercialSet' | 'pdfPanelRangeKey' | 'pdfDcrPanelRangeKey' | 'pdfNonDcrPanelRangeKey' | 'panelType' | 'inaDcrPackage' | 'finalAmount'> { }
+interface QuotationProductCreationAttributes extends Optional<QuotationProductAttributes, 'id' | 'phase' | 'panelBrand' | 'panelSize' | 'panelQuantity' | 'panelPrice' | 'dcrPanelBrand' | 'dcrPanelSize' | 'dcrPanelQuantity' | 'nonDcrPanelBrand' | 'nonDcrPanelSize' | 'nonDcrPanelQuantity' | 'inverterType' | 'inverterBrand' | 'inverterSize' | 'inverterPrice' | 'structureType' | 'structureSize' | 'structurePrice' | 'meterBrand' | 'meterPrice' | 'acCableBrand' | 'acCableSize' | 'acCablePrice' | 'dcCableBrand' | 'dcCableSize' | 'dcCablePrice' | 'acdb' | 'acdbPrice' | 'dcdb' | 'dcdbPrice' | 'earthingWireSize' | 'earthingWireBrand' | 'hybridInverter' | 'batteryCapacity' | 'batteryPrice' | 'includeLithiumBattery' | 'centralSubsidy' | 'stateSubsidy' | 'pdfUsePanelSizeRange' | 'pdfUseInverterBrandOptions' | 'pdfCommercialSet' | 'pdfPanelRangeKey' | 'pdfDcrPanelRangeKey' | 'pdfNonDcrPanelRangeKey' | 'panelType' | 'inaDcrPackage' | 'finalAmount'> { }
 
 class QuotationProduct extends Model<QuotationProductAttributes, QuotationProductCreationAttributes> implements QuotationProductAttributes {
   public id!: string;
@@ -119,6 +120,7 @@ class QuotationProduct extends Model<QuotationProductAttributes, QuotationProduc
   public hybridInverter!: string | null;
   public batteryCapacity!: string | null;
   public batteryPrice!: number | null;
+  public includeLithiumBattery!: boolean;
   public centralSubsidy!: number;
   public stateSubsidy!: number;
   public pdfUsePanelSizeRange!: boolean;
@@ -288,6 +290,11 @@ QuotationProduct.init(
     batteryPrice: {
       type: DataTypes.DECIMAL(12, 2),
       allowNull: true
+    },
+    includeLithiumBattery: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     },
     centralSubsidy: {
       type: DataTypes.DECIMAL(12, 2),

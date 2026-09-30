@@ -2301,6 +2301,81 @@ Errors: `AUTH_004` (403 non-admin) · `VAL_KIND` · `VAL_DEALER` · `VAL_NAME` �
 
 ---
 
+## §BE — Subvendor profit ratio on create/edit — Sep 2026
+
+**Status: implemented** — HANDOFF **§55** · `BACKEND_SUBVENDORS.ts` (`roundProfitRatio`, `publicSubvendor`)
+
+No new route; same `/api/admin/subvendors` APIs as §BD (admin JWT).
+
+### Migration
+
+```sql
+ALTER TABLE subvendors
+  ADD COLUMN IF NOT EXISTS profit_ratio NUMERIC(6, 2) NOT NULL DEFAULT 0;
+```
+
+`20260929120000-add-profit-ratio-to-subvendors.js` (also applied at boot by `ensureSubvendorTables()`).
+
+### Contract
+
+- Percent 0–100 (clamped), two decimals. Empty / invalid → 0.
+- `POST /admin/subvendors` — saves `profitRatio` / `profit_ratio`.
+- `PATCH /admin/subvendors/:id` — updates only when the key is sent; omitted never resets to 0.
+- GET list / POST / PATCH responses always echo `{ "profitRatio": 10, "profit_ratio": 10 }`.
+
+### Done when
+
+- [x] Create with 12.5 → refresh / other device shows 12.5
+- [x] Edit other fields → profit ratio unchanged
+- [x] Legacy rows → `profitRatio: 0` (never omitted)
+
+**Code:** `models/Subvendor.ts`, `utils/subvendorApi.ts`, `controllers/subvendorController.ts`, `config/sequelizeBootstrap.ts`
+
+---
+
+## §BF — Accept ACDB/DCDB `As per the set` (catalog validation) — Sep 2026
+
+**Status: implemented** — HANDOFF **§56** · `BACKEND_QUOTATION_ACDB_LITHIUM.ts`
+
+**Live 400 on save / revise** (Tata package, final amount already filled): `Invalid ACDB option: As per the set`.
+
+- Root cause: the Tata DCR package validator (`utils/quotationTataDcrValidation.ts`) checked `acdb` / `dcdb` strictly against the catalog. The generic `validateProductSelection` already allowed the placeholder.
+- `As per the set` / `As per Set` now valid for `acdb` and `dcdb` on every path (same as inverter / panel). Persisted and echoed as sent.
+- Catalog failures return **`VAL_PRODUCT`** (`Invalid product selection` + `details`) instead of `VAL_003`, so the SPA no longer shows "Final amount is required" for them. POST `/api/quotations` and PATCH `/api/quotations/:id/products`.
+
+### Done when
+
+- [x] Tata package with ACDB/DCDB `As per the set` → save / revise 200; GET echoes it
+- [x] Unknown ACDB → 400 `VAL_PRODUCT`
+
+---
+
+## §BG — Persist include lithium battery on quotation products — Sep 2026
+
+**Status: implemented** — HANDOFF **§56** · `BACKEND_QUOTATION_ACDB_LITHIUM.ts`
+
+On `POST /api/quotations` and `PATCH /api/quotations/:id/products`, save and echo:
+
+```json
+{
+  "includeLithiumBattery": true,
+  "batteryCapacity": "100kWh",
+  "hybridInverter": "Vsole",
+  "batteryPrice": 2006000
+}
+```
+
+- New column `quotation_products."includeLithiumBattery" BOOLEAN NOT NULL DEFAULT FALSE` — migration `20260930120000-add-include-lithium-battery-to-quotation-products.js` + boot ensure; one-time backfill TRUE where battery capacity / price already set.
+- Snake aliases accepted (`include_lithium_battery`, `battery_capacity`, `hybrid_inverter`, `battery_price`); GET echoes camel + snake.
+- POST without the flag infers it from battery fields; PATCH writes it only when the key is sent.
+
+### Done when
+
+- [x] Tick + values → refresh keeps them
+- [x] PATCH without the flag keeps it; untick persists `false`
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

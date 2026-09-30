@@ -39,6 +39,27 @@ const ensureSystemKwColumn = async (): Promise<void> => {
   }
 };
 
+/** §BG — backfill only when the column is first added, so later unticks are not re-set on restart. */
+const ensureIncludeLithiumBatteryColumn = async (): Promise<void> => {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'quotation_products' AND column_name = 'includeLithiumBattery'`
+    );
+    if ((rows as unknown[]).length > 0) return;
+    await sequelize.query(
+      'ALTER TABLE quotation_products ADD COLUMN IF NOT EXISTS "includeLithiumBattery" BOOLEAN NOT NULL DEFAULT FALSE;'
+    );
+    await sequelize.query(
+      `UPDATE quotation_products SET "includeLithiumBattery" = TRUE
+       WHERE COALESCE(TRIM("batteryCapacity"), '') <> '' OR COALESCE("batteryPrice", 0) > 0;`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure quotation_products.includeLithiumBattery column', { message });
+  }
+};
+
 const ensureProductUnitColumn = async (): Promise<void> => {
   try {
     await sequelize.query(
@@ -172,6 +193,9 @@ const ensureSubvendorTables = async (): Promise<void> => {
     await sequelize.query(
       'CREATE INDEX IF NOT EXISTS subvendor_ledger_vendor_idx ON subvendor_ledger (vendor_id);'
     );
+    await sequelize.query(
+      'ALTER TABLE subvendors ADD COLUMN IF NOT EXISTS profit_ratio NUMERIC(6, 2) NOT NULL DEFAULT 0;'
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn('Could not ensure subvendors / subvendor_ledger tables', { message });
@@ -193,6 +217,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureUserAccessColumns();
     await ensureUnifiedUserProfileColumns();
     await ensureSubvendorTables();
+    await ensureIncludeLithiumBatteryColumn();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
