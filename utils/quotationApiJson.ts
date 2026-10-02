@@ -262,7 +262,13 @@ export function quotationProductsApiFields(
     inverterBrand: plainProducts.inverterBrand ?? plainProducts.inverter_brand,
     inverterSize: plainProducts.inverterSize ?? plainProducts.inverter_size,
     structureType: plainProducts.structureType ?? plainProducts.structure_type,
+    structure_type: plainProducts.structureType ?? plainProducts.structure_type,
     structureSize: plainProducts.structureSize ?? plainProducts.structure_size,
+    ...(() => {
+      const raw = plainProducts.structurePrice ?? plainProducts.structure_price;
+      const structurePrice = raw !== undefined && raw !== null ? Number(raw) : null;
+      return { structurePrice, structure_price: structurePrice };
+    })(),
     meterBrand: plainProducts.meterBrand ?? plainProducts.meter_brand,
     acCableBrand: plainProducts.acCableBrand ?? plainProducts.ac_cable_brand,
     acCableSize: plainProducts.acCableSize ?? plainProducts.ac_cable_size,

@@ -120,6 +120,7 @@ import {
   buildFinalConfirmationApiFields
 } from '../utils/finalConfirmationDocuments';
 import { isPanelSizeAllowed, isAllowedPanelBrandForCatalog, normalizeProductCatalog } from '../utils/productCatalogNormalize';
+import { GI_STRUCTURE, isMonoRealStructure, normalizeStructureType } from '../utils/structureType';
 import { isAllowedDisplayCableSize, isAsPerTheSet } from '../utils/productDisplayValues';
 import {
   isTataDcrPackageSet,
@@ -341,6 +342,7 @@ const validateProductSelection = (products: any, catalog: any): { isValid: boole
   // Validate structure selection
   if (
     products.structureType &&
+    !isMonoRealStructure(products.structureType) &&
     catalog.structures?.types?.length > 0 &&
     !catalog.structures.types.includes(products.structureType)
   ) {
@@ -778,7 +780,10 @@ const applySellingPricesForAgent = async (products: any): Promise<any> => {
     updated.inverterPrice = inverterPrice;
   }
 
-  const structurePrice = await resolveSellingPriceByName(products.structureType || products.structureSize);
+  let structurePrice = await resolveSellingPriceByName(products.structureType || products.structureSize);
+  if (structurePrice === null && isMonoRealStructure(products.structureType)) {
+    structurePrice = await resolveSellingPriceByName(GI_STRUCTURE);
+  }
   if (structurePrice !== null) {
     updated.structurePrice = structurePrice;
   }
@@ -1382,7 +1387,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       ...inaPersistFields,
       panelBrand: packageProducts.panelBrand ?? products.panelBrand,
       panelSize: products.panelSize,
-      panelQuantity: products.panelQuantity,
+      panelQuantity: products.panelQuantity, // extra +1 allowed when pdfPanelRangeKey is set (§BI) — never clamp
       panelPrice: products.panelPrice,
       dcrPanelBrand: packageProducts.dcrPanelBrand ?? products.dcrPanelBrand,
       dcrPanelSize: products.dcrPanelSize,
@@ -1394,7 +1399,7 @@ export const createQuotation = async (req: Request, res: Response): Promise<void
       inverterBrand: packageProducts.inverterBrand ?? products.inverterBrand,
       inverterSize: packageProducts.inverterSize ?? products.inverterSize,
       inverterPrice: products.inverterPrice,
-      structureType: products.structureType,
+      structureType: normalizeStructureType(products.structureType ?? products.structure_type),
       structureSize: products.structureSize,
       structurePrice: products.structurePrice,
       meterBrand: products.meterBrand,

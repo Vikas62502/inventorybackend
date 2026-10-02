@@ -2376,6 +2376,66 @@ On `POST /api/quotations` and `PATCH /api/quotations/:id/products`, save and ech
 
 ---
 
+## §BH — Structure type `Mono Real` — Oct 2026
+
+**Status: implemented** — HANDOFF **§57** · `BACKEND_QUOTATION_MONO_REAL.ts` · helper `utils/structureType.ts`
+
+Canonical label **`Mono Real`**. No new route.
+
+- `validateProductSelection` (create + PATCH `…/products`, generic and Tata paths) accepts `Mono Real` even if the saved catalog lists only GI. Alias `Mono Rail` → stored as `Mono Real`. Never 400 `Invalid structure type` for it.
+- Persisted verbatim (never rewritten to `GI Structure`). GET echoes `structureType` / `structure_type` (+ `structurePrice` / `structure_price`).
+- `GET /api/quotations/product-catalog` always includes `Mono Real` in `structures.types` (`DEFAULT_STRUCTURE_TYPES`, merged on every read).
+- Pricing `structures[]` — same INR as GI: Mono Real 1kW 8000 · 3kW 24000 · 5kW 40000 · 10kW 80000 (seed). On GET, any GI size missing a Mono Real row gets one at the GI price. Agent price lookup falls back to the GI product. No 400.
+- Catalog failures → `VAL_PRODUCT`, not `VAL_003` (§BF).
+
+```json
+{
+  "structureType": "Mono Real",
+  "structure_type": "Mono Real",
+  "structureSize": "5kW",
+  "structurePrice": 40000
+}
+```
+
+### Done when
+
+- [x] Catalog lists Mono Real
+- [x] Save / revise with Mono Real → 200; refresh still Mono Real
+- [x] Mono Real 5kW priced 40000
+
+---
+
+## §BI — PDF range checkbox allows +1 extra panel — Oct 2026
+
+**Status: verified (already compliant)** — HANDOFF **§58** · `BACKEND_QUOTATION_EXTRA_PANEL.ts`
+
+Dealer Panel Quantity is capped to the package (nominal kW + 400W). Example: Adani **620W** on a **5kW / 5.4kW** package → **8** panels (4,960W). Checking a PDF range allows **9**.
+
+No new field or route — the PDF range key is the flag.
+
+- `panelQuantity` saved as sent; 9 stays 9 (never rewritten to 8 / 0 because a range is on).
+- No server-side DC-watt cap exists. If added: with `pdfPanelRangeKey` (or DCR / Non-DCR twin) set, `maxW = systemKw × 1000 + 400 + panelW`.
+- GET echoes `panelQuantity: 9` + range key; quantity never recomputed on GET.
+- Extra panel does not change package price / subsidy.
+- Failures → `VAL_PRODUCT`, not `VAL_003`.
+
+```json
+{
+  "panelBrand": "Adani",
+  "panelSize": "620W",
+  "panelQuantity": 9,
+  "pdfPanelRangeKey": "adani_610_625_bifacial_topcon",
+  "pdfUsePanelSizeRange": true
+}
+```
+
+### Done when
+
+- [x] Range checked + 9 → save 200 → refresh 9
+- [x] Price / subsidy unchanged
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

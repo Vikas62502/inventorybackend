@@ -111,7 +111,12 @@ export const DEFAULT_CABLE_SIZES = [
 
 export const DEFAULT_CABLE_BRANDS = ['Polycab', 'Havells', 'Finolex'] as const;
 
-export const DEFAULT_STRUCTURE_TYPES = ['GI Structure', 'Aluminum Structure', 'MS Structure'] as const;
+export const DEFAULT_STRUCTURE_TYPES = [
+  'GI Structure',
+  'Aluminum Structure',
+  'MS Structure',
+  'Mono Real'
+] as const;
 
 export const DEFAULT_ACDB_OPTIONS = [
   'Havells+Elmex (1-Phase)',

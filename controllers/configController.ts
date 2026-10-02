@@ -13,6 +13,7 @@ import {
   ensureNonDcrWaaree125KwSystemConfigs
 } from '../utils/defaultPricingTables';
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
+import { withMonoRealPricingRows } from '../utils/structureType';
 import {
   loadPricingTablesSeed,
   mergePricingTablesPayload,
@@ -294,7 +295,7 @@ const normalizePricingTables = (pricing: any): any => {
   return {
     panels: pickComponents('panels', pricing?.panels),
     inverters: pickComponents('inverters', pricing?.inverters),
-    structures: pickComponents('structures', pricing?.structures),
+    structures: withMonoRealPricingRows(pickComponents('structures', pricing?.structures)),
     meters: pickComponents('meters', pricing?.meters),
     cables: pickComponents('cables', pricing?.cables),
     acdb: pickComponents('acdb', pricing?.acdb),

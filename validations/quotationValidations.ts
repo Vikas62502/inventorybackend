@@ -55,6 +55,7 @@ const productsSchemaObject = z.object({
   inverterSize: z.string().nullish(),
   inverterPrice: z.number().nonnegative().nullish(),
   structureType: z.string().nullish(),
+  structure_type: z.string().nullish(),
   structureSize: z.string().nullish(),
   structurePrice: z.number().nonnegative().nullish(),
   meterBrand: z.string().nullish(),

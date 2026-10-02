@@ -3,6 +3,8 @@
  * Do not use for catalog validation or pricing calculations.
  */
 
+import { normalizeStructureType } from './structureType';
+
 export const PDF_PANEL_RANGE_KEYS = [
   'waaree_540_560_bifacial',
   'waaree_580_700_bifacial_topcon',
@@ -442,6 +444,9 @@ export const pickQuotationProductPersistPayload = (
     if (Object.prototype.hasOwnProperty.call(products, snake) && products[snake] !== undefined) {
       out[camel] = products[snake];
     }
+  }
+  if (out.structureType !== undefined) {
+    out.structureType = normalizeStructureType(out.structureType);
   }
   if (out.includeLithiumBattery !== undefined) {
     out.includeLithiumBattery = parseInaDcrPackageFlag(out.includeLithiumBattery) ?? false;

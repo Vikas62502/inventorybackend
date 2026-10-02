@@ -8,6 +8,7 @@ import {
   isAllowedMeterBrandForCatalog
 } from './quotationProductPdfDisplay';
 import { isAsPerTheSet, isAllowedDisplayCableSize } from './productDisplayValues';
+import { isMonoRealStructure } from './structureType';
 
 export const TATA_DCR_ALLOWED_STRUCTURE_SIZES = [
   '3.1kW',
@@ -137,7 +138,11 @@ export const validateTataDcrProductSelection = (
     }
   }
 
-  if (products.structureType && catalog.structures?.types?.length) {
+  if (
+    products.structureType &&
+    !isMonoRealStructure(products.structureType) &&
+    catalog.structures?.types?.length
+  ) {
     if (!catalog.structures.types.includes(String(products.structureType))) {
       errors.push(`Invalid structure type: ${products.structureType}`);
     }

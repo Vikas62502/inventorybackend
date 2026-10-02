@@ -93,6 +93,8 @@
 | 81 | Medium | Subvendor profit ratio on create/edit | **Done** | §55 / REQUIRED §BE / `BACKEND_SUBVENDORS.ts` |
 | 82 | High | Accept ACDB/DCDB `As per the set` (Tata save 400) + `VAL_PRODUCT` | **Done** | §56 / REQUIRED §BF / `BACKEND_QUOTATION_ACDB_LITHIUM.ts` |
 | 83 | Medium | Persist include lithium battery on quotation products | **Done** | §56 / REQUIRED §BG / `BACKEND_QUOTATION_ACDB_LITHIUM.ts` |
+| 84 | Medium | Structure type `Mono Real` (catalog, validation, GI pricing) | **Done** | §57 / REQUIRED §BH / `BACKEND_QUOTATION_MONO_REAL.ts` |
+| 85 | High | PDF range extra panel (8 → 9) — persist qty, no clamp | **Done** (verified) | §58 / REQUIRED §BI / `BACKEND_QUOTATION_EXTRA_PANEL.ts` |
 
 **Deploy before QA:**
 
@@ -3438,4 +3440,34 @@ QA: POST 12.345 → 12.35; PATCH `{ notes }` → still 12.35; PATCH `{ profitRat
 | §BG output | `products.includeLithiumBattery` + `include_lithium_battery`, battery fields camel + snake |
 
 QA: Tata package with ACDB/DCDB `As per the set` → save 200; tick lithium battery (100kWh / Vsole / 2006000) → refresh keeps values.
+
+---
+
+## 57. Structure type `Mono Real` (§BH) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BH** · `BACKEND_QUOTATION_MONO_REAL.ts` (FE notes may call this "Handoff §54"; §54 here is Subvendors)
+
+| Item | Detail |
+|------|--------|
+| Catalog | `DEFAULT_STRUCTURE_TYPES` + `Mono Real` → always in `structures.types` |
+| Validation | Generic + Tata validators skip the catalog check for Mono Real / Mono Rail; other failures `VAL_PRODUCT` |
+| Persist | `normalizeStructureType` on create + `pickQuotationProductPersistPayload` (Mono Rail → Mono Real); otherwise verbatim |
+| GET | `structureType` + `structure_type`, `structurePrice` + `structure_price` |
+| Pricing | Seed Mono Real rows (= GI); `withMonoRealPricingRows` fills missing sizes from GI on GET pricing tables; agent lookup falls back to GI product |
+
+Code: `utils/structureType.ts`, `utils/defaultProductCatalog.ts`, `controllers/quotationController.ts`, `controllers/configController.ts`, `utils/quotationTataDcrValidation.ts`, `utils/quotationProductPdfDisplay.ts`, `utils/quotationApiJson.ts`, `validations/quotationValidations.ts`, `BACKEND_PRICING_TABLES_SEED.json`.
+
+---
+
+## 58. PDF range checkbox — extra panel 8 → 9 (§BI) — Oct 2026
+
+**Status: verified — no logic change needed** — REQUIRED **§BI** · `BACKEND_QUOTATION_EXTRA_PANEL.ts` (FE notes may call this "Handoff §55"; §55 here is Subvendor profit ratio)
+
+| Layer | Behaviour with `panelQuantity: 9` + `pdfPanelRangeKey` |
+|-------|--------------------------------------------------------|
+| Zod (create + PATCH) | Passes; panel-qty refinement skipped when a range key is set |
+| `validateProductSelection` | Panel-size catalog check skipped; no DC-watt cap |
+| Persist | Saved as sent (create + `pickQuotationProductPersistPayload`) |
+| GET | Echoes 9 + range key; not recomputed. `system_kw` (display) = 5.58 |
+| Price / subsidy | From request + set-price by system size — unaffected |
 
