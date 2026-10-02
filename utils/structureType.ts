@@ -1,8 +1,8 @@
 /**
- * §BH — structure type "Mono Real" (alias "Mono Rail"). Priced the same as GI Structure.
+ * §BH — structure type "Mono rail" (alias "Mono Rail"). Priced the same as GI Structure.
  */
 
-export const MONO_REAL_STRUCTURE = 'Mono Real';
+export const MONO_REAL_STRUCTURE = 'Mono rail';
 export const GI_STRUCTURE = 'GI Structure';
 
 const key = (value: unknown): string =>
@@ -23,8 +23,8 @@ export const normalizeStructureType = <T>(value: T): T | string =>
 type StructurePriceRow = { type?: unknown; size?: unknown; price?: unknown; [k: string]: unknown };
 
 /**
- * Pricing `structures[]`: every GI size without a Mono Real row gets one at the GI price.
- * Existing Mono Real rows (aliases normalized) are kept as saved.
+ * Pricing `structures[]`: every GI size without a Mono rail row gets one at the GI price.
+ * Existing Mono rail rows (aliases normalized) are kept as saved.
  */
 export const withMonoRealPricingRows = (rows: unknown): unknown => {
   if (!Array.isArray(rows)) return rows;

@@ -115,7 +115,7 @@ export const DEFAULT_STRUCTURE_TYPES = [
   'GI Structure',
   'Aluminum Structure',
   'MS Structure',
-  'Mono Real'
+  'Mono rail'
 ] as const;
 
 export const DEFAULT_ACDB_OPTIONS = [

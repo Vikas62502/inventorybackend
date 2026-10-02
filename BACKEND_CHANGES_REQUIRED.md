@@ -2376,22 +2376,22 @@ On `POST /api/quotations` and `PATCH /api/quotations/:id/products`, save and ech
 
 ---
 
-## §BH — Structure type `Mono Real` — Oct 2026
+## §BH — Structure type `Mono rail` — Oct 2026
 
 **Status: implemented** — HANDOFF **§57** · `BACKEND_QUOTATION_MONO_REAL.ts` · helper `utils/structureType.ts`
 
-Canonical label **`Mono Real`**. No new route.
+Canonical label **`Mono rail`**. No new route.
 
-- `validateProductSelection` (create + PATCH `…/products`, generic and Tata paths) accepts `Mono Real` even if the saved catalog lists only GI. Alias `Mono Rail` → stored as `Mono Real`. Never 400 `Invalid structure type` for it.
+- `validateProductSelection` (create + PATCH `…/products`, generic and Tata paths) accepts `Mono rail` even if the saved catalog lists only GI. Alias `Mono Rail` → stored as `Mono rail`. Never 400 `Invalid structure type` for it.
 - Persisted verbatim (never rewritten to `GI Structure`). GET echoes `structureType` / `structure_type` (+ `structurePrice` / `structure_price`).
-- `GET /api/quotations/product-catalog` always includes `Mono Real` in `structures.types` (`DEFAULT_STRUCTURE_TYPES`, merged on every read).
-- Pricing `structures[]` — same INR as GI: Mono Real 1kW 8000 · 3kW 24000 · 5kW 40000 · 10kW 80000 (seed). On GET, any GI size missing a Mono Real row gets one at the GI price. Agent price lookup falls back to the GI product. No 400.
+- `GET /api/quotations/product-catalog` always includes `Mono rail` in `structures.types` (`DEFAULT_STRUCTURE_TYPES`, merged on every read).
+- Pricing `structures[]` — same INR as GI: Mono rail 1kW 8000 · 3kW 24000 · 5kW 40000 · 10kW 80000 (seed). On GET, any GI size missing a Mono rail row gets one at the GI price. Agent price lookup falls back to the GI product. No 400.
 - Catalog failures → `VAL_PRODUCT`, not `VAL_003` (§BF).
 
 ```json
 {
-  "structureType": "Mono Real",
-  "structure_type": "Mono Real",
+  "structureType": "Mono rail",
+  "structure_type": "Mono rail",
   "structureSize": "5kW",
   "structurePrice": 40000
 }
@@ -2399,9 +2399,9 @@ Canonical label **`Mono Real`**. No new route.
 
 ### Done when
 
-- [x] Catalog lists Mono Real
-- [x] Save / revise with Mono Real → 200; refresh still Mono Real
-- [x] Mono Real 5kW priced 40000
+- [x] Catalog lists Mono rail
+- [x] Save / revise with Mono rail → 200; refresh still Mono rail
+- [x] Mono rail 5kW priced 40000
 
 ---
 
