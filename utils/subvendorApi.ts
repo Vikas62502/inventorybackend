@@ -36,10 +36,32 @@ export const roundProfitRatio = (value: unknown): number => {
   return Math.round(Math.min(100, Math.max(0, n)) * 100) / 100;
 };
 
-/** `undefined` when the body omits the key, so PATCH keeps the stored value. */
-export const parseSubvendorProfitRatio = (body: Record<string, unknown>): number | undefined => {
-  const raw = body.profitRatio !== undefined ? body.profitRatio : body.profit_ratio;
-  return raw === undefined ? undefined : roundProfitRatio(raw);
+export const DEFAULT_FILE_COST_PER_KW = 1000;
+
+/** File cost per kW in whole INR; missing / 0 / invalid → 1000. */
+export const roundFileCostPerKw = (value: unknown): number => roundInr(value) || DEFAULT_FILE_COST_PER_KW;
+
+type SubvendorRateFields = {
+  profitRatio: number;
+  fileCostPerKw: number;
+  leaserPaid: number;
+  leaserRemaining: number;
+};
+
+/** Only keys present in the body (camel or snake), so PATCH keeps stored values for the rest. */
+export const parseSubvendorRateFields = (body: Record<string, unknown>): Partial<SubvendorRateFields> => {
+  const out: Partial<SubvendorRateFields> = {};
+  const pick = (camel: string, snake: string): unknown =>
+    body[camel] !== undefined ? body[camel] : body[snake];
+  const profitRatio = pick('profitRatio', 'profit_ratio');
+  if (profitRatio !== undefined) out.profitRatio = roundProfitRatio(profitRatio);
+  const fileCostPerKw = pick('fileCostPerKw', 'file_cost_per_kw');
+  if (fileCostPerKw !== undefined) out.fileCostPerKw = roundFileCostPerKw(fileCostPerKw);
+  const leaserPaid = pick('leaserPaid', 'leaser_paid');
+  if (leaserPaid !== undefined) out.leaserPaid = roundInr(leaserPaid);
+  const leaserRemaining = pick('leaserRemaining', 'leaser_remaining');
+  if (leaserRemaining !== undefined) out.leaserRemaining = roundInr(leaserRemaining);
+  return out;
 };
 
 export const normalizeSubvendorKind = (raw: unknown): SubvendorKindValue | null => {
@@ -55,6 +77,9 @@ export const publicSubvendor = (row: RowLike) => {
   const dealerId = row.dealerId || row.dealer_id || '';
   const contactName = row.contactName || row.contact_name || '';
   const profitRatio = roundProfitRatio(row.profitRatio ?? row.profit_ratio);
+  const fileCostPerKw = roundFileCostPerKw(row.fileCostPerKw ?? row.file_cost_per_kw);
+  const leaserPaid = roundInr(row.leaserPaid ?? row.leaser_paid);
+  const leaserRemaining = roundInr(row.leaserRemaining ?? row.leaser_remaining);
   return {
     id: row.id,
     kind: row.kind,
@@ -70,6 +95,12 @@ export const publicSubvendor = (row: RowLike) => {
     notes: row.notes || '',
     profitRatio,
     profit_ratio: profitRatio,
+    fileCostPerKw,
+    file_cost_per_kw: fileCostPerKw,
+    leaserPaid,
+    leaser_paid: leaserPaid,
+    leaserRemaining,
+    leaser_remaining: leaserRemaining,
     createdAt: row.createdAt || row.created_at,
     created_at: row.createdAt || row.created_at,
     updatedAt: row.updatedAt || row.updated_at,

@@ -2289,6 +2289,8 @@ Input accepts camelCase or snake_case (`dealer_id`, `contact_name`, `loan_amount
 
 Errors: `AUTH_004` (403 non-admin) · `VAL_KIND` · `VAL_DEALER` · `VAL_NAME` · `SUBVENDOR_DUP` · `SUBVENDOR_404` · `QUOTATION_404`.
 
+**Oct 2026 — cost-of-site breakdown (verified, no change):** FE sends office inside `{ proposal, fileCharges, pi, gstCharges, others, costOfSite }` and normal vendor `{ pi, others, costOfSite }`. Ledger PATCH upserts by `quotation_id` even when the dealer has no office-inside subvendor (`vendor_id` null); omitted keys keep their values. GET ledger LEFT JOINs the vendor, so null-vendor rows are returned (with `vendorId=<dealerId>` they match via the quotation's dealer). The derived total is also saved on `quotations.site_cost` via `PATCH /quotations/:id/payment-details { siteCost, site_cost }` (§30) and echoed on list + detail. GST `(proposal − PI) × 8.9%` and Profit `subtotal − cost of site` stay FE-only.
+
 ### Done when
 
 - [x] Vendors + ledger survive refresh / other browsers
@@ -2433,6 +2435,34 @@ No new field or route — the PDF range key is the flag.
 
 - [x] Range checked + 9 → save 200 → refresh 9
 - [x] Price / subsidy unchanged
+
+---
+
+## §BJ — Subvendor file cost per kW + leaser paid / remaining — Oct 2026
+
+**Status: implemented** — HANDOFF **§59** · `BACKEND_SUBVENDORS.ts`
+
+Same routes (`POST` / `PATCH /admin/subvendors[/:id]`, `GET /admin/subvendors`), admin JWT.
+
+```sql
+ALTER TABLE subvendors
+  ADD COLUMN IF NOT EXISTS file_cost_per_kw NUMERIC(14,2) NOT NULL DEFAULT 1000,
+  ADD COLUMN IF NOT EXISTS leaser_paid      NUMERIC(14,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS leaser_remaining NUMERIC(14,2) NOT NULL DEFAULT 0;
+```
+
+Migration `20261005120000-add-file-cost-and-leaser-to-subvendors.js` + boot ensure.
+
+- Accept camelCase + snake_case (`fileCostPerKw` / `file_cost_per_kw`, `leaserPaid` / `leaser_paid`, `leaserRemaining` / `leaser_remaining`).
+- Amounts rounded to whole INR, >= 0. `fileCostPerKw` missing / 0 / invalid → 1000. Leaser fields 0 on POST when omitted.
+- PATCH partial: omitted keys keep stored values (never reset to 0 / 1000).
+- GET / POST / PATCH always echo all four (`profitRatio`, `fileCostPerKw`, `leaserPaid`, `leaserRemaining`) camel + snake.
+- FE-only: kW rounding, file charges `round(kW) × fileCostPerKw` (saved to ledger `fileCharges` on Submit Manage), profit amount `proposal × profit ratio`.
+
+### Done when
+
+- [x] Save → refresh / other login keeps file cost + leaser values
+- [x] PATCH of another field keeps them
 
 ---
 

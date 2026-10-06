@@ -14,7 +14,7 @@ import {
   normalizeSubvendorKind,
   parseLedgerAmountPatch,
   parseSubvendorDealerId,
-  parseSubvendorProfitRatio,
+  parseSubvendorRateFields,
   parseSubvendorProfileFields,
   publicLedger,
   publicSubvendor,
@@ -65,9 +65,7 @@ const resolveSubvendorWrite = async (
   }
 
   const profile = parseSubvendorProfileFields(body);
-  const values: Record<string, unknown> = { kind, ...profile };
-  const profitRatio = parseSubvendorProfitRatio(body);
-  if (profitRatio !== undefined) values.profitRatio = profitRatio;
+  const values: Record<string, unknown> = { kind, ...profile, ...parseSubvendorRateFields(body) };
 
   if (kind === 'office_inside') {
     const dealerIdInput = parseSubvendorDealerId(body);

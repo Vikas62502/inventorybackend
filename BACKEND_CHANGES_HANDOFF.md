@@ -95,6 +95,7 @@
 | 83 | Medium | Persist include lithium battery on quotation products | **Done** | §56 / REQUIRED §BG / `BACKEND_QUOTATION_ACDB_LITHIUM.ts` |
 | 84 | Medium | Structure type `Mono rail` (catalog, validation, GI pricing) | **Done** | §57 / REQUIRED §BH / `BACKEND_QUOTATION_MONO_REAL.ts` |
 | 85 | High | PDF range extra panel (8 → 9) — persist qty, no clamp | **Done** (verified) | §58 / REQUIRED §BI / `BACKEND_QUOTATION_EXTRA_PANEL.ts` |
+| 86 | Medium | Subvendor file cost per kW + leaser paid / remaining | **Done** | §59 / REQUIRED §BJ / `BACKEND_SUBVENDORS.ts` |
 
 **Deploy before QA:**
 
@@ -3470,4 +3471,19 @@ Code: `utils/structureType.ts`, `utils/defaultProductCatalog.ts`, `controllers/q
 | Persist | Saved as sent (create + `pickQuotationProductPersistPayload`) |
 | GET | Echoes 9 + range key; not recomputed. `system_kw` (display) = 5.58 |
 | Price / subsidy | From request + set-price by system size — unaffected |
+
+---
+
+## 59. Subvendor file cost per kW + leaser paid / remaining (§BJ) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BJ** · `BACKEND_SUBVENDORS.ts`
+
+| Item | Detail |
+|------|--------|
+| Columns | `subvendors.file_cost_per_kw` (default 1000), `leaser_paid`, `leaser_remaining` (default 0), `NUMERIC(14,2)` — migration `20261005120000-…` + boot ensure |
+| Input | camel + snake on `POST` / `PATCH /admin/subvendors[/:id]`; whole INR >= 0; `fileCostPerKw` 0 / invalid → 1000 |
+| PATCH | `parseSubvendorRateFields` — only sent keys written |
+| Output | `publicSubvendor` always echoes all three + `profitRatio`, camel + snake |
+
+Code: `models/Subvendor.ts`, `utils/subvendorApi.ts`, `controllers/subvendorController.ts`, `config/sequelizeBootstrap.ts`.
 

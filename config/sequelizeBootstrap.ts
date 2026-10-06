@@ -196,6 +196,12 @@ const ensureSubvendorTables = async (): Promise<void> => {
     await sequelize.query(
       'ALTER TABLE subvendors ADD COLUMN IF NOT EXISTS profit_ratio NUMERIC(6, 2) NOT NULL DEFAULT 0;'
     );
+    await sequelize.query(`
+      ALTER TABLE subvendors
+        ADD COLUMN IF NOT EXISTS file_cost_per_kw NUMERIC(14, 2) NOT NULL DEFAULT 1000,
+        ADD COLUMN IF NOT EXISTS leaser_paid NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS leaser_remaining NUMERIC(14, 2) NOT NULL DEFAULT 0;
+    `);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn('Could not ensure subvendors / subvendor_ledger tables', { message });
