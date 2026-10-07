@@ -739,6 +739,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               lastName: qAny.dealer.lastName,
               email: qAny.dealer.email ?? null,
               mobile: qAny.dealer.mobile ?? null,
+              phone: qAny.dealer.mobile ?? null,
               username: qAny.dealer.username ?? null,
               role: qAny.dealer.role ?? null
             } : null,
@@ -2159,7 +2160,9 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
         installments: phases,
         paymentPhases: phases,
         payment_phases: phases,
-        dealer: quotationAny.dealer || null,
+        dealer: quotationAny.dealer
+          ? { ...quotationAny.dealer.get({ plain: true }), phone: quotationAny.dealer.mobile ?? null }
+          : null,
         customer: quotationAny.customer || null,
         createdAt: quotation.createdAt,
         approvedAt: quotationAny.approvedAt || null,

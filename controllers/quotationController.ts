@@ -1842,6 +1842,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         (q as any).systemKw
       );
 
+      const dealerName = dealer
+        ? `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim() || null
+        : null;
       return {
         id: q.id,
         dealerId: q.dealerId,
@@ -1854,9 +1857,14 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           lastName: dealer.lastName,
           email: dealer.email,
           mobile: dealer.mobile,
+          phone: dealer.mobile,
           username: dealer.username,
           role: dealer.role
         } : null,
+        dealerName,
+        dealer_name: dealerName,
+        dealerMobile: dealer?.mobile ?? null,
+        dealer_mobile: dealer?.mobile ?? null,
         customer: customer ? {
           id: customer.id,
           firstName: customer.firstName,
@@ -2434,6 +2442,7 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
           lastName: dealer.lastName,
           email: dealer.email,
           mobile: dealer.mobile,
+          phone: dealer.mobile,
           username: dealer.username,
           role: dealer.role
         } : null,

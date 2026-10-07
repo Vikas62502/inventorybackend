@@ -96,6 +96,8 @@
 | 84 | Medium | Structure type `Mono rail` (catalog, validation, GI pricing) | **Done** | §57 / REQUIRED §BH / `BACKEND_QUOTATION_MONO_REAL.ts` |
 | 85 | High | PDF range extra panel (8 → 9) — persist qty, no clamp | **Done** (verified) | §58 / REQUIRED §BI / `BACKEND_QUOTATION_EXTRA_PANEL.ts` |
 | 86 | Medium | Subvendor file cost per kW + leaser paid / remaining | **Done** | §59 / REQUIRED §BJ / `BACKEND_SUBVENDORS.ts` |
+| 87 | High | Dealer leaser payments table + GET/PUT routes | **Done** | §60 / REQUIRED §BK / `BACKEND_SUBVENDOR_LEASER.ts` |
+| 88 | Medium | Office Inside Excel — nested dealer (mobile / phone) + install / meter dates | **Done** | §61 / REQUIRED §BL / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
 
 **Deploy before QA:**
 
@@ -3486,4 +3488,36 @@ Code: `utils/structureType.ts`, `utils/defaultProductCatalog.ts`, `controllers/q
 | Output | `publicSubvendor` always echoes all three + `profitRatio`, camel + snake |
 
 Code: `models/Subvendor.ts`, `utils/subvendorApi.ts`, `controllers/subvendorController.ts`, `config/sequelizeBootstrap.ts`.
+
+---
+
+## 60. Dealer leaser payments (§BK) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BK** · `BACKEND_SUBVENDOR_LEASER.ts`
+
+| Item | Detail |
+|------|--------|
+| Table | `subvendor_leaser_payments` (UUID, `vendor_id` FK CASCADE, `date`, `amount`, `type`, `remark`, `customer_ids` JSONB, `sort_order`, `updated_by`) — migration `20261007120000-…` + boot ensure |
+| Routes | `GET /admin/subvendors/leaser` · `GET /admin/subvendors/:id/leaser` · `PUT /admin/subvendors/:id/leaser` (admin JWT) |
+| Balance | `currentBalance` = `leaserPaid` = SUM(amount); PUT persists `leaser_paid`; optional `leaserRemaining` |
+| Vendor id | Subvendor UUID or dealer id (office_inside) |
+
+QA: new vendor → balance 0; PUT 20,000 + 30,000 → 50,000 after refresh; PUT `[]` → 0; bad date → 400 `VAL_LEASER`, old rows kept.
+
+Code: `models/SubvendorLeaserPayment.ts`, `models/index-quotation.ts`, `utils/subvendorApi.ts`, `controllers/subvendorController.ts`, `routes/adminRoutes.ts`, `config/sequelizeBootstrap.ts`.
+
+---
+
+## 61. Office Inside Excel — dealer + install / meter date-or-status (§BL) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BL** · `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts`
+
+| Item | Detail |
+|------|--------|
+| Nested `dealer` | Already on both lists with `mobile`; added `phone` alias (lists + by-id) |
+| Flat dealer | `dealerName` / `dealerMobile` (+ snake) — admin list already; added to `GET /api/quotations` |
+| Dates | `installerApprovedAt`, `mcoAt`, `meteringApprovedAt` already stamped by the workflow and echoed |
+| Kept | `paymentStatus`, `fileLoginStatus`, installments — unchanged |
+
+Code: `controllers/quotationController.ts`, `controllers/adminController.ts`.
 

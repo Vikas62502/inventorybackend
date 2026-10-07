@@ -5,7 +5,8 @@ import {
   Dealer,
   Quotation,
   Subvendor,
-  SubvendorLedger
+  SubvendorLedger,
+  SubvendorLeaserPayment
 } from '../models/index-quotation';
 import { logError } from '../utils/loggerHelper';
 import {
@@ -13,6 +14,9 @@ import {
   isUuid,
   normalizeSubvendorKind,
   parseLedgerAmountPatch,
+  parseLeaserPayments,
+  publicLeaserPayment,
+  roundInr,
   parseSubvendorDealerId,
   parseSubvendorRateFields,
   parseSubvendorProfileFields,
@@ -284,6 +288,152 @@ export const listSubvendorLedger = async (req: Request, res: Response): Promise<
     res.json({ success: true, data: { items: rows.map(ledgerRowForApi) } });
   } catch (error) {
     logError('List subvendor ledger error', error);
+    internalError(res);
+  }
+};
+
+/** `:id` / `?vendorId=` may be the subvendor UUID or a dealer id (→ that dealer's office_inside row). */
+const resolveLeaserVendor = async (idOrDealerId: string): Promise<Subvendor | null> => {
+  const id = String(idOrDealerId || '').trim();
+  if (!id) return null;
+  if (isUuid(id)) {
+    const byId = await Subvendor.findByPk(id);
+    if (byId) return byId;
+  }
+  return Subvendor.findOne({ where: { kind: 'office_inside', dealerId: id } });
+};
+
+const sumLeaserAmounts = (rows: Array<{ amount: unknown }>): number =>
+  rows.reduce((total, row) => total + roundInr(row.amount), 0);
+
+const leaserVendorPayload = (vendor: Subvendor, payments: SubvendorLeaserPayment[]) => {
+  const plainVendor = publicSubvendor(vendor.get({ plain: true }));
+  const currentBalance = sumLeaserAmounts(payments);
+  return {
+    vendorId: vendor.id,
+    vendor_id: vendor.id,
+    dealerId: plainVendor.dealerId || null,
+    dealer_id: plainVendor.dealerId || null,
+    currentBalance,
+    current_balance: currentBalance,
+    leaserPaid: currentBalance,
+    leaser_paid: currentBalance,
+    leaserRemaining: plainVendor.leaserRemaining,
+    leaser_remaining: plainVendor.leaserRemaining,
+    fileCostPerKw: plainVendor.fileCostPerKw,
+    file_cost_per_kw: plainVendor.fileCostPerKw,
+    payments: payments.map((row) => publicLeaserPayment(row.get({ plain: true })))
+  };
+};
+
+const LEASER_ORDER: [string, string][] = [
+  ['sortOrder', 'ASC'],
+  ['createdAt', 'ASC']
+];
+
+/** GET /admin/subvendors/leaser?vendorId= */
+export const listLeaserPayments = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const vendorQuery = String(req.query.vendorId ?? req.query.vendor_id ?? '').trim();
+    let vendors: Subvendor[];
+    if (vendorQuery) {
+      const vendor = await resolveLeaserVendor(vendorQuery);
+      vendors = vendor ? [vendor] : [];
+    } else {
+      vendors = await Subvendor.findAll({ order: [['name', 'ASC']] });
+    }
+    const vendorIds = vendors.map((v) => v.id);
+    const payments = vendorIds.length
+      ? await SubvendorLeaserPayment.findAll({
+          where: { vendorId: { [Op.in]: vendorIds } },
+          order: [['vendorId', 'ASC'], ...LEASER_ORDER] as any
+        })
+      : [];
+    const byVendor = new Map<string, SubvendorLeaserPayment[]>();
+    for (const row of payments) {
+      const list = byVendor.get(row.vendorId) || [];
+      list.push(row);
+      byVendor.set(row.vendorId, list);
+    }
+    const balances = vendors.map((vendor) => {
+      const { payments: _omit, ...summary } = leaserVendorPayload(vendor, byVendor.get(vendor.id) || []);
+      return summary;
+    });
+    res.json({
+      success: true,
+      data: {
+        payments: payments.map((row) => publicLeaserPayment(row.get({ plain: true }))),
+        balances
+      }
+    });
+  } catch (error) {
+    logError('List leaser payments error', error);
+    internalError(res);
+  }
+};
+
+/** GET /admin/subvendors/:id/leaser */
+export const getVendorLeaser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const vendor = await resolveLeaserVendor(req.params.id);
+    if (!vendor) {
+      fail(res, 404, SUBVENDOR_ERROR_CODES.SUBVENDOR_404, 'Subvendor not found');
+      return;
+    }
+    const payments = await SubvendorLeaserPayment.findAll({
+      where: { vendorId: vendor.id },
+      order: LEASER_ORDER as any
+    });
+    res.json({ success: true, data: leaserVendorPayload(vendor, payments) });
+  } catch (error) {
+    logError('Get vendor leaser error', error, { id: req.params.id });
+    internalError(res);
+  }
+};
+
+/** PUT /admin/subvendors/:id/leaser — replace all payments; leaser_paid = SUM(amount). */
+export const replaceVendorLeaser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const vendor = await resolveLeaserVendor(req.params.id);
+    if (!vendor) {
+      fail(res, 404, SUBVENDOR_ERROR_CODES.SUBVENDOR_404, 'Subvendor not found');
+      return;
+    }
+    const parsed = parseLeaserPayments(req.body);
+    if (!parsed.ok) {
+      fail(res, 400, SUBVENDOR_ERROR_CODES.VAL_LEASER, parsed.message);
+      return;
+    }
+    const body = (req.body && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>;
+    const remainingRaw = body.leaserRemaining !== undefined ? body.leaserRemaining : body.leaser_remaining;
+    const updatedBy = req.dealer?.id || req.user?.id || null;
+    const leaserPaid = parsed.payments.reduce((total, p) => total + p.amount, 0);
+
+    await Subvendor.sequelize!.transaction(async (transaction) => {
+      await SubvendorLeaserPayment.destroy({ where: { vendorId: vendor.id }, transaction });
+      if (parsed.payments.length) {
+        await SubvendorLeaserPayment.bulkCreate(
+          parsed.payments.map((p) => ({ ...p, vendorId: vendor.id, updatedBy })),
+          { transaction }
+        );
+      }
+      await vendor.update(
+        {
+          leaserPaid,
+          ...(remainingRaw !== undefined ? { leaserRemaining: roundInr(remainingRaw) } : {})
+        },
+        { transaction }
+      );
+    });
+
+    await vendor.reload();
+    const payments = await SubvendorLeaserPayment.findAll({
+      where: { vendorId: vendor.id },
+      order: LEASER_ORDER as any
+    });
+    res.json({ success: true, data: leaserVendorPayload(vendor, payments) });
+  } catch (error) {
+    logError('Replace vendor leaser error', error, { id: req.params.id });
     internalError(res);
   }
 };

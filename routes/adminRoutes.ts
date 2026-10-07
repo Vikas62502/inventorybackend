@@ -24,7 +24,10 @@ import {
   updateSubvendor,
   deleteSubvendor,
   listSubvendorLedger,
-  upsertSubvendorLedger
+  upsertSubvendorLedger,
+  listLeaserPayments,
+  getVendorLeaser,
+  replaceVendorLeaser
 } from '../controllers/subvendorController';
 import {
   updateQuotationInstallationRelease,
@@ -212,6 +215,9 @@ router.use(authorizeAdmin);
 /** §BD — Subvendors + office-inside ledger (see BACKEND_SUBVENDORS.ts). */
 router.get('/subvendors/ledger', listSubvendorLedger);
 router.patch('/subvendors/ledger/:quotationId', upsertSubvendorLedger);
+router.get('/subvendors/leaser', listLeaserPayments);
+router.get('/subvendors/:id/leaser', getVendorLeaser);
+router.put('/subvendors/:id/leaser', replaceVendorLeaser);
 router.get('/subvendors', listSubvendors);
 router.post('/subvendors', createSubvendor);
 router.patch('/subvendors/:id', updateSubvendor);

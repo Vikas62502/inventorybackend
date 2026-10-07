@@ -2466,6 +2466,51 @@ Migration `20261005120000-add-file-cost-and-leaser-to-subvendors.js` + boot ensu
 
 ---
 
+## §BK — Dealer leaser payments (DB, not localStorage) — Oct 2026
+
+**Status: implemented** — HANDOFF **§60** · `BACKEND_SUBVENDOR_LEASER.ts` (FE notes may label this §BG; §BG here is lithium battery)
+
+| What | Detail |
+|------|--------|
+| `subvendors` columns | `file_cost_per_kw` (1000), `leaser_paid` (0), `leaser_remaining` (0) — §BJ |
+| New table | `subvendor_leaser_payments` — `date`, `amount`, `type`, `remark`, `customer_ids` JSONB, `sort_order` (FK `vendor_id` → subvendors, CASCADE) |
+| `GET /admin/subvendors/leaser` | All payments (`?vendorId=` optional) + per-vendor `balances` |
+| `GET /admin/subvendors/:id/leaser` | One vendor + `currentBalance` + payments |
+| `PUT /admin/subvendors/:id/leaser` | Replace all payments for that vendor (transaction); optional `leaserRemaining` |
+
+- `:id` / `vendorId` = subvendor UUID or dealer id (→ office_inside subvendor).
+- **Current balance starts at 0 and equals `SUM(payment.amount)`**; PUT stores it on `leaser_paid`. Never derived from file cost × kW.
+- Amounts whole INR ≥ 0; `sortOrder` missing → position. Bad date / missing array → 400 `VAL_LEASER`.
+- Migration `20261007120000-create-subvendor-leaser-payments.js` + boot ensure. Admin JWT.
+
+### Done when
+
+- [x] Save → refresh / other login / other browser shows the same payments + balance
+- [x] No payments → balance 0
+
+---
+
+## §BL — Office Inside Download Excel: dealer + install / meter date-or-status — Oct 2026
+
+**Status: implemented** — HANDOFF **§61** · `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` (FE notes may label this §BJ; §BJ here is subvendor file cost / leaser)
+
+No new download API — Excel is built in the browser from the list GETs.
+
+On `GET /api/quotations?status=approved` and `GET /api/admin/quotations`:
+
+- Always nest `dealer` with `id`, `firstName`, `lastName`, `mobile` (+ alias `phone`). Flat `dealerName` / `dealerMobile` (+ snake) also echoed on both lists.
+- Installation date: `installerApprovedAt` is persisted when installation is approved (already).
+- Metering date: `mcoAt` (and `meteringApprovedAt`) persisted when metering completes (already).
+- `installationStatus` + metering status still echoed so the SPA shows date only when approved, else Pending / In Progress.
+- Payment status, file login and installment fields stay on GET (cards use them).
+
+### Done when
+
+- [x] Excel Dealer Name / Mobile filled for every row
+- [x] Installation / Metering columns show approval dates after refresh
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

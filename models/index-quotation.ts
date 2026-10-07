@@ -19,6 +19,7 @@ import DealerRequest from './DealerRequest';
 import InstallationTeam from './InstallationTeam';
 import Subvendor from './Subvendor';
 import SubvendorLedger from './SubvendorLedger';
+import SubvendorLeaserPayment from './SubvendorLeaserPayment';
 
 // ================================================================================
 // DEALER ASSOCIATIONS
@@ -96,6 +97,8 @@ Subvendor.hasMany(SubvendorLedger, { foreignKey: 'vendorId', as: 'ledgerRows' })
 SubvendorLedger.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
 Quotation.hasOne(SubvendorLedger, { foreignKey: 'quotationId', as: 'subvendorLedger', onDelete: 'CASCADE' });
 SubvendorLedger.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
+Subvendor.hasMany(SubvendorLeaserPayment, { foreignKey: 'vendorId', as: 'leaserPayments', onDelete: 'CASCADE' });
+SubvendorLeaserPayment.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
 
 // ================================================================================
 // SYNC DATABASE
@@ -130,6 +133,7 @@ export {
   DealerRequest,
   InstallationTeam,
   Subvendor,
-  SubvendorLedger
+  SubvendorLedger,
+  SubvendorLeaserPayment
 };
 

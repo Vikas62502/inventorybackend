@@ -13,7 +13,8 @@ export const SUBVENDOR_ERROR_CODES = {
   VAL_NAME: 'VAL_NAME',
   SUBVENDOR_DUP: 'SUBVENDOR_DUP',
   SUBVENDOR_404: 'SUBVENDOR_404',
-  QUOTATION_404: 'QUOTATION_404'
+  QUOTATION_404: 'QUOTATION_404',
+  VAL_LEASER: 'VAL_LEASER'
 } as const;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -189,4 +190,93 @@ export const parseSubvendorDealerId = (body: Record<string, unknown>): string | 
   const raw = body.dealerId !== undefined ? body.dealerId : body.dealer_id;
   if (raw === undefined) return undefined;
   return str(raw);
+};
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
+
+/** YYYY-MM-DD (also accepts a full ISO timestamp); empty → null; unparseable → undefined. */
+const parseLeaserDate = (raw: unknown): string | null | undefined => {
+  const s = str(raw);
+  if (!s) return null;
+  if (ISO_DATE_RE.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
+};
+
+const parseCustomerIds = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw.map(str).filter(Boolean);
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map(str).filter(Boolean);
+    } catch {
+      /* comma list */
+    }
+    return raw.split(',').map(str).filter(Boolean);
+  }
+  return [];
+};
+
+export type LeaserPaymentInput = {
+  date: string | null;
+  amount: number;
+  type: string;
+  remark: string;
+  customerIds: string[];
+  sortOrder: number;
+};
+
+/** PUT body → payments list. Accepts `{ payments }`, `{ items }`, `{ rows }` or a bare array. */
+export const parseLeaserPayments = (
+  body: unknown
+): { ok: true; payments: LeaserPaymentInput[] } | { ok: false; message: string } => {
+  const b = body as Record<string, unknown> | unknown[] | null;
+  const list = Array.isArray(b)
+    ? b
+    : b && typeof b === 'object'
+      ? (b.payments ?? b.items ?? b.rows ?? b.leaserPayments ?? b.leaser_payments)
+      : undefined;
+  if (!Array.isArray(list)) return { ok: false, message: 'payments must be an array' };
+
+  const payments: LeaserPaymentInput[] = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const row = (list[i] || {}) as Record<string, unknown>;
+    const date = parseLeaserDate(row.date ?? row.paymentDate ?? row.payment_date);
+    if (date === undefined) return { ok: false, message: `payments[${i}].date is not a valid date` };
+    const sortRaw = Number(row.sortOrder ?? row.sort_order ?? row.paymentNumber ?? row.payment_number);
+    payments.push({
+      date,
+      amount: roundInr(row.amount),
+      type: str(row.type ?? row.paymentType ?? row.payment_type).slice(0, 64),
+      remark: str(row.remark ?? row.remarks ?? row.note),
+      customerIds: parseCustomerIds(row.customerIds ?? row.customer_ids),
+      sortOrder: Number.isInteger(sortRaw) && sortRaw > 0 ? sortRaw : i + 1
+    });
+  }
+  return { ok: true, payments };
+};
+
+export const publicLeaserPayment = (row: RowLike) => {
+  const vendorId = row.vendorId || row.vendor_id;
+  const customerIds = Array.isArray(row.customerIds ?? row.customer_ids)
+    ? (row.customerIds ?? row.customer_ids)
+    : [];
+  const sortOrder = Number(row.sortOrder ?? row.sort_order) || 0;
+  const amount = roundInr(row.amount);
+  return {
+    id: row.id,
+    vendorId,
+    vendor_id: vendorId,
+    date: row.date || null,
+    amount,
+    type: row.type || '',
+    remark: row.remark || '',
+    customerIds,
+    customer_ids: customerIds,
+    sortOrder,
+    sort_order: sortOrder,
+    paymentNumber: sortOrder,
+    createdAt: row.createdAt || row.created_at,
+    updatedAt: row.updatedAt || row.updated_at
+  };
 };

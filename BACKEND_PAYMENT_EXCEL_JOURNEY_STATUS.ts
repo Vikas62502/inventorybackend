@@ -362,3 +362,49 @@ export function buildPaymentExcelJourneyCells(q: Record<string, unknown>) {
  * Related: BACKEND_CHANGES_REQUIRED.md §AC, BACKEND_CHANGES_HANDOFF.md §6 + **§24** + **§25**,
  * BACKEND_INSTALLATION_RELEASE.md, BACKEND_METERING_DISCOM_WCC_METER_INSTALL.md.
  */
+
+/**
+ * =============================================================================
+ * §BL (Oct 2026) — Account Management → Office Inside → Download Excel
+ * =============================================================================
+ *
+ * Still client-side CSV — no download route. Backend work is the existing list GETs:
+ *   GET /api/quotations?status=approved   (controllers/quotationController.ts → getQuotations)
+ *   GET /api/admin/quotations              (controllers/adminController.ts → getAllQuotations)
+ *
+ * Excel columns now: Dealer Name, Dealer Mobile, Installation (date if approved, else Pending /
+ * In Progress), Metering (same). Removed from Excel only: Payment Status, File login,
+ * Installment Count, Admin Approval, Final Confirmation, File Status.
+ *
+ * Every row echoes:
+ */
+const officeInsideExcelRow = {
+  dealerId: 'dealer_…',
+  dealer: {
+    id: 'dealer_…',
+    firstName: 'Harshita',
+    lastName: 'naruka',
+    mobile: '9251005606',
+    phone: '9251005606', // alias of mobile
+    email: '…', username: '…', role: 'dealer'
+  },
+  dealerName: 'Harshita naruka', dealer_name: 'Harshita naruka',
+  dealerMobile: '9251005606', dealer_mobile: '9251005606',
+  installationStatus: 'installer_approved',
+  installerApprovedAt: '2026-10-01T…', // set when installation is approved (admin or installer app)
+  meteringStatus: 'mco_completed',
+  mcoAt: '2026-10-05T…', // set on MCO; meteringApprovedAt also stamped
+  meteringApprovedAt: '2026-10-03T…',
+  // kept for cards (not in Excel any more) — do not drop:
+  paymentStatus: 'pending', fileLoginStatus: 'login_now', installments: [/* … */]
+};
+/**
+ * Dates are already persisted by the workflow:
+ *   installerApprovedAt — adminController.updateQuotationInstallationStatus + workflowController installer approve
+ *   mcoAt / meteringApprovedAt — admin installation-status metering patch + workflowController metering actions
+ *
+ * Checklist:
+ * - [x] GET /api/quotations?status=approved nests dealer with firstName, lastName, mobile (+ phone)
+ * - [x] GET /api/admin/quotations same nested dealer (+ flat dealerName / dealerMobile)
+ * - [x] installationStatus / meteringStatus + installerApprovedAt / mcoAt on every row
+ */
