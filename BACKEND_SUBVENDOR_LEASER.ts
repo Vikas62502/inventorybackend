@@ -17,7 +17,7 @@
  *   subvendors (§BJ): file_cost_per_kw (default 1000), leaser_paid (default 0), leaser_remaining (default 0)
  *
  *   CREATE TABLE IF NOT EXISTS subvendor_leaser_payments (
- *     id           UUID PRIMARY KEY,
+ *     id           TEXT PRIMARY KEY,   -- §BM: client ids (lp-self-…) stored as sent
  *     vendor_id    UUID NOT NULL REFERENCES subvendors(id) ON DELETE CASCADE,
  *     date         DATE NULL,
  *     amount       NUMERIC(14,2) NOT NULL DEFAULT 0,
@@ -57,6 +57,7 @@ const listResponse = {
         vendorId: 'uuid', vendor_id: 'uuid', dealerId: 'dealer-id', dealer_id: 'dealer-id',
         currentBalance: 50000, current_balance: 50000,
         leaserPaid: 50000, leaser_paid: 50000,
+        totalPayment: 50000, total_payment: 50000, // statement "Total payment"; Total remaining = Total profit − this (FE)
         leaserRemaining: 30000, leaser_remaining: 30000,
         fileCostPerKw: 1000, file_cost_per_kw: 1000
       }
@@ -72,6 +73,7 @@ const putBody = {
   payments: [
     // also accepted: { items }, { rows }, or a bare array
     {
+      id: 'lp-self-Q-123-1', // optional; TEXT, kept verbatim (§BM). Absent → server UUID
       date: '2026-10-01', // YYYY-MM-DD or ISO; empty → null; invalid → 400 VAL_LEASER
       amount: 20000, // whole INR (rounded), >= 0
       type: 'cash', // free text, max 64

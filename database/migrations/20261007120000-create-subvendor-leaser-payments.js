@@ -7,7 +7,7 @@ module.exports = {
   async up(queryInterface) {
     await queryInterface.sequelize.query(`
       CREATE TABLE IF NOT EXISTS subvendor_leaser_payments (
-        id            UUID PRIMARY KEY,
+        id            TEXT PRIMARY KEY,
         vendor_id     UUID NOT NULL REFERENCES subvendors(id) ON DELETE CASCADE,
         date          DATE NULL,
         amount        NUMERIC(14, 2) NOT NULL DEFAULT 0,

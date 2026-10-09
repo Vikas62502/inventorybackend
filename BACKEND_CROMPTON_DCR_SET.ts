@@ -7,7 +7,8 @@
  * Package identity (do not coerce):
  *   panelType === "Crompton set" (package marker)
  *   panelBrand / dcrPanelBrand === "Premier Energy"
- *   inverterBrand === "Crompton", inverterSize === "3.6kW"
+ *   inverterBrand === "Crompton", inverterSize === set size (3kW set → "3kW", 5kW set → "5kW");
+ *   legacy files with "3.6kW" are kept as sent and priced the same (Oct 2026, REQUIRED §BN)
  *   acdb / dcdb === "Crompton (1-Phase)"
  *   pdfPanelRangeKey === "premier_energy_600_610" (600W–610W Topcon Bifacial)
  *   prices: 3kW/1-Phase → 210000, 5kW/1-Phase → 295000
@@ -15,7 +16,13 @@
 
 export const CROMPTON_DCR_SET_NAME = "Crompton set"
 export const CROMPTON_INVERTER_BRAND = "Crompton"
-export const CROMPTON_INVERTER_SIZE = "3.6kW"
+export const CROMPTON_LEGACY_INVERTER_SIZE = "3.6kW"
+
+/** Package inverter for a set size (3kW → 3kW, 5kW → 5kW); null for other sizes. */
+export function cromptonInverterSizeFor(systemSize: unknown): string | null {
+  const size = String(systemSize ?? "").trim()
+  return size === "3kW" || size === "5kW" ? size : null
+}
 export const CROMPTON_PDF_PANEL_RANGE_KEY = "premier_energy_600_610"
 
 export const DCR_CROMPTON_SET_PRICES: ReadonlyArray<{
@@ -29,18 +36,18 @@ export const DCR_CROMPTON_SET_PRICES: ReadonlyArray<{
   {
     systemSize: "3kW",
     phase: "1-Phase",
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: "3kW",
     panelType: CROMPTON_DCR_SET_NAME,
     price: 210_000,
-    notes: "Premier Energy 600W–610W panels; Crompton 3.6kW inverter + ACDB/DCDB",
+    notes: "Premier Energy 600W–610W panels; Crompton 3kW inverter + ACDB/DCDB",
   },
   {
     systemSize: "5kW",
     phase: "1-Phase",
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: "5kW",
     panelType: CROMPTON_DCR_SET_NAME,
     price: 295_000,
-    notes: "Premier Energy 600W–610W panels; Crompton 3.6kW inverter + ACDB/DCDB",
+    notes: "Premier Energy 600W–610W panels; Crompton 5kW inverter + ACDB/DCDB",
   },
 ]
 
@@ -52,7 +59,7 @@ export const DCR_CROMPTON_SYSTEM_CONFIGS = [
     panelBrand: CROMPTON_DCR_SET_NAME,
     panelSize: "610W",
     inverterBrand: CROMPTON_INVERTER_BRAND,
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: "3kW",
     inverterType: "String Inverter",
     structureType: "GI Structure",
     structureSize: "3kW",
@@ -72,7 +79,7 @@ export const DCR_CROMPTON_SYSTEM_CONFIGS = [
     panelBrand: CROMPTON_DCR_SET_NAME,
     panelSize: "610W",
     inverterBrand: CROMPTON_INVERTER_BRAND,
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: "5kW",
     inverterType: "String Inverter",
     structureType: "GI Structure",
     structureSize: "5kW",
@@ -142,12 +149,6 @@ export function validateCromptonDcrProducts(p: ProductsLike): string | null {
     return `Crompton set expects inverterBrand "${CROMPTON_INVERTER_BRAND}"`
   }
 
-  const invSize = String(p.inverterSize || "").trim()
-  if (invSize && norm(invSize) !== "3.6kw") {
-    // Soft warning path: still allow if pricing lookup uses package price by panelType
-    // Prefer accepting 3.6kW; do not hard-fail other sizes if set price already applied.
-  }
-
   return null
 }
 
@@ -207,7 +208,10 @@ export function preserveCromptonSetIdentity<T extends ProductsLike>(products: T)
     dcrPanelBrand: "Premier Energy",
     panelType: CROMPTON_DCR_SET_NAME,
     inverterBrand: products.inverterBrand?.trim() || CROMPTON_INVERTER_BRAND,
-    inverterSize: products.inverterSize?.trim() || CROMPTON_INVERTER_SIZE,
+    inverterSize:
+      products.inverterSize?.trim() ||
+      cromptonInverterSizeFor((products as { systemSize?: string }).systemSize) ||
+      products.inverterSize,
     acdb: products.acdb?.trim() || "Crompton (1-Phase)",
     dcdb: products.dcdb?.trim() || "Crompton (1-Phase)",
     pdfPanelRangeKey:

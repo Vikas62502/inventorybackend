@@ -60,6 +60,21 @@ const ensureIncludeLithiumBatteryColumn = async (): Promise<void> => {
   }
 };
 
+const ensurePaymentPhaseCollectDestinationColumn = async (): Promise<void> => {
+  try {
+    await sequelize.query(`
+      ALTER TABLE quotation_payment_phases
+        ADD COLUMN IF NOT EXISTS "collectDestination" VARCHAR(16) NULL,
+        ADD COLUMN IF NOT EXISTS "collectKind" VARCHAR(16) NULL,
+        ADD COLUMN IF NOT EXISTS "collectSelfAmount" NUMERIC(14,2) NULL,
+        ADD COLUMN IF NOT EXISTS "collectChairbordAmount" NUMERIC(14,2) NULL;
+    `);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure quotation_payment_phases collect columns', { message });
+  }
+};
+
 const ensureProductUnitColumn = async (): Promise<void> => {
   try {
     await sequelize.query(
@@ -149,7 +164,7 @@ const ensureUnifiedUserProfileColumns = async (): Promise<void> => {
 /** Idempotent: §BD Subvendors + ledger (mirrors 20260928120000-create-subvendors-and-ledger.js). */
 const SUBVENDOR_LEASER_PAYMENTS_SQL = `
   CREATE TABLE IF NOT EXISTS subvendor_leaser_payments (
-    id            UUID PRIMARY KEY,
+    id            TEXT PRIMARY KEY,
     vendor_id     UUID NOT NULL REFERENCES subvendors(id) ON DELETE CASCADE,
     date          DATE NULL,
     amount        NUMERIC(14, 2) NOT NULL DEFAULT 0,
@@ -219,6 +234,15 @@ const ensureSubvendorTables = async (): Promise<void> => {
         ADD COLUMN IF NOT EXISTS leaser_remaining NUMERIC(14, 2) NOT NULL DEFAULT 0;
     `);
     await sequelize.query(SUBVENDOR_LEASER_PAYMENTS_SQL);
+    // §BM: client ids like `lp-self-{quotationId}-{phase}` are stored verbatim.
+    await sequelize.query(`
+      DO $$ BEGIN
+        IF (SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'subvendor_leaser_payments' AND column_name = 'id') = 'uuid' THEN
+          ALTER TABLE subvendor_leaser_payments ALTER COLUMN id TYPE TEXT USING id::text;
+        END IF;
+      END $$;
+    `);
     await sequelize.query(
       'CREATE INDEX IF NOT EXISTS subvendor_leaser_payments_vendor_idx ON subvendor_leaser_payments (vendor_id, sort_order);'
     );
@@ -244,6 +268,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureUnifiedUserProfileColumns();
     await ensureSubvendorTables();
     await ensureIncludeLithiumBatteryColumn();
+    await ensurePaymentPhaseCollectDestinationColumn();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

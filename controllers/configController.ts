@@ -15,6 +15,10 @@ import {
 import { normalizeProductCatalog } from '../utils/productCatalogNormalize';
 import { withMonoRealPricingRows } from '../utils/structureType';
 import {
+  alignCromptonInverterComponents,
+  alignCromptonPricingRows
+} from '../utils/quotationCromptonDcr';
+import {
   loadPricingTablesSeed,
   mergePricingTablesPayload,
   normalizePricingTablesPayload
@@ -275,10 +279,11 @@ const normalizePricingTables = (pricing: any): any => {
     if (seed && Array.isArray(seed[key]) && (seed[key] as unknown[]).length > 0) return seed[key];
     return Array.isArray(fallback) ? fallback : [];
   };
-  const systemConfigs = mergeDefaultSystemConfigs(
-    pricing?.systemConfigs ?? pricing?.systemConfigurations
+  const systemConfigs = alignCromptonPricingRows(
+    mergeDefaultSystemConfigs(pricing?.systemConfigs ?? pricing?.systemConfigurations),
+    'panelBrand'
   );
-  const dcr = mergeDefaultDcrPricing(pricing?.dcr);
+  const dcr = alignCromptonPricingRows(mergeDefaultDcrPricing(pricing?.dcr), 'panelType');
   const dcrMatrix = buildDcrPricingMatrix(dcr);
   const meta = pricing?.meta || seed?.meta || {};
   const effectiveFrom =
@@ -294,7 +299,7 @@ const normalizePricingTables = (pricing: any): any => {
     JUNE_2026_PRICING_META.effectiveTo;
   return {
     panels: pickComponents('panels', pricing?.panels),
-    inverters: pickComponents('inverters', pricing?.inverters),
+    inverters: alignCromptonInverterComponents(pickComponents('inverters', pricing?.inverters)),
     structures: withMonoRealPricingRows(pickComponents('structures', pricing?.structures)),
     meters: pickComponents('meters', pricing?.meters),
     cables: pickComponents('cables', pricing?.cables),

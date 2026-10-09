@@ -2511,6 +2511,56 @@ On `GET /api/quotations?status=approved` and `GET /api/admin/quotations`:
 
 ---
 
+## §BM — Office Inside Collect self / To Chairbord — Oct 2026
+
+**Status: implemented** — HANDOFF **§62** · `BACKEND_COLLECT_SELF_LEASER.ts` (FE notes may label this §BK / HANDOFF §57; those numbers are taken here)
+
+No new routes — two persist changes.
+
+1. **Installment "Collected by"** — `PUT /quotations/:id/installments` and `PATCH /payment-details` accept per phase (camel or snake):
+   - `collectDestination` — `self` | `chairbord` (**default chairbord**)
+   - `collectKind` — `complete` (default) | `partial`, only when self (else null)
+   - `collectSelfAmount` / `collectChairbordAmount` — whole INR, always sum to `paidAmount` (chairbord → 0 / paid; self + complete → paid / 0; self + partial → sent self ≤ paid, chairbord = remainder)
+
+   Stored on `quotation_payment_phases` (`collectDestination`, `collectKind`, `collectSelfAmount`, `collectChairbordAmount`) for Cash/UPI only; loan / bank / missing mode → all null. Extra phase keys are stripped, never 400. Echoed (camel + snake) on every phase in quotation + admin GETs; legacy Cash/UPI rows read back as chairbord. The installment handler does not create leaser rows (SPA: chairbord → none; self + complete → paid; self + partial → self amount).
+2. **Leaser ids stay `lp-self-…`** — `subvendor_leaser_payments.id` is TEXT; `PUT /admin/subvendors/:id/leaser` keeps client ids (`lp-self-{quotationId}-{phaseNumber}`) as sent, so re-saves replace instead of duplicating. Missing id → server UUID.
+
+3. **Leaser responses** also echo `totalPayment` / `total_payment` (= `leaser_paid` = SUM of payments). Statement CSV totals are FE-only (Total remaining = Total profit − Total payment).
+
+Migrations `20261008120000-collect-destination-and-leaser-text-id.js`, `20261009120000-add-collect-kind-and-split-to-payment-phases.js` + boot ensure.
+
+### Done when
+
+- [x] Cash/UPI phases keep self / chairbord after refresh; loan → null
+- [x] Self + Partial keeps kind + split amounts after refresh; missing destination → chairbord
+- [x] Saving twice leaves one leaser row per `lp-self` id
+
+---
+
+## §BN — Crompton set inverter follows the set (3kW / 5kW) — Oct 2026
+
+**Status: implemented** — HANDOFF **§63** · `BACKEND_CROMPTON_DCR_SET.md` / `BACKEND_CROMPTON_DCR_SET.ts` (FE notes may label this §BM / HANDOFF §59; those numbers are taken here)
+
+No new routes. Persist what the SPA sends.
+
+| Set | inverterBrand | inverterSize | Price |
+|-----|---------------|--------------|-------|
+| 3 kW / 1-Phase | Crompton | 3kW | ₹2,10,000 |
+| 5 kW / 1-Phase | Crompton | 5kW | ₹2,95,000 |
+
+1. **Validation** — Crompton set skips the generic catalog check (`validateCromptonDcrProductSelection`: 1-Phase + Crompton brand only); inverter size is never checked. `isAllowedCromptonInverterSize` accepts 3kW / 5kW / legacy 3.6kW. No 400 for 3kW / 5kW.
+2. **Persist / echo** — `preserveCromptonSetIdentity` keeps the sent `inverterSize` (3kW / 5kW / old 3.6kW); only fills it from `systemSize` when missing (was hard-coded 3.6kW).
+3. **Set price** — `resolveDcrSetPriceForProducts`: `panelType === "Crompton set"` + `systemSize` + 1-Phase → 210000 / 295000; `inverterSize` ignored, so old 3.6kW files price the same.
+4. **Pricing tables** — defaults + seed: Crompton dcr rows and presets use 3kW → 3kW, 5kW → 5kW; Crompton inverter component row 3.6kW → 3kW (₹42,000). `GET /pricing-tables` also rewrites stored Crompton set dcr rows / presets still on 3.6kW to the set size (and the legacy Crompton 3.6kW inverter row → 3kW unless a 3kW row exists). Admin PUT stores what is sent.
+
+### Done when
+
+- [x] Crompton 3kW set with 3kW inverter and 5kW set with 5kW inverter save and GET-echo unchanged
+- [x] Old 3.6kW quotations still echo 3.6kW and price 210000 / 295000
+- [x] Pricing-tables presets show 3kW / 5kW Crompton inverters
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

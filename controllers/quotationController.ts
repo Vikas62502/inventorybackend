@@ -22,7 +22,13 @@ import {
   resolveBrowsableMediaUrls,
   uploadFileToS3FromBuffer
 } from '../utils/s3Service';
-import { normalizePaymentModeInput, isLoanOnlyPaymentType, FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE } from '../utils/paymentMode';
+import {
+  normalizePaymentModeInput,
+  normalizeCollectFields,
+  pickCollectInput,
+  isLoanOnlyPaymentType,
+  FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE
+} from '../utils/paymentMode';
 import {
   normalizePaymentType,
   isPhaseModeAllowedForPaymentType,
@@ -678,6 +684,11 @@ const normalizePaymentPhases = (phases: any[], updatedBy: string | null): Paymen
           noteRaw === undefined || noteRaw === null || String(noteRaw).trim() === ''
             ? null
             : String(noteRaw).trim(),
+        ...normalizeCollectFields(
+          pickCollectInput(phase),
+          paymentMode,
+          Number.isFinite(paidAmount) ? paidAmount : 0
+        ),
         updatedBy,
         updatedAt: new Date().toISOString()
       } as PaymentPhaseRecord;

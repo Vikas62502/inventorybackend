@@ -98,6 +98,8 @@
 | 86 | Medium | Subvendor file cost per kW + leaser paid / remaining | **Done** | §59 / REQUIRED §BJ / `BACKEND_SUBVENDORS.ts` |
 | 87 | High | Dealer leaser payments table + GET/PUT routes | **Done** | §60 / REQUIRED §BK / `BACKEND_SUBVENDOR_LEASER.ts` |
 | 88 | Medium | Office Inside Excel — nested dealer (mobile / phone) + install / meter dates | **Done** | §61 / REQUIRED §BL / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
+| 89 | High | Office Inside "Collected by" — phase destination / kind / self + Chairbord split + TEXT leaser ids | **Done** | §62 / REQUIRED §BM / `BACKEND_COLLECT_SELF_LEASER.ts` |
+| 90 | High | Crompton set inverter 3kW / 5kW (no 3.6kW requirement) | **Done** | §63 / REQUIRED §BN / `BACKEND_CROMPTON_DCR_SET.md` |
 
 **Deploy before QA:**
 
@@ -3520,4 +3522,35 @@ Code: `models/SubvendorLeaserPayment.ts`, `models/index-quotation.ts`, `utils/su
 | Kept | `paymentStatus`, `fileLoginStatus`, installments — unchanged |
 
 Code: `controllers/quotationController.ts`, `controllers/adminController.ts`.
+
+---
+
+## 62. Office Inside Collect self / To Chairbord (§BM) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BM** · `BACKEND_COLLECT_SELF_LEASER.ts`
+
+| Item | Detail |
+|------|--------|
+| Phase columns | `quotation_payment_phases`: `collectDestination` / `collectKind` VARCHAR(16), `collectSelfAmount` / `collectChairbordAmount` NUMERIC(14,2) — Cash/UPI only, else null |
+| Input | camel or snake on PUT `…/installments` + PATCH `…/payment-details`; destination default `chairbord`; kind `complete` / `partial` only when self; extra keys stripped (no 400) |
+| Split | chairbord → self 0 / chairbord paid; self + complete → paid / 0; self + partial → sent self (≤ paid) / remainder |
+| GET | Every phase echoes all four (camel + snake), quotation + admin list / by-id; legacy null → chairbord |
+| Leaser GET/PUT | Also echoes `totalPayment` / `total_payment` (= `leaser_paid` = SUM) |
+| Leaser id | `subvendor_leaser_payments.id` UUID → TEXT; client `lp-self-{quotationId}-{phase}` kept; re-save replaces; id owned by another vendor moves (their `leaser_paid` recomputed) |
+| Not done | Installment handler does not create leaser rows (SPA PUTs leaser) |
+
+Migrations `20261008120000-collect-destination-and-leaser-text-id.js`, `20261009120000-add-collect-kind-and-split-to-payment-phases.js` + boot ensure.
+
+## 63. Crompton set inverter follows the set — 3kW / 5kW (§BN) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BN** · `BACKEND_CROMPTON_DCR_SET.md` / `BACKEND_CROMPTON_DCR_SET.ts`
+
+| Item | Detail |
+|------|--------|
+| Validation | No 3.6kW requirement; Crompton set skips catalog size checks; 3kW / 5kW / legacy 3.6kW all accepted |
+| Persist / echo | `inverterSize` kept as sent; never rewritten to / from 3.6kW; filled from `systemSize` only when missing |
+| Set price | `panelType === "Crompton set"` + `systemSize` + 1-Phase → 210000 / 295000; `inverterSize` ignored |
+| Pricing tables | Defaults + seed: 3kW set → 3kW inverter, 5kW set → 5kW; GET rewrites stored Crompton set rows / presets still on 3.6kW; Crompton inverter component 3.6kW → 3kW (₹42,000) |
+
+Code: `utils/quotationCromptonDcr.ts`, `utils/defaultPricingTables.ts`, `controllers/configController.ts`, `BACKEND_PRICING_TABLES_SEED.json`. No migration.
 

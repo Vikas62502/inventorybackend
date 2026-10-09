@@ -5,34 +5,42 @@
  * Package identity (do not coerce to Premier Energies Topcon):
  *   panelType === "Crompton set" (package marker — required for set price)
  *   panelBrand / dcrPanelBrand === "Premier Energy"
- *   inverterBrand === "Crompton", inverterSize === "3.6kW"
+ *   inverterBrand === "Crompton", inverterSize === systemSize (3kW set → 3kW, 5kW set → 5kW);
+ *   legacy files may still carry 3.6kW — persisted / echoed as sent, priced the same.
  *   pdfPanelRangeKey === "premier_energy_600_610"
- *   prices: 3kW → 210000, 5kW → 295000
+ *   prices: 3kW → 210000, 5kW → 295000 (keyed by systemSize + 1-Phase, never by inverterSize)
  */
 
 export const CROMPTON_DCR_SET_NAME = 'Crompton set';
 export const CROMPTON_PANEL_BRAND = 'Premier Energy';
 export const CROMPTON_INVERTER_BRAND = 'Crompton';
-export const CROMPTON_INVERTER_SIZE = '3.6kW';
+export const CROMPTON_LEGACY_INVERTER_SIZE = '3.6kW';
+export const CROMPTON_INVERTER_SIZES = ['3kW', '5kW'] as const;
 export const CROMPTON_PDF_PANEL_RANGE_KEY = 'premier_energy_600_610';
 export const CROMPTON_ACDB_DCDB_1_PHASE = 'Crompton (1-Phase)';
+
+/** Package inverter for a set size (3kW → 3kW, 5kW → 5kW); null for other sizes. */
+export const cromptonInverterSizeFor = (systemSize: unknown): string | null => {
+  const size = String(systemSize ?? '').trim();
+  return (CROMPTON_INVERTER_SIZES as readonly string[]).includes(size) ? size : null;
+};
 
 export const DCR_CROMPTON_SET_PRICES = [
   {
     systemSize: '3kW',
     phase: '1-Phase' as const,
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: '3kW',
     panelType: CROMPTON_DCR_SET_NAME,
     price: 210000,
-    notes: 'Premier Energy 600W–610W panels; Crompton 3.6kW inverter + ACDB/DCDB'
+    notes: 'Premier Energy 600W–610W panels; Crompton 3kW inverter + ACDB/DCDB'
   },
   {
     systemSize: '5kW',
     phase: '1-Phase' as const,
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: '5kW',
     panelType: CROMPTON_DCR_SET_NAME,
     price: 295000,
-    notes: 'Premier Energy 600W–610W panels; Crompton 3.6kW inverter + ACDB/DCDB'
+    notes: 'Premier Energy 600W–610W panels; Crompton 5kW inverter + ACDB/DCDB'
   }
 ] as const;
 
@@ -45,7 +53,7 @@ export const DCR_CROMPTON_SYSTEM_CONFIGS = [
     panelBrand: CROMPTON_DCR_SET_NAME,
     panelSize: '610W',
     inverterBrand: CROMPTON_INVERTER_BRAND,
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: '3kW',
     inverterType: 'String Inverter',
     structureType: 'GI Structure',
     structureSize: '3kW',
@@ -65,7 +73,7 @@ export const DCR_CROMPTON_SYSTEM_CONFIGS = [
     panelBrand: CROMPTON_DCR_SET_NAME,
     panelSize: '610W',
     inverterBrand: CROMPTON_INVERTER_BRAND,
-    inverterSize: CROMPTON_INVERTER_SIZE,
+    inverterSize: '5kW',
     inverterType: 'String Inverter',
     structureType: 'GI Structure',
     structureSize: '5kW',
@@ -140,7 +148,7 @@ export const getCromptonDcrSetPrice = (
 /**
  * Set-price when panelType is Crompton set.
  * Do NOT price plain Premier Energy / Premier Energies under this table.
- * Inverter is fixed 3.6kW — ignore inverterSize ≠ systemSize.
+ * Keyed by systemSize + 1-Phase only — inverterSize (3kW / 5kW / legacy 3.6kW) is ignored.
  */
 export const resolveDcrSetPriceForProducts = (
   products: Record<string, unknown> | null | undefined
@@ -160,6 +168,9 @@ export const preserveCromptonSetIdentity = (
   const rangeKey =
     String(products.pdfPanelRangeKey || products.pdf_panel_range_key || '').trim() ||
     CROMPTON_PDF_PANEL_RANGE_KEY;
+  const inverterSize =
+    String(products.inverterSize || '').trim() ||
+    cromptonInverterSizeFor(products.systemSize ?? products.structureSize);
   return {
     ...products,
     panelBrand: CROMPTON_PANEL_BRAND,
@@ -169,7 +180,7 @@ export const preserveCromptonSetIdentity = (
     panelType: CROMPTON_DCR_SET_NAME,
     panel_type: CROMPTON_DCR_SET_NAME,
     inverterBrand: String(products.inverterBrand || '').trim() || CROMPTON_INVERTER_BRAND,
-    inverterSize: String(products.inverterSize || '').trim() || CROMPTON_INVERTER_SIZE,
+    ...(inverterSize ? { inverterSize } : {}),
     acdb: String(products.acdb || '').trim() || CROMPTON_ACDB_DCDB_1_PHASE,
     dcdb: String(products.dcdb || '').trim() || CROMPTON_ACDB_DCDB_1_PHASE,
     pdfPanelRangeKey: rangeKey,
@@ -186,8 +197,41 @@ export const isAllowedCromptonInverterBrand = (brand: unknown): boolean =>
   norm(String(brand || '')) === 'crompton';
 
 export const isAllowedCromptonInverterSize = (size: unknown): boolean => {
-  const n = norm(String(size || '')).replace(/\s/g, '');
-  return n === '3.6kw' || n === '3.6';
+  const n = norm(String(size || '')).replace(/\s/g, '').replace(/kw$/, '');
+  return n === '3' || n === '5' || n === '3.6';
+};
+
+const isCromptonSetLabel = (value: unknown): boolean => norm(String(value ?? '')) === 'crompton set';
+const isLegacyCromptonInverter = (value: unknown): boolean =>
+  norm(String(value ?? '')).replace(/\s/g, '') === '3.6kw';
+
+/**
+ * Pricing-tables read fix: stored Crompton set dcr rows / presets still on the old fixed 3.6kW
+ * inverter → inverter matching the set (3kW / 5kW). Other values are left as saved.
+ */
+export const alignCromptonPricingRows = <T>(rows: T[], brandKey: 'panelType' | 'panelBrand'): T[] =>
+  rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    if (!isCromptonSetLabel(r?.[brandKey]) || !isLegacyCromptonInverter(r.inverterSize)) return row;
+    const size = cromptonInverterSizeFor(r.systemSize);
+    if (!size) return row;
+    const next: Record<string, unknown> = { ...r, inverterSize: size };
+    if (typeof r.notes === 'string') next.notes = r.notes.replace(/3\.6\s*kW/i, size);
+    return next as T;
+  });
+
+/** Inverter component list: legacy Crompton 3.6kW price row → 3kW (unless a 3kW row already exists). */
+export const alignCromptonInverterComponents = <T>(rows: T[]): T[] => {
+  const isCrompton = (r: Record<string, unknown>) => norm(String(r?.brand ?? '')) === 'crompton';
+  const has3kW = rows.some((row) => {
+    const r = row as Record<string, unknown>;
+    return isCrompton(r) && String(r.size ?? '').trim() === '3kW';
+  });
+  if (has3kW) return rows;
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    return isCrompton(r) && isLegacyCromptonInverter(r.size) ? ({ ...r, size: '3kW' } as T) : row;
+  });
 };
 
 export const isAllowedCromptonAcdbDcdb = (label: unknown): boolean => {

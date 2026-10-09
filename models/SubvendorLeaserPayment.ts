@@ -39,7 +39,7 @@ class SubvendorLeaserPayment
 
 SubvendorLeaserPayment.init(
   {
-    id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+    id: { type: DataTypes.TEXT, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
     vendorId: { type: DataTypes.UUID, allowNull: false, field: 'vendor_id' },
     date: { type: DataTypes.DATEONLY, allowNull: true },
     amount: { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },

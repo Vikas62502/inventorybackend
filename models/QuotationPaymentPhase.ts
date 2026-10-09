@@ -14,6 +14,10 @@ interface QuotationPaymentPhaseAttributes {
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   transactionId?: string | null;
   note?: string | null;
+  collectDestination?: 'self' | 'chairbord' | null;
+  collectKind?: 'complete' | 'partial' | null;
+  collectSelfAmount?: number | null;
+  collectChairbordAmount?: number | null;
   updatedBy?: string | null;
   updatedAtPhase?: Date | null;
   createdAt?: Date;
@@ -28,6 +32,10 @@ interface QuotationPaymentPhaseCreationAttributes extends Optional<
   | 'paymentMode'
   | 'transactionId'
   | 'note'
+  | 'collectDestination'
+  | 'collectKind'
+  | 'collectSelfAmount'
+  | 'collectChairbordAmount'
   | 'updatedBy'
   | 'updatedAtPhase'
   | 'createdAt'
@@ -49,6 +57,10 @@ class QuotationPaymentPhase
   public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   public transactionId!: string | null;
   public note!: string | null;
+  public collectDestination!: 'self' | 'chairbord' | null;
+  public collectKind!: 'complete' | 'partial' | null;
+  public collectSelfAmount!: number | null;
+  public collectChairbordAmount!: number | null;
   public updatedBy!: string | null;
   public updatedAtPhase!: Date | null;
   public readonly createdAt!: Date;
@@ -106,6 +118,22 @@ QuotationPaymentPhase.init(
     },
     note: {
       type: DataTypes.TEXT,
+      allowNull: true
+    },
+    collectDestination: {
+      type: DataTypes.STRING(16),
+      allowNull: true
+    },
+    collectKind: {
+      type: DataTypes.STRING(16),
+      allowNull: true
+    },
+    collectSelfAmount: {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: true
+    },
+    collectChairbordAmount: {
+      type: DataTypes.DECIMAL(14, 2),
       allowNull: true
     },
     updatedBy: {

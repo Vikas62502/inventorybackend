@@ -22,6 +22,7 @@ import {
 } from '../utils/moduleFieldPermissions';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
+import { collectApiFields } from '../utils/quotationPaymentPhases';
 import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
@@ -645,7 +646,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
         paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
         transactionId: phase.transactionId || null,
-        note: phase.note || null
+        note: phase.note || null,
+        ...collectApiFields(phase)
       });
     }
 
@@ -2065,7 +2067,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
       paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
       transactionId: phase.transactionId || null,
-      note: phase.note || null
+      note: phase.note || null,
+      ...collectApiFields(phase)
     }));
     const amountAfterSubsidyNum = resolveAmountAfterSubsidyForRemaining({
       ...(quotation as any),

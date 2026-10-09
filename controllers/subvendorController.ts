@@ -318,6 +318,8 @@ const leaserVendorPayload = (vendor: Subvendor, payments: SubvendorLeaserPayment
     current_balance: currentBalance,
     leaserPaid: currentBalance,
     leaser_paid: currentBalance,
+    totalPayment: currentBalance,
+    total_payment: currentBalance,
     leaserRemaining: plainVendor.leaserRemaining,
     leaser_remaining: plainVendor.leaserRemaining,
     fileCostPerKw: plainVendor.fileCostPerKw,
@@ -411,10 +413,43 @@ export const replaceVendorLeaser = async (req: Request, res: Response): Promise<
 
     await Subvendor.sequelize!.transaction(async (transaction) => {
       await SubvendorLeaserPayment.destroy({ where: { vendorId: vendor.id }, transaction });
+      const clientIds = parsed.payments.map((p) => p.id).filter((id): id is string => Boolean(id));
+      // A client id still owned by another vendor (e.g. quotation moved) is reassigned to this one.
+      const movedFrom = clientIds.length
+        ? await SubvendorLeaserPayment.findAll({
+            where: { id: { [Op.in]: clientIds }, vendorId: { [Op.ne]: vendor.id } },
+            attributes: ['vendorId'],
+            transaction
+          })
+        : [];
       if (parsed.payments.length) {
         await SubvendorLeaserPayment.bulkCreate(
           parsed.payments.map((p) => ({ ...p, vendorId: vendor.id, updatedBy })),
-          { transaction }
+          {
+            transaction,
+            updateOnDuplicate: [
+              'vendorId',
+              'date',
+              'amount',
+              'type',
+              'remark',
+              'customerIds',
+              'sortOrder',
+              'updatedBy',
+              'updatedAt'
+            ]
+          }
+        );
+      }
+      for (const otherVendorId of new Set(movedFrom.map((row) => row.vendorId))) {
+        const remainingRows = await SubvendorLeaserPayment.findAll({
+          where: { vendorId: otherVendorId },
+          attributes: ['amount'],
+          transaction
+        });
+        await Subvendor.update(
+          { leaserPaid: sumLeaserAmounts(remainingRows) },
+          { where: { id: otherVendorId }, transaction }
         );
       }
       await vendor.update(

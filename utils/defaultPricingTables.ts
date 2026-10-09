@@ -131,18 +131,18 @@ export const JUNE_2026_DCR_PRICING_DEFAULTS = [
     panelType: 'Tata DCR',
     price: 485000
   },
-  /** Crompton DCR set — Premier Energy 600–610W + Crompton 3.6kW (§27) */
+  /** Crompton DCR set — Premier Energy 600–610W + Crompton inverter matching the set (3kW / 5kW) */
   {
     systemSize: '3kW',
     phase: '1-Phase' as const,
-    inverterSize: '3.6kW',
+    inverterSize: '3kW',
     panelType: 'Crompton set',
     price: 210000
   },
   {
     systemSize: '5kW',
     phase: '1-Phase' as const,
-    inverterSize: '3.6kW',
+    inverterSize: '5kW',
     panelType: 'Crompton set',
     price: 295000
   }
@@ -590,7 +590,7 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     panelBrand: 'Crompton set',
     panelSize: '610W',
     inverterBrand: 'Crompton',
-    inverterSize: '3.6kW',
+    inverterSize: '3kW',
     inverterType: 'String Inverter',
     structureType: 'GI Structure',
     structureSize: '3kW',
@@ -609,7 +609,7 @@ export const JUNE_2026_SYSTEM_CONFIG_DEFAULTS = [
     panelBrand: 'Crompton set',
     panelSize: '610W',
     inverterBrand: 'Crompton',
-    inverterSize: '3.6kW',
+    inverterSize: '5kW',
     inverterType: 'String Inverter',
     structureType: 'GI Structure',
     structureSize: '5kW',

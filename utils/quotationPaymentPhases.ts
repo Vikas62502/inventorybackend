@@ -1,7 +1,45 @@
 import { Request } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { QuotationPaymentPhase } from '../models/index-quotation';
-import { normalizePaymentModeInput } from './paymentMode';
+import {
+  CollectDestination,
+  CollectKind,
+  normalizeCollectFields,
+  normalizePaymentModeInput
+} from './paymentMode';
+
+type CollectSource = {
+  collectDestination?: unknown;
+  collectKind?: unknown;
+  collectSelfAmount?: unknown;
+  collectChairbordAmount?: unknown;
+  paymentMode?: unknown;
+  paidAmount?: unknown;
+};
+
+const collectFieldsFor = (row: CollectSource) =>
+  normalizeCollectFields(
+    {
+      destination: row.collectDestination,
+      kind: row.collectKind,
+      selfAmount: row.collectSelfAmount,
+      chairbordAmount: row.collectChairbordAmount
+    },
+    row.paymentMode,
+    row.paidAmount
+  );
+
+/** GET echo for a stored phase — camel + snake; all null unless Cash/UPI (legacy null → chairbord). */
+export const collectApiFields = (row: CollectSource) => {
+  const c = collectFieldsFor(row);
+  return {
+    ...c,
+    collect_destination: c.collectDestination,
+    collect_kind: c.collectKind,
+    collect_self_amount: c.collectSelfAmount,
+    collect_chairbord_amount: c.collectChairbordAmount
+  };
+};
 
 export type PaymentPhaseRecord = {
   phaseNumber: number;
@@ -14,6 +52,14 @@ export type PaymentPhaseRecord = {
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   transactionId?: string | null;
   note?: string | null;
+  collectDestination?: CollectDestination | null;
+  collectKind?: CollectKind | null;
+  collectSelfAmount?: number | null;
+  collectChairbordAmount?: number | null;
+  collect_destination?: CollectDestination | null;
+  collect_kind?: CollectKind | null;
+  collect_self_amount?: number | null;
+  collect_chairbord_amount?: number | null;
   updatedBy?: string | null;
   updatedAt?: string | null;
 };
@@ -41,9 +87,14 @@ export const serializePaymentPhaseRow = (row: {
   paymentMode?: string | null;
   transactionId?: string | null;
   note?: string | null;
+  collectDestination?: string | null;
+  collectKind?: string | null;
+  collectSelfAmount?: number | string | null;
+  collectChairbordAmount?: number | string | null;
   updatedBy?: string | null;
   updatedAtPhase?: Date | string | null;
 }): PaymentPhaseRecord => ({
+  ...collectApiFields(row),
   phaseNumber: Number(row.phaseNumber),
   phaseName: String(row.phaseName || ''),
   amount: Number(row.amount || 0),
@@ -72,6 +123,7 @@ const phaseRowPayload = (quotationId: string, phase: PaymentPhaseRecord, actorId
   paymentMode: phase.paymentMode || null,
   transactionId: phase.transactionId || null,
   note: phase.note || null,
+  ...collectFieldsFor(phase),
   updatedBy: actorId,
   updatedAtPhase: new Date()
 });

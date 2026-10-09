@@ -218,6 +218,8 @@ const parseCustomerIds = (raw: unknown): string[] => {
 };
 
 export type LeaserPaymentInput = {
+  /** Client id kept verbatim (e.g. `lp-self-{quotationId}-{phaseNumber}`); absent → server UUID. */
+  id?: string;
   date: string | null;
   amount: number;
   type: string;
@@ -244,7 +246,9 @@ export const parseLeaserPayments = (
     const date = parseLeaserDate(row.date ?? row.paymentDate ?? row.payment_date);
     if (date === undefined) return { ok: false, message: `payments[${i}].date is not a valid date` };
     const sortRaw = Number(row.sortOrder ?? row.sort_order ?? row.paymentNumber ?? row.payment_number);
+    const id = str(row.id ?? row.key).slice(0, 255);
     payments.push({
+      ...(id ? { id } : {}),
       date,
       amount: roundInr(row.amount),
       type: str(row.type ?? row.paymentType ?? row.payment_type).slice(0, 64),
@@ -253,7 +257,13 @@ export const parseLeaserPayments = (
       sortOrder: Number.isInteger(sortRaw) && sortRaw > 0 ? sortRaw : i + 1
     });
   }
-  return { ok: true, payments };
+  // Same id twice in one save → keep the last occurrence.
+  const lastIndexById = new Map<string, number>();
+  payments.forEach((p, i) => {
+    if (p.id) lastIndexById.set(p.id, i);
+  });
+  const deduped = payments.filter((p, i) => !p.id || lastIndexById.get(p.id) === i);
+  return { ok: true, payments: deduped };
 };
 
 export const publicLeaserPayment = (row: RowLike) => {

@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ALLOWED_PAYMENT_MODES, normalizePaymentModeInput } from '../utils/paymentMode';
+import {
+  ALLOWED_PAYMENT_MODES,
+  normalizeCollectFields,
+  normalizePaymentModeInput,
+  pickCollectInput
+} from '../utils/paymentMode';
 import { normalizeSubsidyChequesFromRequestBody } from '../utils/subsidyChequesNormalize';
 import {
   hasPdfPanelRangeKey,
@@ -441,7 +446,15 @@ const rawPaymentPhaseSchema = z.object({
   paymentMode: z.union([z.string(), z.null()]).optional(),
   transactionId: z.union([z.string(), z.null()]).optional(),
   transaction_id: z.union([z.string(), z.null()]).optional(),
-  note: z.union([z.string(), z.null()]).optional()
+  note: z.union([z.string(), z.null()]).optional(),
+  collectDestination: z.union([z.string(), z.null()]).optional(),
+  collect_destination: z.union([z.string(), z.null()]).optional(),
+  collectKind: z.union([z.string(), z.null()]).optional(),
+  collect_kind: z.union([z.string(), z.null()]).optional(),
+  collectSelfAmount: z.union([z.number(), z.string(), z.null()]).optional(),
+  collect_self_amount: z.union([z.number(), z.string(), z.null()]).optional(),
+  collectChairbordAmount: z.union([z.number(), z.string(), z.null()]).optional(),
+  collect_chairbord_amount: z.union([z.number(), z.string(), z.null()]).optional()
 });
 
 const resolvePhasePaid = (p: z.infer<typeof rawPaymentPhaseSchema>): number =>
@@ -576,7 +589,8 @@ export const updatePaymentDetailsSchema = z
         note:
           p.note === undefined || p.note === null
             ? undefined
-            : String(p.note).trim()
+            : String(p.note).trim(),
+        ...normalizeCollectFields(pickCollectInput(p), paymentMode, paidAmount)
       };
     });
     const subsidyCheques =
