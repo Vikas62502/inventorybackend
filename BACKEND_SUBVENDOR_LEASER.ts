@@ -57,7 +57,7 @@ const listResponse = {
         vendorId: 'uuid', vendor_id: 'uuid', dealerId: 'dealer-id', dealer_id: 'dealer-id',
         currentBalance: 50000, current_balance: 50000,
         leaserPaid: 50000, leaser_paid: 50000,
-        totalPayment: 50000, total_payment: 50000, // statement "Total payment"; Total remaining = Total profit − this (FE)
+        totalPayment: 50000, total_payment: 50000, // statement "Total payment"; Total remaining = Profit vendor − this (FE, §BN)
         leaserRemaining: 30000, leaser_remaining: 30000,
         fileCostPerKw: 1000, file_cost_per_kw: 1000
       }
@@ -69,7 +69,8 @@ const listResponse = {
  *   PUT /subvendors/:id/leaser              → replace ALL payments for that vendor (transaction)
  */
 const putBody = {
-  leaserRemaining: 30000, // optional (snake leaser_remaining ok); omitted keeps stored value
+  leaserRemaining: 30000, // optional (snake leaser_remaining ok); omitted keeps stored value.
+  //   Stored as sent (FE: Profit vendor − Total payment). Server never derives it (not from profit_ratio).
   payments: [
     // also accepted: { items }, { rows }, or a bare array
     {
@@ -109,4 +110,21 @@ const vendorResponse = {
  *   2. PUT two payments (20,000 + 30,000) → balance 50,000; refresh / other login → same order.
  *   3. PUT [] → balance 0.
  *   4. PUT bad date → 400 VAL_LEASER, previous payments untouched.
+ */
+
+/**
+ * -----------------------------------------------------------------------------
+ * §BN (Oct 2026) — Office Inside table cost vs vendor cost — two separate amounts
+ * -----------------------------------------------------------------------------
+ *   | Where                         | Persisted on                               | Formula                         |
+ *   | Office Inside table / Excel   | quotations.site_cost (siteCost / site_cost)| PI + others                     |
+ *   | Subvendor dealer leaser       | subvendor_ledger.cost_of_site (costOfSite) | PI + file + GST + others        |
+ *   Profit (table) = subtotal − siteCost · Profit vendor = subtotal − costOfSite · Total remaining = Profit vendor − Total payment.
+ *   All maths FE-only. Backend stores each as sent:
+ *     - PATCH /quotations/:id/payment-details { siteCost } → quotations.site_cost only (echoed on quotation + admin list / by-id)
+ *     - PATCH /admin/subvendors/ledger/:quotationId { pi, others, fileCharges, gstCharges, proposal, costOfSite }
+ *       → ledger only (echoed camel + snake on GET ledger)
+ *     - Neither handler writes the other's column; leaser_remaining only changes when sent on the leaser PUT
+ *       (never derived from profit_ratio).
+ *   Example: PI 153775, file 3000, GST 5004 → table siteCost 153775, vendor costOfSite 161779.
  */

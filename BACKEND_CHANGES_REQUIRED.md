@@ -2289,7 +2289,7 @@ Input accepts camelCase or snake_case (`dealer_id`, `contact_name`, `loan_amount
 
 Errors: `AUTH_004` (403 non-admin) · `VAL_KIND` · `VAL_DEALER` · `VAL_NAME` · `SUBVENDOR_DUP` · `SUBVENDOR_404` · `QUOTATION_404`.
 
-**Oct 2026 — cost-of-site breakdown (verified, no change):** FE sends office inside `{ proposal, fileCharges, pi, gstCharges, others, costOfSite }` and normal vendor `{ pi, others, costOfSite }`. Ledger PATCH upserts by `quotation_id` even when the dealer has no office-inside subvendor (`vendor_id` null); omitted keys keep their values. GET ledger LEFT JOINs the vendor, so null-vendor rows are returned (with `vendorId=<dealerId>` they match via the quotation's dealer). The derived total is also saved on `quotations.site_cost` via `PATCH /quotations/:id/payment-details { siteCost, site_cost }` (§30) and echoed on list + detail. GST `(proposal − PI) × 8.9%` and Profit `subtotal − cost of site` stay FE-only.
+**Oct 2026 — cost-of-site breakdown (verified, no change):** FE sends office inside `{ proposal, fileCharges, pi, gstCharges, others, costOfSite }` and normal vendor `{ pi, others, costOfSite }`. Ledger PATCH upserts by `quotation_id` even when the dealer has no office-inside subvendor (`vendor_id` null); omitted keys keep their values. GET ledger LEFT JOINs the vendor, so null-vendor rows are returned (with `vendorId=<dealerId>` they match via the quotation's dealer). `quotations.site_cost` (`PATCH /quotations/:id/payment-details { siteCost, site_cost }`, §30) is a **separate** amount — the Office Inside table Cost of site (PI + others), not the ledger `costOfSite` (see §BO). GST `(proposal − PI) × 8.9%` and Profit `subtotal − cost of site` stay FE-only.
 
 ### Done when
 
@@ -2558,6 +2558,27 @@ No new routes. Persist what the SPA sends.
 - [x] Crompton 3kW set with 3kW inverter and 5kW set with 5kW inverter save and GET-echo unchanged
 - [x] Old 3.6kW quotations still echo 3.6kW and price 210000 / 295000
 - [x] Pricing-tables presets show 3kW / 5kW Crompton inverters
+
+---
+
+## §BO — Office Inside table cost/profit vs vendor cost/profit — Oct 2026
+
+**Status: verified, no code change** — HANDOFF **§64** · `BACKEND_SUBVENDOR_LEASER.ts` (FE notes label this §BN / HANDOFF §60; those numbers are taken here)
+
+No new routes. Two amounts stay separate:
+
+| Where | Persisted on | Formula (FE) |
+|-------|--------------|--------------|
+| Office Inside table / Excel | `quotations.site_cost` (`siteCost` / `site_cost`) | PI + others; Profit = subtotal − that |
+| Subvendor dealer leaser | ledger `cost_of_site` (`costOfSite`) | PI + file + GST + others; Profit vendor = subtotal − that |
+| Total remaining | FE (or `leaser_remaining` if sent) | Profit vendor − Total payment |
+
+- `siteCost` echoed (camel + snake) on quotation + admin list / by-id (`quotationPaymentApiFields`).
+- Ledger GET echoes `pi`, `others`, `fileCharges`, `gstCharges`, `proposal`, `costOfSite` (camel + snake).
+- `PATCH /payment-details` writes only `quotations.site_cost`; `PATCH /admin/subvendors/ledger/:quotationId` writes only the ledger row — neither copies into the other.
+- `leaser_remaining` is stored only when sent on `PUT /admin/subvendors/:id/leaser`; never derived from `profit_ratio`.
+- Example: PI 153775, file 3000, GST 5004 → table `siteCost` 153775, vendor `costOfSite` 161779.
+- Note: `payment-details` still accepts the legacy §30 alias `costOfSite` for `siteCost` when `siteCost` / `site_cost` are absent — the SPA should send `siteCost` there.
 
 ---
 

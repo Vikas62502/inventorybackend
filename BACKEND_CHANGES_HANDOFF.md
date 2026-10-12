@@ -100,6 +100,7 @@
 | 88 | Medium | Office Inside Excel — nested dealer (mobile / phone) + install / meter dates | **Done** | §61 / REQUIRED §BL / `BACKEND_PAYMENT_EXCEL_JOURNEY_STATUS.ts` |
 | 89 | High | Office Inside "Collected by" — phase destination / kind / self + Chairbord split + TEXT leaser ids | **Done** | §62 / REQUIRED §BM / `BACKEND_COLLECT_SELF_LEASER.ts` |
 | 90 | High | Crompton set inverter 3kW / 5kW (no 3.6kW requirement) | **Done** | §63 / REQUIRED §BN / `BACKEND_CROMPTON_DCR_SET.md` |
+| 91 | Medium | Office Inside table `siteCost` (PI + others) vs ledger vendor `costOfSite` (PI + file + GST + others) | **Done** (verified) | §64 / REQUIRED §BO / `BACKEND_SUBVENDOR_LEASER.ts` |
 
 **Deploy before QA:**
 
@@ -3553,4 +3554,16 @@ Migrations `20261008120000-collect-destination-and-leaser-text-id.js`, `20261009
 | Pricing tables | Defaults + seed: 3kW set → 3kW inverter, 5kW set → 5kW; GET rewrites stored Crompton set rows / presets still on 3.6kW; Crompton inverter component 3.6kW → 3kW (₹42,000) |
 
 Code: `utils/quotationCromptonDcr.ts`, `utils/defaultPricingTables.ts`, `controllers/configController.ts`, `BACKEND_PRICING_TABLES_SEED.json`. No migration.
+
+## 64. Office Inside table cost/profit vs vendor cost/profit (§BO) — Oct 2026
+
+**Status: verified, no code change** — REQUIRED **§BO** · `BACKEND_SUBVENDOR_LEASER.ts`
+
+| Item | Detail |
+|------|--------|
+| Table Cost of site | `quotations.site_cost` = PI + others (`PATCH …/payment-details { siteCost }`); echoed on quotation + admin list / by-id |
+| Vendor Cost of site | ledger `cost_of_site` = PI + file + GST + others (`PATCH /admin/subvendors/ledger/:quotationId`); GET echoes pi / others / fileCharges / gstCharges / proposal / costOfSite |
+| Separation | Neither handler writes the other column |
+| Total remaining | FE: Profit vendor − Total payment; `leaser_remaining` stored only when sent, never from `profit_ratio` |
+| Example | PI 153775, file 3000, GST 5004 → siteCost 153775, costOfSite 161779 |
 
