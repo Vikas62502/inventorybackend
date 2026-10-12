@@ -2582,6 +2582,28 @@ No new routes. Two amounts stay separate:
 
 ---
 
+## §BP — Google Sheets: credentials missing vs invalid vs Google 403 — Oct 2026
+
+**Status: implemented** — HANDOFF **§65** · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` (FE notes label this §BO / HANDOFF §61; those numbers are taken here)
+
+Before: invalid `GOOGLE_SERVICE_ACCOUNT_JSON` threw the same "not configured" error as a missing env (503 `CFG_GOOGLE_SHEETS`), and Google 403 / JWT failures came back as 500 `SYS_001`, so the SPA showed "Google credentials pending" even with the env set.
+
+No new routes. `POST /hr/sheet-sources/discover`, `POST /hr/sheet-sources/:id/sync`, `POST /hr/sheet-sources/sync-all` return `{ success: false, error: { code, message } }`:
+
+| When | HTTP | error.code |
+|------|------|------------|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` and `GOOGLE_APPLICATION_CREDENTIALS` both empty (and no `secrets/` key file) | 503 | `GOOGLE_SHEETS_CREDENTIALS_MISSING` |
+| JSON set but not valid / not a service account key; or credentials path missing | 500 | `GOOGLE_SHEETS_CREDENTIALS_INVALID` |
+| Google 403 | 500 | `GOOGLE_SHEETS_PERMISSION_DENIED` — Google's message + "share with `<client_email>` as Editor" |
+| Other Google API / JWT error | 500 | `GOOGLE_SHEETS_API_ERROR` — Google's message |
+
+- `getSheetsClient` (`utils/hrSheetGoogleAuth.ts`) is the single helper; `googleSheetsErrorResponse` maps errors.
+- dotenv-expanded newlines in the private key are re-escaped before `JSON.parse`.
+- Sync failures still write `lastSyncStatus: 'error'` / `lastSyncError` (except MISSING). Sync-all per-tab rows add `errorCode` / `error_code`.
+- Ops: restart the API after `.env` changes; share the spreadsheet with the service account email as **Editor**.
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

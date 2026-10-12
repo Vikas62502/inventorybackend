@@ -101,6 +101,7 @@
 | 89 | High | Office Inside "Collected by" — phase destination / kind / self + Chairbord split + TEXT leaser ids | **Done** | §62 / REQUIRED §BM / `BACKEND_COLLECT_SELF_LEASER.ts` |
 | 90 | High | Crompton set inverter 3kW / 5kW (no 3.6kW requirement) | **Done** | §63 / REQUIRED §BN / `BACKEND_CROMPTON_DCR_SET.md` |
 | 91 | Medium | Office Inside table `siteCost` (PI + others) vs ledger vendor `costOfSite` (PI + file + GST + others) | **Done** (verified) | §64 / REQUIRED §BO / `BACKEND_SUBVENDOR_LEASER.ts` |
+| 92 | High | Google Sheets credential errors: MISSING (503) vs INVALID / 403 / API (500) | **Done** | §65 / REQUIRED §BP / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
 
 **Deploy before QA:**
 
@@ -3566,4 +3567,17 @@ Code: `utils/quotationCromptonDcr.ts`, `utils/defaultPricingTables.ts`, `control
 | Separation | Neither handler writes the other column |
 | Total remaining | FE: Profit vendor − Total payment; `leaser_remaining` stored only when sent, never from `profit_ratio` |
 | Example | PI 153775, file 3000, GST 5004 → siteCost 153775, costOfSite 161779 |
+
+## 65. Google Sheets — credentials missing vs invalid vs Google 403 (§BP) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BP** · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts`
+
+| When | HTTP | error.code |
+|------|------|------------|
+| Both credential env vars empty (no key file) | 503 | `GOOGLE_SHEETS_CREDENTIALS_MISSING` |
+| JSON invalid / not a service account key / path missing | 500 | `GOOGLE_SHEETS_CREDENTIALS_INVALID` |
+| Google 403 | 500 | `GOOGLE_SHEETS_PERMISSION_DENIED` (+ share-with-email hint) |
+| Other Google / JWT | 500 | `GOOGLE_SHEETS_API_ERROR` (Google's message) |
+
+Discover / Sync / Sync-all body: `{ success: false, error: { code, message } }`. Code: `utils/hrSheetGoogleAuth.ts`, `controllers/hrSheetSourceController.ts`, `utils/sheetAutoSyncCron.ts`. Restart API after `.env` edits.
 

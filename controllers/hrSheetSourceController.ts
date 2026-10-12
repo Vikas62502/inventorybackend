@@ -14,6 +14,7 @@ import {
   GoogleSheetsNotConfiguredError,
   resolveSpreadsheetId
 } from '../utils/hrSheetSourceSync';
+import { googleSheetsErrorResponse, isGoogleSheetsCredentialsError } from '../utils/hrSheetGoogleAuth';
 import { mapSheetSourceForApi, mapSocialLeadForApi } from '../utils/hrSheetSourceApi';
 import { fetchHrUploadBatchCounts, isValidHrCallingAssigneeDealerId, resolveAssignedByUserId } from './callingLeadController';
 import { sequelize, User } from '../models';
@@ -126,18 +127,13 @@ export const discoverHrSheetTabs = async (req: Request, res: Response): Promise<
       tabs
     });
   } catch (error) {
-    if (error instanceof GoogleSheetsNotConfiguredError) {
-      res.status(503).json({
-        success: false,
-        error: { code: error.code, message: error.message }
-      });
-      return;
+    const mapped = googleSheetsErrorResponse(error, 'Failed to discover sheet tabs');
+    if (!(error instanceof GoogleSheetsNotConfiguredError)) {
+      logError('discoverHrSheetTabs error', error, { code: mapped.code });
     }
-    logError('discoverHrSheetTabs error', error);
-    const message = error instanceof Error ? error.message : 'Failed to discover sheet tabs';
-    res.status(500).json({
+    res.status(mapped.status).json({
       success: false,
-      error: { code: 'SYS_001', message }
+      error: { code: mapped.code, message: mapped.message }
     });
   }
 };
@@ -210,28 +206,21 @@ export const postHrSheetSourceSync = async (req: Request, res: Response): Promis
     const result = await syncSheetTabSource(row, { assignedByUserId });
     res.json({ success: true, data: result });
   } catch (error) {
-    if (error instanceof GoogleSheetsNotConfiguredError) {
-      res.status(503).json({
-        success: false,
-        error: { code: error.code, message: error.message }
-      });
-      return;
-    }
-    logError('postHrSheetSourceSync error', error, { id: req.params.id });
-    const row = await CallingLeadSheetSource.findByPk(req.params.id);
-    if (row) {
-      await row.update({
-        lastSyncStatus: 'error',
-        lastSyncError: error instanceof Error ? error.message : 'Sync failed',
-        lastSyncedAt: new Date()
-      });
-    }
-    res.status(500).json({
-      success: false,
-      error: {
-        code: 'SYS_001',
-        message: error instanceof Error ? error.message : 'Sync failed'
+    const mapped = googleSheetsErrorResponse(error, 'Sync failed');
+    if (!(error instanceof GoogleSheetsNotConfiguredError)) {
+      logError('postHrSheetSourceSync error', error, { id: req.params.id, code: mapped.code });
+      const row = await CallingLeadSheetSource.findByPk(req.params.id);
+      if (row) {
+        await row.update({
+          lastSyncStatus: 'error',
+          lastSyncError: mapped.message,
+          lastSyncedAt: new Date()
+        });
       }
+    }
+    res.status(mapped.status).json({
+      success: false,
+      error: { code: mapped.code, message: mapped.message }
     });
   }
 };
@@ -265,7 +254,7 @@ export const runHrSheetSourcesSyncAll = async (opts?: {
       });
     }
   } catch (error) {
-    if (error instanceof GoogleSheetsNotConfiguredError) throw error;
+    if (isGoogleSheetsCredentialsError(error)) throw error;
     logError('sync-all live-tab prune failed (continuing)', error, { spreadsheetId });
   }
 
@@ -311,7 +300,7 @@ export const runHrSheetSourcesSyncAll = async (opts?: {
         ...result
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Sync failed';
+      const { code, message } = googleSheetsErrorResponse(error, 'Sync failed');
       await row.update({
         lastSyncStatus: 'error',
         lastSyncError: message,
@@ -322,7 +311,9 @@ export const runHrSheetSourcesSyncAll = async (opts?: {
         sheetTabName: row.sheetTabName,
         sheet_tab_name: row.sheetTabName,
         ok: false,
-        error: message
+        error: message,
+        errorCode: code,
+        error_code: code
       });
     }
   }
@@ -358,20 +349,13 @@ export const postHrSheetSourcesSyncAll = async (req: Request, res: Response): Pr
       data
     });
   } catch (error) {
-    if (error instanceof GoogleSheetsNotConfiguredError) {
-      res.status(503).json({
-        success: false,
-        error: { code: error.code, message: error.message }
-      });
-      return;
+    const mapped = googleSheetsErrorResponse(error, 'Sync-all failed');
+    if (!(error instanceof GoogleSheetsNotConfiguredError)) {
+      logError('postHrSheetSourcesSyncAll error', error, { code: mapped.code });
     }
-    logError('postHrSheetSourcesSyncAll error', error);
-    res.status(500).json({
+    res.status(mapped.status).json({
       success: false,
-      error: {
-        code: 'SYS_001',
-        message: error instanceof Error ? error.message : 'Sync-all failed'
-      }
+      error: { code: mapped.code, message: mapped.message }
     });
   }
 };

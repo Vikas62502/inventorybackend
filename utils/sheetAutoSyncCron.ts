@@ -1,5 +1,5 @@
 import { logError, logInfo } from './loggerHelper';
-import { GoogleSheetsNotConfiguredError } from './hrSheetGoogleAuth';
+import { GoogleSheetsNotConfiguredError, googleSheetsErrorResponse } from './hrSheetGoogleAuth';
 
 const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
 
@@ -40,7 +40,9 @@ export const startSheetAutoSyncCron = (): void => {
       if (error instanceof GoogleSheetsNotConfiguredError) {
         logInfo('Sheet auto-sync skipped — Google Sheets not configured');
       } else {
-        logError('Sheet auto-sync cron failed', error);
+        logError('Sheet auto-sync cron failed', error, {
+          code: googleSheetsErrorResponse(error, 'Sync-all failed').code
+        });
       }
     } finally {
       running = false;

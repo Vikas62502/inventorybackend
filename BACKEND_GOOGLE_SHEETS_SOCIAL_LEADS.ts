@@ -19,6 +19,21 @@
  *   - NEVER commit service account JSON to git.
  *   - Share spreadsheet with service account email (Editor).
  *   - Env: GOOGLE_SERVICE_ACCOUNT_JSON (stringified) OR GOOGLE_APPLICATION_CREDENTIALS path.
+ *   - Restart the API process after editing .env (Node only reads it at boot).
+ *
+ * Credential errors (§BO FE / REQUIRED §BP, Oct 2026) — Discover, Sync, Sync-all all return
+ * { success: false, error: { code, message } }:
+ *   | When                                                        | HTTP | error.code                          |
+ *   | JSON + APPLICATION_CREDENTIALS empty and no secrets/ key    | 503  | GOOGLE_SHEETS_CREDENTIALS_MISSING   |
+ *   | JSON set but unparseable / no client_email or private_key,  | 500  | GOOGLE_SHEETS_CREDENTIALS_INVALID   |
+ *   |   or APPLICATION_CREDENTIALS path does not exist            |      |                                     |
+ *   | Google 403 (sheet not shared)                               | 500  | GOOGLE_SHEETS_PERMISSION_DENIED     |
+ *   |                                                             |      |   (Google message + "share with <client_email> as Editor") |
+ *   | Other Google API / JWT failure                              | 500  | GOOGLE_SHEETS_API_ERROR (Google's message) |
+ *   Only MISSING means "env not added". Real code: utils/hrSheetGoogleAuth.ts (getSheetsClient,
+ *   googleSheetsErrorResponse); handlers in controllers/hrSheetSourceController.ts.
+ *   Raw newlines that dotenv expands inside the private key are re-escaped before JSON.parse.
+ *   Sync-all per-tab failures carry errorCode / error_code alongside error.
  *
  * =============================================================================
  */
