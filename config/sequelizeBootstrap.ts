@@ -75,6 +75,41 @@ const ensurePaymentPhaseCollectDestinationColumn = async (): Promise<void> => {
   }
 };
 
+/** Social vs Calling source snapshot on each calling action; backfills rows saved before the columns existed. */
+const ensureCallingActionSourceColumns = async (): Promise<void> => {
+  try {
+    await sequelize.query(`
+      ALTER TABLE calling_action_history
+        ADD COLUMN IF NOT EXISTS "sourceType" VARCHAR(32) NULL,
+        ADD COLUMN IF NOT EXISTS "platform" VARCHAR(64) NULL,
+        ADD COLUMN IF NOT EXISTS "campaignName" VARCHAR(256) NULL,
+        ADD COLUMN IF NOT EXISTS "sheetSourceId" VARCHAR(50) NULL,
+        ADD COLUMN IF NOT EXISTS "uploadFileName" VARCHAR(255) NULL,
+        ADD COLUMN IF NOT EXISTS "externalId" VARCHAR(255) NULL;
+    `);
+    await sequelize.query(CALLING_ACTION_SOURCE_BACKFILL_SQL);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure calling_action_history source columns', { message });
+  }
+};
+
+const CALLING_ACTION_SOURCE_BACKFILL_SQL = `
+  UPDATE calling_action_history h
+     SET "sourceType" = CASE
+           WHEN l."sheetSourceId" IS NOT NULL THEN COALESCE(NULLIF(b."sourceType", 'csv'), 'google_sheet')
+           ELSE COALESCE(NULLIF(b."sourceType", ''), 'csv')
+         END,
+         "platform" = l."platform",
+         "campaignName" = l."campaignName",
+         "sheetSourceId" = l."sheetSourceId",
+         "uploadFileName" = b."fileName",
+         "externalId" = l."externalId"
+    FROM calling_leads l
+    LEFT JOIN calling_lead_upload_batches b ON b.id = l."batchId"
+   WHERE h."leadId" = l.id AND h."sourceType" IS NULL;
+`;
+
 const ensureProductUnitColumn = async (): Promise<void> => {
   try {
     await sequelize.query(
@@ -269,6 +304,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureSubvendorTables();
     await ensureIncludeLithiumBatteryColumn();
     await ensurePaymentPhaseCollectDestinationColumn();
+    await ensureCallingActionSourceColumns();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

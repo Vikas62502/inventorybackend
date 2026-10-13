@@ -95,3 +95,80 @@ export const buildDealerQueueSocialFields = (
     raw_json: lead.rawPayload || null
   };
 };
+
+const SOCIAL_SOURCE_TYPES = new Set(['google_sheet', 'social_media', 'social', 'meta']);
+const SOCIAL_PLATFORMS = new Set(['ig', 'fb', 'meta', 'instagram', 'facebook']);
+
+const textOrNull = (value: unknown): string | null => {
+  const s = String(value ?? '').trim();
+  return s ? s : null;
+};
+
+export type CallingActionSource = {
+  sourceType: string;
+  platform: string | null;
+  campaignName: string | null;
+  sheetSourceId: string | null;
+  uploadFileName: string | null;
+  externalId: string | null;
+};
+
+/** Source snapshot for a new calling action (PATCH) — from the lead + its upload batch. */
+export const resolveCallingActionSource = (
+  lead: Partial<CallingLead> | null | undefined,
+  batch?: { fileName?: string | null; sourceType?: string | null } | null
+): CallingActionSource => {
+  const sheetSourceId = textOrNull(lead?.sheetSourceId);
+  const batchType = textOrNull(batch?.sourceType);
+  const sourceType = sheetSourceId
+    ? batchType && batchType !== 'csv'
+      ? batchType
+      : 'google_sheet'
+    : batchType || 'csv';
+  return {
+    sourceType,
+    platform: textOrNull(lead?.platform),
+    campaignName: textOrNull(lead?.campaignName),
+    sheetSourceId,
+    uploadFileName: textOrNull(batch?.fileName),
+    externalId: textOrNull(lead?.externalId)
+  };
+};
+
+/**
+ * Calling-action echo (§BS): Social Media vs Calling data source, camel + snake.
+ * Prefers the snapshot stored on the action; falls back to the joined lead for rows saved before the snapshot.
+ * Social = google_sheet / meta / social sourceType, any sheetSourceId, or ig / fb / meta platform. CSV stays csv.
+ */
+export const callingActionSourceFields = (row: Record<string, any>) => {
+  const lead = row.lead || null;
+  const sheetSourceId = textOrNull(row.sheetSourceId ?? row.sheet_source_id ?? lead?.sheetSourceId);
+  const sourceType =
+    textOrNull(row.sourceType ?? row.source_type) || (sheetSourceId ? 'google_sheet' : lead ? 'csv' : null);
+  const platform = textOrNull(row.platform ?? lead?.platform);
+  const campaignName = textOrNull(row.campaignName ?? row.campaign_name ?? lead?.campaignName);
+  const uploadFileName = textOrNull(row.uploadFileName ?? row.upload_file_name);
+  const externalId = textOrNull(row.externalId ?? row.external_id ?? lead?.externalId);
+  const isSocialMedia =
+    SOCIAL_SOURCE_TYPES.has(String(sourceType || '').toLowerCase()) ||
+    Boolean(sheetSourceId) ||
+    SOCIAL_PLATFORMS.has(String(platform || '').toLowerCase());
+  const leadSource = isSocialMedia ? 'social_media' : 'calling_data';
+  return {
+    sourceType,
+    source_type: sourceType,
+    platform,
+    campaignName,
+    campaign_name: campaignName,
+    sheetSourceId,
+    sheet_source_id: sheetSourceId,
+    uploadFileName,
+    upload_file_name: uploadFileName,
+    externalId,
+    external_id: externalId,
+    isSocialMedia,
+    is_social_media: isSocialMedia,
+    leadSource,
+    lead_source: leadSource
+  };
+};

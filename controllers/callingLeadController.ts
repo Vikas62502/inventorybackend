@@ -31,6 +31,8 @@ import {
 } from '../utils/callingActionSummary';
 import {
   buildDealerQueueSocialFields,
+  callingActionSourceFields,
+  resolveCallingActionSource,
   loadUploadBatchMapByIds
 } from '../utils/callingQueueSocialFields';
 
@@ -1403,16 +1405,8 @@ const callingActionToApiJson = (row: any) => {
     customer_note: row.lead?.customerNote ?? row.customerNote ?? null,
     city: row.lead?.city ?? row.city ?? null,
     state: row.lead?.state ?? row.state ?? null,
-    // §AY / §AN — social identity so analytics can tag sheet leads
-    sheetSourceId: row.lead?.sheetSourceId ?? row.sheetSourceId ?? null,
-    sheet_source_id: row.lead?.sheetSourceId ?? row.sheet_source_id ?? null,
-    sourceType: row.lead?.sheetSourceId
-      ? 'google_sheet'
-      : row.sourceType ?? row.source_type ?? null,
-    source_type: row.lead?.sheetSourceId
-      ? 'google_sheet'
-      : row.sourceType ?? row.source_type ?? null,
-    platform: row.lead?.platform ?? row.platform ?? null
+    // §AY / §AN / §BS — Social Media vs Calling data source (snapshot on the action, else the lead)
+    ...callingActionSourceFields(row)
   };
 };
 
@@ -1815,7 +1809,9 @@ const buildCallingActionsResponse = async (req: Request) => {
       'city',
       'state',
       'address',
-      'kNumber'
+      'kNumber',
+      'campaignName',
+      'externalId'
     ],
     required: false
   };
@@ -4551,11 +4547,21 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
               'sheetSourceId',
               'platform',
               'customerNote',
-              'kNumber'
+              'kNumber',
+              'batchId',
+              'campaignName',
+              'externalId'
             ],
             transaction
           })
         ]);
+        const uploadBatch = lead?.batchId
+          ? await CallingLeadUploadBatch.findByPk(lead.batchId, {
+              attributes: ['fileName', 'sourceType'],
+              transaction
+            })
+          : null;
+        const source = resolveCallingActionSource(lead, uploadBatch);
 
         const dealerName = dealer ? `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim() : null;
         const customerName = lead?.name || null;
@@ -4585,7 +4591,8 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           nextFollowUpAt: effectiveNextFollowUpAt,
           customerName,
           customerMobile,
-          customerAddress
+          customerAddress,
+          ...source
         };
 
         let historyRow: any = null;

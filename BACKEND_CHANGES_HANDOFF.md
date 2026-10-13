@@ -104,6 +104,7 @@
 | 92 | High | Google Sheets credential errors: MISSING (503) vs INVALID / 403 / API (500) | **Done** | §65 / REQUIRED §BP / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
 | 93 | High | Dealer leaser date = installment Due Date; dates echoed `YYYY-MM-DD` | **Done** | §66 / REQUIRED §BQ / `BACKEND_SUBVENDOR_LEASER.ts` |
 | 94 | High | Calling Data tabs overlap (Scheduled ⊂ Connected, Dialled incl. scheduled) + 3-outcome PATCH | **Done** | §67 / REQUIRED §BR / `BACKEND_CALLING_DATA_TABS.ts` |
+| 95 | High | Calling actions echo Social Media vs Calling data source (snapshot at PATCH) | **Done** | §68 / REQUIRED §BS / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
 
 **Deploy before QA:**
 
@@ -3609,4 +3610,18 @@ Code: `utils/dateOnly.ts`, `utils/subvendorApi.ts`, `utils/quotationPaymentPhase
 | Move / Connected edit | Completed lead: latest history row updated; Decision Pending → assignment `rescheduled` |
 
 Code: `controllers/callingLeadController.ts`. ~1–1.5 s per list for dealers with 15–20k called leads.
+
+## 68. Calling actions — Social Media vs Calling data source (§BS) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BS** · `BACKEND_CALLING_SOCIAL_SOURCE.ts` (FE notes label this §BR / HANDOFF §64; those numbers are taken here)
+
+| Item | Detail |
+|------|--------|
+| Fields (camel + snake) | `sourceType`, `platform`, `campaignName`, `sheetSourceId`, `uploadFileName`, `externalId` + `isSocialMedia`, `leadSource` (`social_media` / `calling_data`) |
+| Endpoints | `GET /dealers/me/calling-queue/next\|current` (incl. tab arrays), `GET /dealers/me/calling-actions` (+ `/dialled\|connected\|not-connected`), `GET /admin/calling-actions`, `GET /hr/calling-actions`, PATCH response |
+| Snapshot | `PATCH …/calling-queue/:leadId/action` copies the lead + upload batch source onto the history row |
+| Schema | 6 nullable columns on `calling_action_history`; boot ensure + migration `20261013120000` backfill from `calling_leads` + `calling_lead_upload_batches` |
+| Rule | Social = `sheetSourceId` set / `google_sheet` / meta / ig / fb; CSV stays `csv` |
+
+Code: `models/CallingActionHistory.ts`, `utils/callingQueueSocialFields.ts`, `controllers/callingLeadController.ts`, `config/sequelizeBootstrap.ts`. Dev backfill: 215 `google_sheet` (fb 158, ig 57), 116,661 `csv`.
 

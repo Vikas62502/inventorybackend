@@ -2649,6 +2649,26 @@ No new routes. Tabs overlap; one row per lead, by its latest action:
 
 ---
 
+## §BS — Calling actions echo Social Media vs Calling data source — Oct 2026
+
+**Status: implemented** — HANDOFF **§68** · `BACKEND_CALLING_SOCIAL_SOURCE.ts` (FE notes label this §BR / HANDOFF §64; those numbers are taken here)
+
+No new routes. Every calling-action row and queue lead returns (camel + snake): `sourceType`, `platform`, `campaignName`, `sheetSourceId`, `uploadFileName`, `externalId`, plus `isSocialMedia` and `leadSource` (`social_media` / `calling_data`).
+
+- `GET /dealers/me/calling-queue/next|current` (incl. tab arrays) — from the lead + upload batch (already in place).
+- `GET /dealers/me/calling-actions` (+ dialled / connected / not-connected), `GET /admin/calling-actions`, `GET /hr/calling-actions` — snapshot on the action first, then the joined lead.
+- `PATCH /dealers/me/calling-queue/:leadId/action` — copies the six fields onto the history row, so history stays Social after refresh even if the lead changes.
+- Social = `sheetSourceId` set, `sourceType` `google_sheet` / meta, or platform ig / fb / meta. CSV uploads stay `csv`.
+- Existing history backfilled at boot (`ensureCallingActionSourceColumns`) and by migration `20261013120000-add-source-to-calling-action-history.js`.
+
+### Done when
+
+- [x] Social lead action → `sourceType: google_sheet`, `platform`, `campaignName`, `sheetSourceId` echoed on dealer, admin and HR lists
+- [x] CSV lead action → `sourceType: csv`, `uploadFileName` = CSV file name
+- [x] Rows saved before the snapshot still classify via the lead
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

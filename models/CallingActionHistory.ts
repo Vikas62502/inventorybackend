@@ -21,6 +21,12 @@ interface CallingActionHistoryAttributes {
   customerName?: string | null;
   customerMobile?: string | null;
   customerAddress?: string | null;
+  sourceType?: string | null;
+  platform?: string | null;
+  campaignName?: string | null;
+  sheetSourceId?: string | null;
+  uploadFileName?: string | null;
+  externalId?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -34,6 +40,12 @@ interface CallingActionHistoryCreationAttributes extends Optional<
   | 'statusReason'
   | 'isCustomReason'
   | 'nextFollowUpAt'
+  | 'sourceType'
+  | 'platform'
+  | 'campaignName'
+  | 'sheetSourceId'
+  | 'uploadFileName'
+  | 'externalId'
   | 'createdAt'
   | 'updatedAt'
 > {}
@@ -57,6 +69,12 @@ class CallingActionHistory
   public customerName!: string | null;
   public customerMobile!: string | null;
   public customerAddress!: string | null;
+  public sourceType!: string | null;
+  public platform!: string | null;
+  public campaignName!: string | null;
+  public sheetSourceId!: string | null;
+  public uploadFileName!: string | null;
+  public externalId!: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -127,7 +145,13 @@ CallingActionHistory.init(
     customerAddress: {
       type: DataTypes.TEXT,
       allowNull: true
-    }
+    },
+    sourceType: { type: DataTypes.STRING(32), allowNull: true },
+    platform: { type: DataTypes.STRING(64), allowNull: true },
+    campaignName: { type: DataTypes.STRING(256), allowNull: true },
+    sheetSourceId: { type: DataTypes.STRING(50), allowNull: true },
+    uploadFileName: { type: DataTypes.STRING(255), allowNull: true },
+    externalId: { type: DataTypes.STRING(255), allowNull: true }
   },
   {
     sequelize,
