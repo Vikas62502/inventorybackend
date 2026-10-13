@@ -59,6 +59,8 @@ jobs:
           port: ${{ secrets.PROD_PORT || 22 }}
           script: |
             cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
+            mkdir -p secrets
+            chmod 700 secrets
             cat > .env << EOF
             # Database Configuration
             DB_HOST=${{ secrets.DB_HOST }}
@@ -85,8 +87,38 @@ jobs:
             
             # Production URL
             PROD_URL=${{ secrets.PROD_URL || '' }}
+
+            # Google Sheets → HR Social Media (in-container path; file is bind-mounted)
+            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
+            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
+            CRON_SECRET=${{ secrets.CRON_SECRET }}
             EOF
             chmod 600 .env
+
+      - name: Write Google Sheets service account key
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          raw = os.environ.get("GOOGLE_SA_JSON") or ""
+          if not raw.strip():
+              print("GOOGLE_SERVICE_ACCOUNT_JSON GitHub secret is empty")
+              sys.exit(1)
+          open("google-sheets-service-account.json", "w", encoding="utf-8").write(raw)
+          print("Wrote Google Sheets key file")
+          PY
+
+      - name: Copy Google Sheets key to production server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
+          source: google-sheets-service-account.json
+          target: ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}/secrets
+          overwrite: true
 
       - name: Deploy to production server
         uses: appleboy/ssh-action@v1.0.0
@@ -110,12 +142,20 @@ jobs:
             sudo docker pull "$IMAGE_NAME"
             sudo docker stop "$CONTAINER_NAME" || true
             sudo docker rm "$CONTAINER_NAME" || true
+            KEY_FILE="$DEPLOY_PATH/secrets/google-sheets-service-account.json"
+            if [ ! -s "$KEY_FILE" ]; then
+              echo "Google Sheets key missing at $KEY_FILE"
+              exit 1
+            fi
+            chmod 600 "$KEY_FILE" || true
+
             sudo docker run -d \
               --name "$CONTAINER_NAME" \
               --restart unless-stopped \
               -p 3050:3000 \
               -e PORT=3000 \
               --env-file "$DEPLOY_PATH/.env" \
+              -v "$KEY_FILE:/app/secrets/google-sheets-service-account.json:ro" \
               "$IMAGE_NAME"
 
             sleep 5

@@ -50,6 +50,8 @@ jobs:
           port: ${{ secrets.STAGING_PORT || 22 }}
           script: |
             cd ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
+            mkdir -p secrets
+            chmod 700 secrets
             cat > .env << EOF
             # Database Configuration
             DB_HOST=${{ secrets.DB_HOST }}
@@ -83,6 +85,11 @@ jobs:
             
             # Production URL
             PROD_URL=${{ secrets.STAGING_URL || '' }}
+
+            # Google Sheets → HR Social Media
+            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
+            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
+            CRON_SECRET=${{ secrets.CRON_SECRET }}
             EOF
             chmod 600 .env
 
@@ -91,7 +98,7 @@ jobs:
             grep -E '^(PORT|NODE_ENV|UPLOAD_DIR|MAX_FILE_SIZE|LOG_LEVEL|LOKI_HOST_IP|LOKI_JOB_NAME|AWS_BUCKET_NAME|AWS_REGION|PROD_URL)=' .env || true
 
             echo "Sensitive values presence:"
-            for key in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL DB_SSL_REJECT_UNAUTHORIZED JWT_SECRET JWT_EXPIRE AWS_ACCESS_KEY AWS_SECRET_KEY; do
+            for key in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL DB_SSL_REJECT_UNAUTHORIZED JWT_SECRET JWT_EXPIRE AWS_ACCESS_KEY AWS_SECRET_KEY GOOGLE_APPLICATION_CREDENTIALS CRON_SECRET; do
               value=$(awk -F= -v target="$key" '$1 == target { print substr($0, index($0, "=") + 1); exit }' .env)
               if [ -z "$value" ]; then
                 echo "$key=EMPTY_OR_MISSING"
@@ -99,6 +106,31 @@ jobs:
                 echo "$key=SET"
               fi
             done
+
+      - name: Write Google Sheets service account key
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          raw = os.environ.get("GOOGLE_SA_JSON") or ""
+          if not raw.strip():
+              print("GOOGLE_SERVICE_ACCOUNT_JSON GitHub secret is empty")
+              sys.exit(1)
+          open("google-sheets-service-account.json", "w", encoding="utf-8").write(raw)
+          print("Wrote Google Sheets key file")
+          PY
+
+      - name: Copy Google Sheets key to staging server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_PORT || 22 }}
+          source: google-sheets-service-account.json
+          target: ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}/secrets
+          overwrite: true
 
       - name: Deploy to staging server
         uses: appleboy/ssh-action@v1.0.0
@@ -144,12 +176,19 @@ jobs:
             echo "🚀 Starting new container..."
             ENV_FILE_PATH="$DEPLOY_PATH/.env"
             echo "📄 Using .env file at: $ENV_FILE_PATH"
+            KEY_FILE="$DEPLOY_PATH/secrets/google-sheets-service-account.json"
+            if [ ! -s "$KEY_FILE" ]; then
+              echo "❌ Google Sheets key missing at $KEY_FILE"
+              exit 1
+            fi
+            chmod 600 "$KEY_FILE" || true
             sudo docker run -d \
               --name $CONTAINER_NAME \
               --restart unless-stopped \
               -p 3050:3000 \
               -e PORT=3000 \
               --env-file "$ENV_FILE_PATH" \
+              -v "$KEY_FILE:/app/secrets/google-sheets-service-account.json:ro" \
               $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
             echo "✅ Container started"
             

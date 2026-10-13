@@ -2604,6 +2604,51 @@ No new routes. `POST /hr/sheet-sources/discover`, `POST /hr/sheet-sources/:id/sy
 
 ---
 
+## §BQ — Dealer leaser payment date = Accounts installment Due Date — Oct 2026
+
+**Status: implemented** — HANDOFF **§66** · `BACKEND_COLLECT_SELF_LEASER.ts` / `BACKEND_SUBVENDOR_LEASER.ts` (FE notes label this §BP / HANDOFF §62; those numbers are taken here)
+
+No new routes.
+
+1. **Leaser PUT** (`/admin/subvendors/:id/leaser`) — `date` / `paymentDate` / `payment_date` stored DATEONLY: `YYYY-MM-DD` exactly as sent; `DD/MM/YYYY` and timestamps → India calendar day. Never NOW(), `created_at` or installment `paymentDate`.
+2. **Leaser GET** — each payment echoes `date`, `paymentDate`, `payment_date` as `"YYYY-MM-DD"`.
+3. **Installment GETs** (quotation list / by-id, admin list / by-id) — `dueDate` + `due_date` as `"YYYY-MM-DD"` (India calendar day; was a UTC ISO datetime). Input accepts `dueDate` or `due_date` (YYYY-MM-DD / DD/MM/YYYY / ISO). `paymentDate` unchanged (ISO).
+4. Installment handler does not set leaser dates or create leaser rows (SPA PUTs leaser).
+
+Helper: `utils/dateOnly.ts` (`toDateOnly`).
+
+### Done when
+
+- [x] Due Date 18/09/2026, Collect self saved today → GET leaser date `2026-09-18`; installments `dueDate` `2026-09-18`
+
+---
+
+## §BR — Calling Data tabs: Scheduled ⊂ Connected, Dialled includes scheduled, 3-outcome PATCH — Oct 2026
+
+**Status: implemented** — HANDOFF **§67** · `BACKEND_CALLING_DATA_TABS.ts` (FE notes label this §BQ / HANDOFF §63; those numbers are taken here)
+
+No new routes. Tabs overlap; one row per lead, by its latest action:
+
+| Tab | Who belongs |
+|-----|-------------|
+| Scheduled | Connected + Decision Pending only |
+| Dialled | All connected + not-connected, including scheduled |
+| Connected | Connected, including Decision Pending |
+| Not Connected | Not-connected reasons only |
+
+- `GET /dealers/me/calling-actions/dialled|connected|not-connected` — latest action per lead (was every history row, minus scheduled ones); filters / search / pagination totals are per lead. Not-connected = `classifyCallingConnection` (status text / category), no longer a free-remark text match.
+- `GET /dealers/me/calling-queue/scheduled` + `counts.scheduled` — rescheduled assignments whose latest status is connected.
+- Snapshot on `GET …/calling-queue/next|current` uses the same rules.
+- `PATCH …/calling-queue/:leadId/action`: Interested `called` / Not Interested `not_interested` / Decision Pending `follow_up` + `nextFollowUpAt`. Allowed from Scheduled before the follow-up is due (was `LEAD_005`). On a completed lead (Connected / Not Connected Move) the latest history row takes the new outcome and Decision Pending sets the assignment back to `rescheduled` + `nextFollowUpAt`.
+
+### Done when
+
+- [x] Dialled = Connected + Not Connected (verified on dev for the 3 largest dealers); no lead on both
+- [x] Every Scheduled lead is on Connected → Decision Pending
+- [x] Move from Not Connected → lead leaves Not Connected
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

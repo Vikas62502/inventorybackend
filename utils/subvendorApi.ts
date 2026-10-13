@@ -2,6 +2,7 @@ import {
   SUBVENDOR_LEDGER_AMOUNT_FIELDS,
   SubvendorLedgerAmountField
 } from '../models/SubvendorLedger';
+import { toDateOnly, toDateOnlyOrNull } from './dateOnly';
 
 export const SUBVENDOR_KINDS = ['office_inside', 'office_outside'] as const;
 export type SubvendorKindValue = (typeof SUBVENDOR_KINDS)[number];
@@ -192,15 +193,15 @@ export const parseSubvendorDealerId = (body: Record<string, unknown>): string | 
   return str(raw);
 };
 
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/;
-
-/** YYYY-MM-DD (also accepts a full ISO timestamp); empty → null; unparseable → undefined. */
+/**
+ * Leaser date = Accounts installment Due Date, stored DATEONLY exactly as sent (YYYY-MM-DD).
+ * Also accepts DD/MM/YYYY and timestamps (India calendar day). Empty → null; unparseable → undefined.
+ */
 const parseLeaserDate = (raw: unknown): string | null | undefined => {
   const s = str(raw);
   if (!s) return null;
-  if (ISO_DATE_RE.test(s)) return s.slice(0, 10);
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? undefined : d.toISOString().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{4}-\d{2}-\d{2}T/.test(s)) return toDateOnly(s.slice(0, 10));
+  return toDateOnly(s);
 };
 
 const parseCustomerIds = (raw: unknown): string[] => {
@@ -273,11 +274,14 @@ export const publicLeaserPayment = (row: RowLike) => {
     : [];
   const sortOrder = Number(row.sortOrder ?? row.sort_order) || 0;
   const amount = roundInr(row.amount);
+  const date = toDateOnlyOrNull(row.date);
   return {
     id: row.id,
     vendorId,
     vendor_id: vendorId,
-    date: row.date || null,
+    date,
+    paymentDate: date,
+    payment_date: date,
     amount,
     type: row.type || '',
     remark: row.remark || '',

@@ -44,6 +44,8 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ${{ secrets.EC2_DEPLOY_PATH || '/opt/chairbord-api' }}
+            mkdir -p secrets
+            chmod 700 secrets
             cat > .env << EOF
             # Database Configuration
             DB_HOST=${{ secrets.DB_HOST }}
@@ -69,8 +71,36 @@ jobs:
             
             # Production URL
             PROD_URL=${{ secrets.PROD_URL || '' }}
+
+            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
+            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
+            CRON_SECRET=${{ secrets.CRON_SECRET }}
             EOF
             chmod 600 .env
+
+      - name: Write Google Sheets service account key
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          raw = os.environ.get("GOOGLE_SA_JSON") or ""
+          if not raw.strip():
+              print("GOOGLE_SERVICE_ACCOUNT_JSON GitHub secret is empty")
+              sys.exit(1)
+          open("google-sheets-service-account.json", "w", encoding="utf-8").write(raw)
+          print("Wrote Google Sheets key file")
+          PY
+
+      - name: Copy Google Sheets key to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: google-sheets-service-account.json
+          target: ${{ secrets.EC2_DEPLOY_PATH || '/opt/chairbord-api' }}/secrets
+          overwrite: true
 
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.0.0
@@ -88,7 +118,10 @@ jobs:
             sudo docker pull $IMAGE_NAME
             sudo docker stop $CONTAINER_NAME || true
             sudo docker rm $CONTAINER_NAME || true
-            sudo docker run -d --name $CONTAINER_NAME $PORTS --env-file .env $IMAGE_NAME
+            KEY_FILE="$DEPLOY_PATH/secrets/google-sheets-service-account.json"
+            sudo docker run -d --name $CONTAINER_NAME $PORTS --env-file .env \
+              -v "$KEY_FILE:/app/secrets/google-sheets-service-account.json:ro" \
+              $IMAGE_NAME
 
       - name: Health check
         run: |

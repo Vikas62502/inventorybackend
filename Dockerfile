@@ -37,8 +37,8 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.env ./
 
-# Create uploads directory if needed
-RUN mkdir -p uploads
+# Create uploads and secrets mount points
+RUN mkdir -p uploads secrets
 
 # Expose port
 EXPOSE 3000

@@ -7,6 +7,13 @@ import {
   normalizeCollectFields,
   normalizePaymentModeInput
 } from './paymentMode';
+import { toDateOnlyOrNull } from './dateOnly';
+
+/** Installment Due Date echo — calendar day `YYYY-MM-DD` (camel + snake), no UTC shift. */
+export const dueDateApiFields = (value: unknown) => {
+  const dueDate = toDateOnlyOrNull(value);
+  return { dueDate, due_date: dueDate };
+};
 
 type CollectSource = {
   collectDestination?: unknown;
@@ -48,6 +55,7 @@ export type PaymentPhaseRecord = {
   paidAmount: number;
   status: 'pending' | 'partial' | 'completed';
   dueDate?: string | null;
+  due_date?: string | null;
   paymentDate?: string | null;
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   transactionId?: string | null;
@@ -102,7 +110,7 @@ export const serializePaymentPhaseRow = (row: {
   status: (['pending', 'partial', 'completed'].includes(String(row.status))
     ? row.status
     : 'pending') as PaymentPhaseRecord['status'],
-  dueDate: row.dueDate ? new Date(row.dueDate).toISOString() : null,
+  ...dueDateApiFields(row.dueDate),
   paymentDate: row.paymentDate ? new Date(row.paymentDate).toISOString() : null,
   paymentMode: normalizePaymentModeInput(row.paymentMode) ?? null,
   transactionId: row.transactionId || null,

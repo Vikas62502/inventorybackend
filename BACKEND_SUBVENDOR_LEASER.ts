@@ -75,7 +75,9 @@ const putBody = {
     // also accepted: { items }, { rows }, or a bare array
     {
       id: 'lp-self-Q-123-1', // optional; TEXT, kept verbatim (§BM). Absent → server UUID
-      date: '2026-10-01', // YYYY-MM-DD or ISO; empty → null; invalid → 400 VAL_LEASER
+      date: '2026-10-01', // = installment Due Date (§BQ). YYYY-MM-DD stored DATEONLY as sent (paymentDate / payment_date ok);
+      //   DD/MM/YYYY or ISO → India calendar day; empty → null; invalid → 400 VAL_LEASER. Never NOW() / created_at.
+      //   GET echoes date + paymentDate + payment_date as "YYYY-MM-DD".
       amount: 20000, // whole INR (rounded), >= 0
       type: 'cash', // free text, max 64
       remark: 'first',

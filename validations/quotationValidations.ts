@@ -442,6 +442,7 @@ const rawPaymentPhaseSchema = z.object({
   paid: z.coerce.number().min(0).optional(),
   status: paymentStatusEnum.optional(),
   dueDate: z.union([z.string(), z.null()]).optional(),
+  due_date: z.union([z.string(), z.null()]).optional(),
   paymentDate: z.union([z.string(), z.null()]).optional(),
   paymentMode: z.union([z.string(), z.null()]).optional(),
   transactionId: z.union([z.string(), z.null()]).optional(),
@@ -579,7 +580,7 @@ export const updatePaymentDetailsSchema = z
         amount,
         paidAmount,
         status,
-        dueDate: p.dueDate === null ? undefined : p.dueDate,
+        dueDate: (p.dueDate ?? p.due_date) === null ? undefined : (p.dueDate ?? p.due_date),
         paymentDate: p.paymentDate === null ? undefined : p.paymentDate,
         paymentMode,
         transactionId:

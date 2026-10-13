@@ -42,10 +42,14 @@ services:
       LOKI_JOB_NAME: ${LOKI_JOB_NAME:-Solar_Inventory}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       PROD_URL: ${PROD_URL}
+      GOOGLE_SHEETS_SPREADSHEET_ID: ${GOOGLE_SHEETS_SPREADSHEET_ID:-18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/secrets/google-sheets-service-account.json
+      CRON_SECRET: ${CRON_SECRET:-}
     ports:
       - "${PORT:-3000}:3000"
     volumes:
       - ./uploads:/app/uploads
+      - ./secrets/google-sheets-service-account.json:/app/secrets/google-sheets-service-account.json:ro
     env_file:
       - .env
     depends_on:

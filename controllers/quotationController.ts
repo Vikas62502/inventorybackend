@@ -29,6 +29,7 @@ import {
   isLoanOnlyPaymentType,
   FINAL_SETTLEMENT_LOAN_ONLY_MESSAGE
 } from '../utils/paymentMode';
+import { toDateOnly } from '../utils/dateOnly';
 import {
   normalizePaymentType,
   isPhaseModeAllowedForPaymentType,
@@ -676,7 +677,7 @@ const normalizePaymentPhases = (phases: any[], updatedBy: string | null): Paymen
         amount: Number.isFinite(amount) ? amount : 0,
         paidAmount: Number.isFinite(paidAmount) ? paidAmount : 0,
         status,
-        dueDate: normalizeDateString(phase.dueDate),
+        dueDate: toDateOnly(phase.dueDate ?? phase.due_date) ?? null,
         paymentDate: normalizeDateString(phase.paymentDate),
         paymentMode,
         transactionId: transactionIdRaw ? String(transactionIdRaw) : null,

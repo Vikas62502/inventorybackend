@@ -22,7 +22,7 @@ import {
 } from '../utils/moduleFieldPermissions';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { collectApiFields } from '../utils/quotationPaymentPhases';
+import { collectApiFields, dueDateApiFields } from '../utils/quotationPaymentPhases';
 import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
@@ -642,7 +642,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         amount: Number(phase.amount || 0),
         paidAmount: Number(phase.paidAmount || 0),
         status: phase.status,
-        dueDate: phase.dueDate ? new Date(phase.dueDate).toISOString() : null,
+        ...dueDateApiFields(phase.dueDate),
         paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
         paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
         transactionId: phase.transactionId || null,
@@ -2063,7 +2063,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       amount: Number(phase.amount || 0),
       paidAmount: Number(phase.paidAmount || 0),
       status: phase.status,
-      dueDate: phase.dueDate ? new Date(phase.dueDate).toISOString() : null,
+      ...dueDateApiFields(phase.dueDate),
       paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
       paymentMode: normalizePaymentModeInput(phase.paymentMode) ?? null,
       transactionId: phase.transactionId || null,

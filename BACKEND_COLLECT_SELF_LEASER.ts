@@ -68,6 +68,12 @@ const leaserPut = {
  *   4. Self + Partial 20000 of 50000 → GET phase self/partial/20000/30000; leaser row amount 20000.
  *   5. Cash phase saved without collectDestination → GET chairbord, self 0, chairbord = paid.
  *
+ *   6. Due Date 18/09/2026, Collect self saved today → GET leaser date "2026-09-18"; GET installments
+ *      dueDate / due_date "2026-09-18" (REQUIRED §BQ).
+ *
+ *   Leaser date = installment Due Date (§BQ): the SPA sends it on the leaser PUT; the installment handler never
+ *   sets leaser dates. Installment GETs echo dueDate + due_date as "YYYY-MM-DD" (India calendar day, no UTC shift).
+ *
  *   Statement CSV (FE-only): Total payment = sum of leaser payments; Total remaining = Total profit − Total payment.
  *
  * Code: utils/paymentMode.ts, utils/quotationPaymentPhases.ts, models/QuotationPaymentPhase.ts,

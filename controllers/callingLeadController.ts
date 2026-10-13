@@ -1416,27 +1416,21 @@ const callingActionToApiJson = (row: any) => {
   };
 };
 
-/** Rows that belong on the Scheduled tab — not Dialled / Connected / Not Connected. */
-const isScheduledActionRow = (row: { action?: unknown; nextFollowUpAt?: string | Date | null }): boolean => {
-  if (!row.nextFollowUpAt) return false;
-  const actionName = String(row.action || '');
-  if (actionName === 'rescheduled') return true;
-  if (actionName === 'follow_up') {
-    const at = new Date(row.nextFollowUpAt).getTime();
-    return Number.isFinite(at);
-  }
-  return false;
-};
-
+/**
+ * Calling Data tabs (§BR) overlap on purpose — one row per lead (its latest action):
+ *   Dialled       = every connected + not-connected lead, including scheduled
+ *   Connected     = connected leads, including Decision Pending
+ *   Not Connected = not-connected reasons only
+ *   Scheduled     = Connected + Decision Pending (follow_up / rescheduled) only
+ * A future nextFollowUpAt never removes a lead from Dialled / Connected.
+ */
 const filterDialledActions = (recentActions: any[]) =>
-  recentActions.filter((row: any) => {
-    const actionName = String(row.action || '');
-    if (!['called', 'follow_up', 'not_interested', 'rescheduled'].includes(actionName)) {
-      return false;
-    }
-    if (isScheduledActionRow(row)) return false;
-    return true;
-  });
+  recentActions.filter((row: any) =>
+    ['called', 'follow_up', 'not_interested', 'rescheduled'].includes(String(row.action || ''))
+  );
+
+const isDecisionPendingAction = (action: unknown): boolean =>
+  ['follow_up', 'rescheduled'].includes(String(action || ''));
 
 const buildQueueCountsPayload = (counts: Awaited<ReturnType<typeof buildDealerQueueCounts>>) => ({
   pendingCount: counts.pendingCount,
@@ -3591,11 +3585,7 @@ const buildDealerQueueCounts = async (dealerId: string) => {
         [Op.and]: [{ dealerId, status: 'queued' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
       }
     }),
-    DealerLeadAssignment.count({
-      where: {
-        [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
-      }
-    }),
+    countScheduledTabLeads(dealerId),
     DealerLeadAssignment.count({
       where: {
         [Op.and]: [{ dealerId, status: 'completed' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
@@ -3689,7 +3679,41 @@ const buildScheduledLeads = async (dealerId: string) => {
 
   return dedupeScheduledLeadsByLeadId(
     rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap, uploadBatchById))
+  ).filter(isScheduledTabLead);
+};
+
+/** Scheduled tab = Connected + Decision Pending only (not-connected callbacks stay off it). */
+const isScheduledTabLead = (lead: any): boolean =>
+  isDecisionPendingAction(lead?.action || 'rescheduled') &&
+  classifyActionStage({ ...lead, action: lead?.action || 'rescheduled' }) === 'connected';
+
+const countScheduledTabLeads = async (dealerId: string): Promise<number> => {
+  const rows = await DealerLeadAssignment.findAll({
+    where: {
+      [Op.and]: [{ dealerId, status: 'rescheduled' }, LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+    },
+    attributes: ['leadId', 'action', 'callRemark']
+  });
+  const latestStatusMap = await buildLatestStatusMetaMap(
+    dealerId,
+    rows.map((row: any) => String(row.leadId)).filter(Boolean)
   );
+  const seen = new Set<string>();
+  let count = 0;
+  for (const row of rows as any[]) {
+    const leadId = String(row.leadId);
+    if (seen.has(leadId)) continue;
+    seen.add(leadId);
+    const parsed = parseTaggedCallRemark(row.callRemark);
+    const meta = latestStatusMap.get(leadId);
+    const lead = {
+      action: row.action || 'rescheduled',
+      statusCategory: meta?.statusCategory || normalizeStatusCategory(parsed.statusCategory) || null,
+      statusText: meta?.statusLabel || parsed.status || null
+    };
+    if (isScheduledTabLead(lead)) count += 1;
+  }
+  return count;
 };
 
 const getPaginationFromQuery = (req: Request, defaultLimit = 20, maxLimit = 100) => {
@@ -3768,28 +3792,26 @@ export const getDealerScheduledQueue = async (req: Request, res: Response): Prom
       : null;
     if (searchOr) whereAnd.push(searchOr);
 
-    const rows = await DealerLeadAssignment.findAndCountAll({
+    const rows = await DealerLeadAssignment.findAll({
       where: { [Op.and]: whereAnd },
       include: [{ model: CallingLead, as: 'lead' }],
-      order: [['nextFollowUpAt', 'ASC'], ['id', 'ASC']],
-      limit,
-      offset
+      order: [['nextFollowUpAt', 'ASC'], ['id', 'ASC']]
     });
-    const leadIds = rows.rows.map((row: any) => String(row.leadId)).filter(Boolean);
+    const leadIds = rows.map((row: any) => String(row.leadId)).filter(Boolean);
     const latestStatusMap = await buildLatestStatusMetaMap(dealerId, leadIds);
     const uploadBatchById = await loadUploadBatchMapByIds(
-      rows.rows.map((row: any) => row.lead?.batchId).filter(Boolean)
+      rows.map((row: any) => row.lead?.batchId).filter(Boolean)
     );
-    const items = dedupeScheduledLeadsByLeadId(
-      rows.rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap, uploadBatchById))
-    );
+    const all = dedupeScheduledLeadsByLeadId(
+      rows.map((row: any) => mapAssignmentToScheduledLead(row, latestStatusMap, uploadBatchById))
+    ).filter(isScheduledTabLead);
 
     applyNoCacheHeaders(res);
     res.json({
       success: true,
       data: {
-        items,
-        pagination: buildPagination(page, limit, Number(rows.count || 0))
+        items: all.slice(offset, offset + limit),
+        pagination: buildPagination(page, limit, all.length)
       }
     });
   } catch (error) {
@@ -3837,6 +3859,42 @@ export const getDealerCallingActions = async (req: Request, res: Response): Prom
   }
 };
 
+/** Latest action per lead for this dealer (API JSON, newest first) — tab membership follows the latest outcome. */
+const loadLatestDealerActionsPerLead = async (dealerId: string, searchRaw: unknown): Promise<any[]> => {
+  const latestIds = (await sequelize.query(
+    `SELECT DISTINCT ON ("leadId") id
+       FROM calling_action_history
+      WHERE "dealerId" = :dealerId AND action IN (:actions)
+      ORDER BY "leadId", "actionAt" DESC, "createdAt" DESC`,
+    { replacements: { dealerId, actions: [...REPORT_ACTIONS] }, type: QueryTypes.SELECT }
+  )) as Array<{ id: string }>;
+  if (!latestIds.length) return [];
+  const whereAnd: any[] = [{ id: { [Op.in]: latestIds.map((r) => r.id) } }];
+  const searchWhere = buildActionSearchWhere(searchRaw);
+  if (searchWhere) whereAnd.push(searchWhere);
+  const rows = await CallingActionHistory.findAll({
+    where: { [Op.and]: whereAnd },
+    order: [['actionAt', 'DESC'], ['id', 'DESC']]
+  });
+  return rows.map((row: any) => callingActionToApiJson(row));
+};
+
+/** Slice the classified list, then load lead details only for the returned page. */
+const paginateItems = async (items: any[], page: number, limit: number, offset: number) => {
+  const pageIds = items.slice(offset, offset + limit).map((row: any) => String(row.id));
+  const rows = pageIds.length
+    ? await CallingActionHistory.findAll({
+        where: { id: { [Op.in]: pageIds } },
+        include: [{ model: CallingLead, as: 'lead' }]
+      })
+    : [];
+  const byId = new Map(rows.map((row: any) => [String(row.id), callingActionToApiJson(row)]));
+  return {
+    items: pageIds.map((id) => byId.get(id)).filter(Boolean),
+    pagination: buildPagination(page, limit, items.length)
+  };
+};
+
 export const getDealerDialledActions = async (req: Request, res: Response): Promise<void> => {
   try {
     const dealerId = await resolveDealerIdForQueue(req);
@@ -3850,30 +3908,12 @@ export const getDealerDialledActions = async (req: Request, res: Response): Prom
 
     const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
     const actionFilter = String(req.query.action || 'all').trim().toLowerCase();
-    const whereAnd: any[] = [{ dealerId }, { action: { [Op.in]: REPORT_ACTIONS } }];
+    let items = filterDialledActions(await loadLatestDealerActionsPerLead(dealerId, req.query.search));
     if (actionFilter !== 'all' && (REPORT_ACTIONS as readonly string[]).includes(actionFilter)) {
-      whereAnd.push({ action: actionFilter });
+      items = items.filter((row: any) => row.action === actionFilter);
     }
-    const searchWhere = buildActionSearchWhere(req.query.search);
-    if (searchWhere) whereAnd.push(searchWhere);
-
-    const rows = await CallingActionHistory.findAndCountAll({
-      where: { [Op.and]: whereAnd },
-      include: [{ model: CallingLead, as: 'lead' }],
-      order: [['actionAt', 'DESC'], ['id', 'DESC']],
-      limit,
-      offset
-    });
-
-    const items = filterDialledActions(rows.rows.map((row: any) => callingActionToApiJson(row)));
     applyNoCacheHeaders(res);
-    res.json({
-      success: true,
-      data: {
-        items,
-        pagination: buildPagination(page, limit, Number(rows.count || 0))
-      }
-    });
+    res.json({ success: true, data: await paginateItems(items, page, limit, offset) });
   } catch (error) {
     logError('Get dealer dialled actions error', error, { dealerId: req.dealer?.id });
     res.status(500).json({
@@ -3882,26 +3922,6 @@ export const getDealerDialledActions = async (req: Request, res: Response): Prom
     });
   }
 };
-
-const NOT_CONNECTED_MATCHERS = [
-  'call unanswered',
-  'switched off',
-  'not reachable',
-  'busy',
-  'line busy',
-  'call disconnected',
-  'wrong number',
-  'invalid number',
-  'number does not exist'
-];
-
-const buildNotConnectedWhere = () => ({
-  [Op.or]: [
-    ...NOT_CONNECTED_MATCHERS.map((text) => ({ statusLabel: { [Op.iLike]: `%${text}%` } })),
-    ...NOT_CONNECTED_MATCHERS.map((text) => ({ statusReason: { [Op.iLike]: `%${text}%` } })),
-    ...NOT_CONNECTED_MATCHERS.map((text) => ({ callRemark: { [Op.iLike]: `%${text}%` } }))
-  ]
-});
 
 export const getDealerConnectedActions = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -3917,36 +3937,15 @@ export const getDealerConnectedActions = async (req: Request, res: Response): Pr
     const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
     const outcome = String(req.query.outcome || 'all').trim().toLowerCase();
 
-    const whereAnd: any[] = [
-      { dealerId },
-      { action: { [Op.in]: REPORT_ACTIONS } },
-      { [Op.not]: buildNotConnectedWhere() }
-    ];
-    if (outcome === 'interested') whereAnd.push({ action: 'called' });
-    else if (outcome === 'not_interested') whereAnd.push({ action: 'not_interested' });
-    else if (outcome === 'decision_pending') whereAnd.push({ action: { [Op.in]: ['follow_up', 'rescheduled'] } });
-    const searchWhere = buildActionSearchWhere(req.query.search);
-    if (searchWhere) whereAnd.push(searchWhere);
-
-    const rows = await CallingActionHistory.findAndCountAll({
-      where: { [Op.and]: whereAnd },
-      include: [{ model: CallingLead, as: 'lead' }],
-      order: [['actionAt', 'DESC'], ['id', 'DESC']],
-      limit,
-      offset
-    });
-    const items = filterDialledActions(rows.rows.map((row: any) => callingActionToApiJson(row))).filter(
+    let items = filterDialledActions(await loadLatestDealerActionsPerLead(dealerId, req.query.search)).filter(
       (row: any) => classifyActionStage(row) === 'connected'
     );
+    if (outcome === 'interested') items = items.filter((row: any) => row.action === 'called');
+    else if (outcome === 'not_interested') items = items.filter((row: any) => row.action === 'not_interested');
+    else if (outcome === 'decision_pending') items = items.filter((row: any) => isDecisionPendingAction(row.action));
 
     applyNoCacheHeaders(res);
-    res.json({
-      success: true,
-      data: {
-        items,
-        pagination: buildPagination(page, limit, Number(rows.count || 0))
-      }
-    });
+    res.json({ success: true, data: await paginateItems(items, page, limit, offset) });
   } catch (error) {
     logError('Get dealer connected actions error', error, { dealerId: req.dealer?.id });
     res.status(500).json({
@@ -3969,42 +3968,20 @@ export const getDealerNotConnectedActions = async (req: Request, res: Response):
 
     const { page, limit, offset } = getPaginationFromQuery(req, 20, 100);
     const reason = String(req.query.reason || 'all').trim();
-    const whereAnd: any[] = [
-      { dealerId },
-      { action: { [Op.in]: REPORT_ACTIONS } },
-      buildNotConnectedWhere()
-    ];
-    if (reason && reason.toLowerCase() !== 'all') {
-      whereAnd.push({
-        [Op.or]: [
-          { statusLabel: { [Op.iLike]: `%${reason}%` } },
-          { statusReason: { [Op.iLike]: `%${reason}%` } },
-          { callRemark: { [Op.iLike]: `%${reason}%` } }
-        ]
-      });
-    }
-    const searchWhere = buildActionSearchWhere(req.query.search);
-    if (searchWhere) whereAnd.push(searchWhere);
-
-    const rows = await CallingActionHistory.findAndCountAll({
-      where: { [Op.and]: whereAnd },
-      include: [{ model: CallingLead, as: 'lead' }],
-      order: [['actionAt', 'DESC'], ['id', 'DESC']],
-      limit,
-      offset
-    });
-    const items = filterDialledActions(rows.rows.map((row: any) => callingActionToApiJson(row))).filter(
+    let items = filterDialledActions(await loadLatestDealerActionsPerLead(dealerId, req.query.search)).filter(
       (row: any) => classifyActionStage(row) === 'not_connected'
     );
+    if (reason && reason.toLowerCase() !== 'all') {
+      const needle = reason.toLowerCase();
+      items = items.filter((row: any) =>
+        [row.statusLabel, row.statusReason, row.callRemark].some((v) =>
+          String(v || '').toLowerCase().includes(needle)
+        )
+      );
+    }
 
     applyNoCacheHeaders(res);
-    res.json({
-      success: true,
-      data: {
-        items,
-        pagination: buildPagination(page, limit, Number(rows.count || 0))
-      }
-    });
+    res.json({ success: true, data: await paginateItems(items, page, limit, offset) });
   } catch (error) {
     logError('Get dealer not-connected actions error', error, { dealerId: req.dealer?.id });
     res.status(500).json({
@@ -4665,6 +4642,24 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         }
         const historyAction = action as CallingActionType;
         await upsertActionHistory({ isEditLatest: true, historyAction });
+        // Connected / Move-to-Connected outcome on a finished lead: Decision Pending puts it back on Scheduled.
+        await assignment.update(
+          historyAction === 'rescheduled'
+            ? {
+                status: 'rescheduled',
+                action: historyAction,
+                callRemark: effectiveCallRemarkForOutcome,
+                nextFollowUpAt: effectiveNextFollowUpAt,
+                actionAt: effectiveActionAt
+              }
+            : {
+                action: historyAction,
+                callRemark: effectiveCallRemarkForOutcome,
+                nextFollowUpAt: null,
+                actionAt: effectiveActionAt
+              },
+          { transaction }
+        );
         await assignment.reload({ transaction });
         updatedData = withCallingRemarkApiAliases({
           leadId: assignment.leadId,
@@ -4737,10 +4732,9 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         await assignment.reload({ transaction });
       }
 
-      const rescheduledDue = isRescheduledDue(assignment, now);
+      // Scheduled tab PATCH (Interested / Not Interested / Decision Pending) is allowed before the follow-up is due.
       const canApplyOutcome =
-        assignment.status === 'in_progress' ||
-        (assignment.status === 'rescheduled' && (rescheduledDue || action === 'rescheduled'));
+        assignment.status === 'in_progress' || assignment.status === 'rescheduled';
 
       if (!canApplyOutcome) {
         const error: any = new Error('INVALID_TRANSITION');

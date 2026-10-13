@@ -102,6 +102,8 @@
 | 90 | High | Crompton set inverter 3kW / 5kW (no 3.6kW requirement) | **Done** | §63 / REQUIRED §BN / `BACKEND_CROMPTON_DCR_SET.md` |
 | 91 | Medium | Office Inside table `siteCost` (PI + others) vs ledger vendor `costOfSite` (PI + file + GST + others) | **Done** (verified) | §64 / REQUIRED §BO / `BACKEND_SUBVENDOR_LEASER.ts` |
 | 92 | High | Google Sheets credential errors: MISSING (503) vs INVALID / 403 / API (500) | **Done** | §65 / REQUIRED §BP / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
+| 93 | High | Dealer leaser date = installment Due Date; dates echoed `YYYY-MM-DD` | **Done** | §66 / REQUIRED §BQ / `BACKEND_SUBVENDOR_LEASER.ts` |
+| 94 | High | Calling Data tabs overlap (Scheduled ⊂ Connected, Dialled incl. scheduled) + 3-outcome PATCH | **Done** | §67 / REQUIRED §BR / `BACKEND_CALLING_DATA_TABS.ts` |
 
 **Deploy before QA:**
 
@@ -3580,4 +3582,31 @@ Code: `utils/quotationCromptonDcr.ts`, `utils/defaultPricingTables.ts`, `control
 | Other Google / JWT | 500 | `GOOGLE_SHEETS_API_ERROR` (Google's message) |
 
 Discover / Sync / Sync-all body: `{ success: false, error: { code, message } }`. Code: `utils/hrSheetGoogleAuth.ts`, `controllers/hrSheetSourceController.ts`, `utils/sheetAutoSyncCron.ts`. Restart API after `.env` edits.
+
+## 66. Dealer leaser date = Accounts Due Date (§BQ) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BQ** · `BACKEND_COLLECT_SELF_LEASER.ts` / `BACKEND_SUBVENDOR_LEASER.ts`
+
+| Item | Detail |
+|------|--------|
+| Leaser PUT | `date` / `payment_date` DATEONLY as sent (YYYY-MM-DD); DD/MM/YYYY / ISO → India day; never NOW() / paymentDate |
+| Leaser GET | `date`, `paymentDate`, `payment_date` = `"YYYY-MM-DD"` |
+| Installment GET | `dueDate` + `due_date` = `"YYYY-MM-DD"` (was UTC ISO datetime); input accepts `due_date` too |
+| Installment save | Does not touch leaser rows / dates |
+
+Code: `utils/dateOnly.ts`, `utils/subvendorApi.ts`, `utils/quotationPaymentPhases.ts`, `controllers/adminController.ts`, `controllers/quotationController.ts`, `validations/quotationValidations.ts`.
+
+## 67. Calling Data tabs — Scheduled ⊂ Connected, Dialled includes scheduled (§BR) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BR** · `BACKEND_CALLING_DATA_TABS.ts`
+
+| Item | Detail |
+|------|--------|
+| Lists | Dialled / Connected / Not Connected = latest action per lead; future `nextFollowUpAt` no longer hides a lead |
+| Scheduled | Rescheduled assignments with a connected latest status only (not-connected callbacks excluded); `counts.scheduled` matches |
+| PATCH outcomes | `called` Interested · `not_interested` Not Interested Currently · `follow_up` Follow-up Pending + `nextFollowUpAt` |
+| Scheduled PATCH | Allowed before due (was `LEAD_005`) |
+| Move / Connected edit | Completed lead: latest history row updated; Decision Pending → assignment `rescheduled` |
+
+Code: `controllers/callingLeadController.ts`. ~1–1.5 s per list for dealers with 15–20k called leads.
 
