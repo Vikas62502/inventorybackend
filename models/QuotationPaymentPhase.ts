@@ -14,7 +14,8 @@ interface QuotationPaymentPhaseAttributes {
   paymentMode?: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   transactionId?: string | null;
   note?: string | null;
-  collectDestination?: 'self' | 'chairbord' | null;
+  collectDestination?: 'self' | 'chairbord' | 'other' | null;
+  collectVendorId?: string | null;
   collectKind?: 'complete' | 'partial' | null;
   collectSelfAmount?: number | null;
   collectChairbordAmount?: number | null;
@@ -33,6 +34,7 @@ interface QuotationPaymentPhaseCreationAttributes extends Optional<
   | 'transactionId'
   | 'note'
   | 'collectDestination'
+  | 'collectVendorId'
   | 'collectKind'
   | 'collectSelfAmount'
   | 'collectChairbordAmount'
@@ -57,7 +59,8 @@ class QuotationPaymentPhase
   public paymentMode!: 'cash' | 'upi' | 'loan' | 'netbanking' | 'bank_transfer' | 'cheque' | 'card' | 'mix' | null;
   public transactionId!: string | null;
   public note!: string | null;
-  public collectDestination!: 'self' | 'chairbord' | null;
+  public collectDestination!: 'self' | 'chairbord' | 'other' | null;
+  public collectVendorId!: string | null;
   public collectKind!: 'complete' | 'partial' | null;
   public collectSelfAmount!: number | null;
   public collectChairbordAmount!: number | null;
@@ -122,6 +125,10 @@ QuotationPaymentPhase.init(
     },
     collectDestination: {
       type: DataTypes.STRING(16),
+      allowNull: true
+    },
+    collectVendorId: {
+      type: DataTypes.STRING(64),
       allowNull: true
     },
     collectKind: {

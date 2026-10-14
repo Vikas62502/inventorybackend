@@ -65,6 +65,7 @@ const ensurePaymentPhaseCollectDestinationColumn = async (): Promise<void> => {
     await sequelize.query(`
       ALTER TABLE quotation_payment_phases
         ADD COLUMN IF NOT EXISTS "collectDestination" VARCHAR(16) NULL,
+        ADD COLUMN IF NOT EXISTS "collectVendorId" VARCHAR(64) NULL,
         ADD COLUMN IF NOT EXISTS "collectKind" VARCHAR(16) NULL,
         ADD COLUMN IF NOT EXISTS "collectSelfAmount" NUMERIC(14,2) NULL,
         ADD COLUMN IF NOT EXISTS "collectChairbordAmount" NUMERIC(14,2) NULL;

@@ -2692,6 +2692,33 @@ No new routes. Every calling-action row and queue lead returns (camel + snake): 
 
 ---
 
+## §BU — Payment management Office: Chairbord / Other (office subvendor) — Oct 2026
+
+**Status: implemented** — HANDOFF **§70** · `BACKEND_COLLECT_SELF_LEASER.ts` (extends §BM; FE notes label this §BK / HANDOFF §57)
+
+Installment replace (`PUT /quotations/:id/installments`, `PATCH …/payment-details`) stores and echoes per phase:
+
+| Field | Values |
+|-------|--------|
+| `collectDestination` | `chairbord` (default) \| `other` \| `self` |
+| `collectVendorId` | office-inside subvendor id when `other` (alias `collect_vendor_id`); null otherwise |
+| `collectSelfAmount` | amount going to that leaser (Other) or self |
+| `collectChairbordAmount` | `paidAmount − collectSelfAmount` |
+| `collectKind` | `complete` \| `partial` |
+
+- Cash/UPI only; loan / bank → all null. Snake case accepted; extra phase keys stripped (no 400).
+- `GET /quotations` (+ by-id, admin list / by-id) echo the same keys in camel + snake, so the dialog reopens as Other + office + amount.
+- Leaser `PUT /admin/subvendors/:id/leaser` keeps client TEXT ids (`lp-collect-{quotationId}-{phaseNumber}`, old `lp-self-…`).
+- The installment save never creates leaser rows.
+- New column `quotation_payment_phases."collectVendorId"` VARCHAR(64) — boot ensure + migration `20261014120000`.
+
+### Done when
+
+- [x] Cash + Other partial 20000 of 50000 → GET `other` / vendor id / `partial` / 20000 / 30000 (verified on dev, rolled back)
+- [x] Loan phase with Other sent → all null; Self + Complete unchanged
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

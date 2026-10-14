@@ -106,6 +106,7 @@
 | 94 | High | Calling Data tabs overlap (Scheduled ⊂ Connected, Dialled incl. scheduled) + 3-outcome PATCH | **Done** | §67 / REQUIRED §BR / `BACKEND_CALLING_DATA_TABS.ts` |
 | 95 | High | Calling actions echo Social Media vs Calling data source (snapshot at PATCH) | **Done** | §68 / REQUIRED §BS / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
 | 96 | Medium | Calling Reports list filter `source` / `connection` / `search`; cards unchanged | **Done** | §69 / REQUIRED §BT / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
+| 97 | High | Installment Collect = Other (office subvendor) + `collectVendorId` persist / echo | **Done** | §70 / REQUIRED §BU / `BACKEND_COLLECT_SELF_LEASER.ts` |
 
 **Deploy before QA:**
 
@@ -3642,4 +3643,19 @@ Note: the admin / HR / dealer `calling-actions` list has its own row mapper — 
 | Auth | §AX — admin / calling_reports / hr JWT (already in place) |
 
 Applies to `GET /admin/calling-actions`, `/hr/calling-actions`, `/dealers/me/calling-actions`. `connection` loads the filtered ids then pages in JS (~1.5–2 s on all 117k rows; < 0.5 s once date / source narrows it).
+
+## 70. Payment management Office — Chairbord / Other (§BU) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BU** · `BACKEND_COLLECT_SELF_LEASER.ts` (FE notes label this §BK / HANDOFF §57)
+
+| Item | Detail |
+|------|--------|
+| Destination | `chairbord` (default) \| `other` \| `self` — Cash/UPI only, else null |
+| Other office | `collectVendorId` / `collect_vendor_id` stored as sent; null unless `other` |
+| Split | `collectSelfAmount` = Other/self share, `collectChairbordAmount` = remainder; `collectKind` complete / partial |
+| Echo | All five keys camel + snake on quotation + admin GETs |
+| Leaser ids | `lp-collect-…` / `lp-self-…` kept verbatim (TEXT); installment save creates no leaser rows |
+| Schema | `quotation_payment_phases."collectVendorId"` VARCHAR(64) — boot ensure + migration `20261014120000` |
+
+Code: `utils/paymentMode.ts`, `utils/quotationPaymentPhases.ts`, `models/QuotationPaymentPhase.ts`, `validations/quotationValidations.ts`, `config/sequelizeBootstrap.ts`.
 

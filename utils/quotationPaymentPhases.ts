@@ -17,6 +17,7 @@ export const dueDateApiFields = (value: unknown) => {
 
 type CollectSource = {
   collectDestination?: unknown;
+  collectVendorId?: unknown;
   collectKind?: unknown;
   collectSelfAmount?: unknown;
   collectChairbordAmount?: unknown;
@@ -28,6 +29,7 @@ const collectFieldsFor = (row: CollectSource) =>
   normalizeCollectFields(
     {
       destination: row.collectDestination,
+      vendorId: row.collectVendorId,
       kind: row.collectKind,
       selfAmount: row.collectSelfAmount,
       chairbordAmount: row.collectChairbordAmount
@@ -42,6 +44,7 @@ export const collectApiFields = (row: CollectSource) => {
   return {
     ...c,
     collect_destination: c.collectDestination,
+    collect_vendor_id: c.collectVendorId,
     collect_kind: c.collectKind,
     collect_self_amount: c.collectSelfAmount,
     collect_chairbord_amount: c.collectChairbordAmount
@@ -61,10 +64,12 @@ export type PaymentPhaseRecord = {
   transactionId?: string | null;
   note?: string | null;
   collectDestination?: CollectDestination | null;
+  collectVendorId?: string | null;
   collectKind?: CollectKind | null;
   collectSelfAmount?: number | null;
   collectChairbordAmount?: number | null;
   collect_destination?: CollectDestination | null;
+  collect_vendor_id?: string | null;
   collect_kind?: CollectKind | null;
   collect_self_amount?: number | null;
   collect_chairbord_amount?: number | null;
@@ -96,6 +101,7 @@ export const serializePaymentPhaseRow = (row: {
   transactionId?: string | null;
   note?: string | null;
   collectDestination?: string | null;
+  collectVendorId?: string | null;
   collectKind?: string | null;
   collectSelfAmount?: number | string | null;
   collectChairbordAmount?: number | string | null;
