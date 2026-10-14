@@ -1668,7 +1668,34 @@ const buildLatestStatusMetaMap = async (dealerId: string, leadIds: string[]): Pr
   return map;
 };
 
-const buildCallingActionsFilter = (req: Request): WhereOptions => {
+/** §BT — Social = snapshot on the action, else the lead (rows saved before §BS). Needs the `lead` include. */
+const CALLING_ACTION_IS_SOCIAL_SQL = `(
+  LOWER(COALESCE("CallingActionHistory"."sourceType", '')) IN ('google_sheet', 'social_media', 'social', 'meta')
+  OR "CallingActionHistory"."sheetSourceId" IS NOT NULL
+  OR LOWER(COALESCE("CallingActionHistory"."platform", '')) IN ('ig', 'fb', 'meta', 'instagram', 'facebook')
+  OR "lead"."sheetSourceId" IS NOT NULL
+  OR LOWER(COALESCE("lead"."platform", '')) IN ('ig', 'fb', 'meta', 'instagram', 'facebook')
+)`;
+
+type CallingSourceFilter = 'social' | 'normal';
+type CallingConnectionFilter = 'connected' | 'not_connected';
+
+const parseCallingSourceFilter = (raw: unknown): CallingSourceFilter | null => {
+  const value = String(raw ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['social', 'social_media', 'google_sheet', 'meta'].includes(value)) return 'social';
+  if (['normal', 'calling', 'calling_data', 'csv'].includes(value)) return 'normal';
+  return null;
+};
+
+const parseCallingConnectionFilter = (raw: unknown): CallingConnectionFilter | null => {
+  const value = String(raw ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (value === 'connected') return 'connected';
+  if (['not_connected', 'notconnected', 'disconnected'].includes(value)) return 'not_connected';
+  return null;
+};
+
+/** `cardsOnly`: six cards / summary stay date + employee (+ category/action) — no source, connection or search. */
+const buildCallingActionsFilter = (req: Request, options: { cardsOnly?: boolean } = {}): WhereOptions => {
   const rawRange = String(req.query.range ?? req.query.dateRange ?? 'all')
     .trim()
     .toLowerCase()
@@ -1751,6 +1778,14 @@ const buildCallingActionsFilter = (req: Request): WhereOptions => {
   } else {
     (filter as any).action = { [Op.in]: REPORT_ACTIONS };
   }
+  if (options.cardsOnly) return filter;
+  const source = parseCallingSourceFilter(req.query.source ?? req.query.sourceFilter ?? req.query.source_filter);
+  if (source) {
+    const socialSql = Sequelize.literal(CALLING_ACTION_IS_SOCIAL_SQL);
+    const sourceClause = source === 'social' ? socialSql : Sequelize.literal(`NOT ${CALLING_ACTION_IS_SOCIAL_SQL}`);
+    const existingAnd = (filter as any)[Op.and];
+    (filter as any)[Op.and] = [...(Array.isArray(existingAnd) ? existingAnd : []), sourceClause];
+  }
   if (search) {
     const searchDigits = search.replace(/\D/g, '');
     const last10 = searchDigits.length >= 7 ? searchDigits.slice(-10) : '';
@@ -1816,24 +1851,54 @@ const buildCallingActionsResponse = async (req: Request) => {
     required: false
   };
 
-  const [total, historyRows] = await Promise.all([
-    CallingActionHistory.count({
+  const listOrder: any = [
+    [Sequelize.literal('COALESCE("CallingActionHistory"."actionAt", "CallingActionHistory"."createdAt")'), 'DESC'],
+    ['id', 'DESC']
+  ];
+  const connection = parseCallingConnectionFilter(
+    req.query.connection ?? req.query.connectionFilter ?? req.query.connection_filter
+  );
+
+  let total: number;
+  let historyRows: any[];
+  if (connection) {
+    // Connected vs not connected is classified from status text (incl. tagged remarks) — same rule as the cards.
+    const candidates = (await CallingActionHistory.findAll({
       where,
-      include: [leadInclude],
-      distinct: true,
-      col: 'id'
-    }),
-    CallingActionHistory.findAll({
-      where,
-      include: [leadInclude],
-      order: [
-        [Sequelize.literal('COALESCE("CallingActionHistory"."actionAt", "CallingActionHistory"."createdAt")'), 'DESC'],
-        ['id', 'DESC']
-      ],
-      limit,
-      offset
-    })
-  ]);
+      include: [{ model: CallingLead, as: 'lead', attributes: [], required: false }],
+      raw: true,
+      attributes: ['id', 'action', 'statusLabel', 'statusReason', 'callRemark', 'statusCategory'],
+      order: listOrder
+    })) as any[];
+    const matchingIds = candidates
+      .filter((row) => classifyCallingConnection(row) === connection)
+      .map((row) => row.id);
+    total = matchingIds.length;
+    const pageIds = matchingIds.slice(offset, offset + limit);
+    historyRows = pageIds.length
+      ? await CallingActionHistory.findAll({
+          where: { id: { [Op.in]: pageIds } },
+          include: [leadInclude],
+          order: listOrder
+        })
+      : [];
+  } else {
+    [total, historyRows] = await Promise.all([
+      CallingActionHistory.count({
+        where,
+        include: [leadInclude],
+        distinct: true,
+        col: 'id'
+      }),
+      CallingActionHistory.findAll({
+        where,
+        include: [leadInclude],
+        order: listOrder,
+        limit,
+        offset
+      })
+    ]);
+  }
   const rows = {
     count: total,
     rows: historyRows.map((row: any) => (typeof row.toJSON === 'function' ? row.toJSON() : row))
@@ -1841,7 +1906,7 @@ const buildCallingActionsResponse = async (req: Request) => {
 
   const summarySourceRows = wantsFullSummary
     ? await CallingActionHistory.findAll({
-        where,
+        where: buildCallingActionsFilter(req, { cardsOnly: true }),
         include: [leadInclude],
         raw: true,
       attributes: [
@@ -1956,7 +2021,8 @@ const buildCallingActionsResponse = async (req: Request) => {
       customerName: name,
       customerMobile: mobile,
       customerAddress: row.customerAddress,
-      createdAt: toIsoStringOrNull(row.createdAt)
+      createdAt: toIsoStringOrNull(row.createdAt),
+      ...callingActionSourceFields(row)
     };
   });
 
@@ -2025,7 +2091,7 @@ const CALLING_SUMMARY_CACHE_TTL_MS = 20 * 1000;
 const callingSummaryCache = new Map<string, { expiresAt: number; summary: any }>();
 
 const buildCallingActionsSummaryOnly = async (req: Request) => {
-  const where = buildCallingActionsFilter(req);
+  const where = buildCallingActionsFilter(req, { cardsOnly: true });
   const dealerId = String(req.query.dealerId || req.query.dealer_id || '');
   const startDate = String(
     req.query.startDate || req.query.start_date || req.query.fromDate || req.query.from_date || ''

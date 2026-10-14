@@ -105,6 +105,7 @@
 | 93 | High | Dealer leaser date = installment Due Date; dates echoed `YYYY-MM-DD` | **Done** | §66 / REQUIRED §BQ / `BACKEND_SUBVENDOR_LEASER.ts` |
 | 94 | High | Calling Data tabs overlap (Scheduled ⊂ Connected, Dialled incl. scheduled) + 3-outcome PATCH | **Done** | §67 / REQUIRED §BR / `BACKEND_CALLING_DATA_TABS.ts` |
 | 95 | High | Calling actions echo Social Media vs Calling data source (snapshot at PATCH) | **Done** | §68 / REQUIRED §BS / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
+| 96 | Medium | Calling Reports list filter `source` / `connection` / `search`; cards unchanged | **Done** | §69 / REQUIRED §BT / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
 
 **Deploy before QA:**
 
@@ -3624,4 +3625,21 @@ Code: `controllers/callingLeadController.ts`. ~1–1.5 s per list for dealers wi
 | Rule | Social = `sheetSourceId` set / `google_sheet` / meta / ig / fb; CSV stays `csv` |
 
 Code: `models/CallingActionHistory.ts`, `utils/callingQueueSocialFields.ts`, `controllers/callingLeadController.ts`, `config/sequelizeBootstrap.ts`. Dev backfill: 215 `google_sheet` (fb 158, ig 57), 116,661 `csv`.
+
+Note: the admin / HR / dealer `calling-actions` list has its own row mapper — it now spreads `callingActionSourceFields(row)` too (this was the reason Calling Reports showed Social 0).
+
+## 69. Calling Reports — list filter source / connection / search (§BT) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BT** · `BACKEND_CALLING_SOCIAL_SOURCE.ts` §6 (FE notes label this §BS / HANDOFF §65)
+
+| Query | Detail |
+|-------|--------|
+| `source=all\|social\|normal` | SQL on the action snapshot, falling back to the lead |
+| `connection=all\|connected\|not_connected` | Same classifier as the cards (`classifyCallingConnection`); unanswered / switched off / … = not connected |
+| `search` | Unchanged — name, last-10 mobile, dealer, status / remark |
+| Cards | `/calling-actions/summary` and list `summary` (full scope) ignore source / connection / search |
+| Bad values | Ignored, no 400 |
+| Auth | §AX — admin / calling_reports / hr JWT (already in place) |
+
+Applies to `GET /admin/calling-actions`, `/hr/calling-actions`, `/dealers/me/calling-actions`. `connection` loads the filtered ids then pages in JS (~1.5–2 s on all 117k rows; < 0.5 s once date / source narrows it).
 

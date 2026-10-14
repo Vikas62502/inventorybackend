@@ -2669,6 +2669,29 @@ No new routes. Every calling-action row and queue lead returns (camel + snake): 
 
 ---
 
+## §BT — Calling Reports list filter: source / connection / search — Oct 2026
+
+**Status: implemented** — HANDOFF **§69** · `BACKEND_CALLING_SOCIAL_SOURCE.ts` §6 (FE notes label this §BS / HANDOFF §65)
+
+`GET /admin/calling-actions` (also `/hr/calling-actions`, `/dealers/me/calling-actions`):
+
+```
+?range=&startDate=&endDate=&dealerId=&source=all|social|normal&connection=all|connected|not_connected&search=
+```
+
+- `source` — Social per §BS (snapshot on the action, else the lead); `normal` = everything else.
+- `connection` — `classifyCallingConnection`, the same rule as the Connected / Not Connected cards.
+- `search` — unchanged (name, last-10 mobile, dealer, status / remark).
+- Six cards (`/calling-actions/summary`, list `summary` with `summaryScope=full`) stay date + employee only.
+- Unknown values / extra params ignored (no 400). Auth per §AX (admin / calling_reports / hr).
+
+### Done when
+
+- [x] social + normal = all; connected + not_connected = all (dev: 221 + 116,883; 49,533 + 67,571 of 117,104)
+- [x] Summary totals identical with and without source / connection / search
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

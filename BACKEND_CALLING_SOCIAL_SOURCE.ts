@@ -76,5 +76,19 @@ UPDATE calling_action_history h
  *     externalId: 'l:1589843572551797', isSocialMedia: true, leadSource: 'social_media' }
  *   CSV lead → { sourceType: 'csv', platform: null, uploadFileName: 'CSV Shalimar Chouraha … .csv',
  *     isSocialMedia: false, leadSource: 'calling_data' }
+ *
+ * -----------------------------------------------------------------------------
+ * 6) Filter query on the list (REQUIRED §BT / HANDOFF §69; FE labels §BS / §65)
+ * -----------------------------------------------------------------------------
+ *   GET /api/admin/calling-actions | /api/hr/calling-actions | /api/dealers/me/calling-actions
+ *     ?range=&startDate=&endDate=&dealerId=          (unchanged)
+ *     &source=all|social|normal                       SQL on the action snapshot, else the lead
+ *     &connection=all|connected|not_connected         classifyCallingConnection (unanswered / switched off / … = not_connected)
+ *     &search=                                        name, last-10 mobile, dealer, status / remark (unchanged)
+ *   Unknown values / extra params are ignored (no 400). Pagination total reflects the filters.
+ *   GET …/calling-actions/summary and the list `summary` (summaryScope=full) stay date + employee only —
+ *   source / connection / search never shrink the six cards.
+ *   Auth (§AX): admin, calling_reports or hr JWT on both list + summary (registered before authorizeAdmin).
+ *   Dev: all 117,104 · social 221 · normal 116,883 · connected 49,533 · not_connected 67,571.
  */
 export { CALLING_ACTION_SOURCE_BACKFILL_SQL };
