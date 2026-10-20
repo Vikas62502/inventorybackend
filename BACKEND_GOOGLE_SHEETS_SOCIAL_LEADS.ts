@@ -132,7 +132,15 @@ ALTER TABLE hr_leads
   ADD COLUMN IF NOT EXISTS final_decision VARCHAR(128),
   ADD COLUMN IF NOT EXISTS final_decision_reason TEXT,
   ADD COLUMN IF NOT EXISTS created_time TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS email VARCHAR(256),
+  ADD COLUMN IF NOT EXISTS form_answers JSONB,
   ADD COLUMN IF NOT EXISTS raw_json JSONB;
+
+-- This repo table is calling_leads (camelCase). Migration 20261017120000 + boot ensure:
+--   ALTER TABLE calling_leads
+--     ADD COLUMN IF NOT EXISTS email VARCHAR(256) NULL,
+--     ADD COLUMN IF NOT EXISTS "formAnswers" JSONB NULL,
+--     ADD COLUMN IF NOT EXISTS "rawPayload" JSONB NULL;
 
 CREATE INDEX IF NOT EXISTS idx_hr_leads_sheet_source ON hr_leads(sheet_source_id);
 CREATE INDEX IF NOT EXISTS idx_hr_leads_upload_mobile ON hr_leads(upload_id, mobile);
@@ -168,6 +176,7 @@ function mapSheetSourceForApi(row, counts) {
 function mapSocialLeadForApi(r, dealerNameById) {
   const assignedDealerId = normalizeAssigneeId(r.assigned_dealer_id) || null
   const status = r.status || "queued"
+  const formAnswers = r.form_answers || r.formAnswers || []
   return {
     id: r.id,
     externalId: r.external_id,
@@ -175,7 +184,11 @@ function mapSocialLeadForApi(r, dealerNameById) {
     mobile: r.mobile,
     address: r.address,
     city: r.city,
-    customerNote: r.customer_note,
+    email: r.email || null,
+    formAnswers,
+    form_answers: formAnswers,
+    customerNote: r.customer_note || r.customerNote,
+    customer_note: r.customer_note || r.customerNote,
     platform: r.platform,
     campaignName: r.campaign_name,
     adName: r.ad_name,
@@ -195,7 +208,8 @@ function mapSocialLeadForApi(r, dealerNameById) {
     assignmentStatus: status,
     status,
     sourceTab: r.source_sheet_tab,
-    raw: r.raw_json,
+    raw: r.raw_json || r.rawPayload,
+    raw_json: r.raw_json || r.rawPayload,
   }
 }
 
@@ -273,19 +287,23 @@ function getSheetsClient() {
 // -----------------------------------------------------------------------------
 
 /**
- * DB → Sheet write-back (P0 / REQUIRED §AQ) — utils/hrSheetWriteBack.ts
+ * DB → Sheet write-back (P0 / REQUIRED §AQ + §BV) — utils/hrSheetWriteBack.ts
  *
  * After assign + calling CRM updates, call scheduleHrLeadSheetWriteBack(leadId).
+ * Calling PATCH Connected / Move persists final_decision + second_call_response first (§BV),
+ * then write-back pushes Final Decision / 2nd Call Response to the sheet (immediate; cron ≤1h fallback).
  * Scope: https://www.googleapis.com/auth/spreadsheets (Editor on spreadsheet).
  *
  * Writes (create header if missing; match truncated headers e.g. Assignment Stat):
  *   Assigned Dealer ← dealer name
  *   Assignment Status / Assignment Stat ← status (queued / completed / …)
  *   Remarks, 1st/2nd Call Response ← call fields
- *   Final Decision + reason ← final decision
+ *   Final Decision + reason ← final_decision / final_decision_reason (Interested | Not Interested | Pending)
  *   Address ← lead address (+ city/state); create Address column if missing
  *
  * Never overwrite Meta columns (id, phone_number, full_name, ad_*, …).
+ * Pull sync: existing (sheet_source_id, external_id) skipped — do not overwrite DB final_decision /
+ * call fields from older/empty sheet cells.
  */
 
 // -----------------------------------------------------------------------------
@@ -311,7 +329,58 @@ export const SOCIAL_SHEET_COLUMN_MAP = {
   adName: ["ad_name"],
   campaignName: ["campaign_name"],
   formName: ["form_name"], // note enrich only
+  email: ["email", "email_address"],
+  // form Q&A → form_answers (see extractFormAnswersFromRaw)
+  averageBill: ["what_is_your_average_monthly_electricity_bill?"],
+  whenInstall: ["when_are_you_planning_to_install_solar?"],
+  openRooftop: ["do_you_have_an_open_rooftop?"],
   // ignored as stored fields (remain in raw): ad_id, adset_id, adset_name, campaign_id, form_id, is_organic
+}
+
+/** Humanize Meta answer tokens: _-_ → " - ", _ → space. */
+function humanizeFormAnswer(value) {
+  return String(value || "")
+    .trim()
+    .replace(/_-+_/g, " - ")
+    .replace(/_+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+/** Sheet / raw_json → email + form_answers[]. Implemented: utils/callingLeadFormFields.ts */
+function extractFormAnswersFromRaw(raw) {
+  if (!raw || typeof raw !== "object") return { email: "", formAnswers: [] }
+  const email = pickRaw(raw, "email", "email_address", "emailaddress")
+  const fields = [
+    {
+      keys: ["whatisyouraveragemonthlyelectricitybill", "averagemonthlyelectricitybill"],
+      question: "Average monthly electricity bill",
+    },
+    {
+      keys: ["whenareyouplanningtoinstallsolar", "whenplanningtoinstallsolar"],
+      question: "When planning to install solar",
+    },
+    {
+      keys: ["doyouhaveanopenrooftop", "openrooftop"],
+      question: "Open rooftop",
+    },
+  ]
+  const formAnswers = []
+  for (const f of fields) {
+    const answer = humanizeFormAnswer(pickRaw(raw, ...f.keys))
+    if (answer) formAnswers.push({ question: f.question, answer })
+  }
+  return { email, formAnswers }
+}
+
+function buildFormCustomerNote(email, formAnswers, fallback = []) {
+  const parts = []
+  if (email) parts.push(`Email: ${email}`)
+  for (const row of formAnswers || []) {
+    if (row.answer) parts.push(`${row.question}: ${row.answer}`)
+  }
+  if (parts.length) return parts.join(" · ")
+  return (fallback || []).filter(Boolean).join(" · ")
 }
 
 function normalizeHeader(h) {
@@ -347,6 +416,8 @@ function rowToLeadObject(headers, values, sheetTabName = "") {
   const formName = pickRaw(raw, "form_name", "form")
   const fullName = pickRaw(raw, "full_name", "fullname")
   const nameCol = pickRaw(raw, "name")
+  const { email, formAnswers } = extractFormAnswersFromRaw(raw)
+  const customerNote = buildFormCustomerNote(email, formAnswers, [campaignName, adName, formName])
 
   return {
     externalId: pickRaw(raw, "id", "lead_id", "external_id") || null,
@@ -371,7 +442,9 @@ function rowToLeadObject(headers, values, sheetTabName = "") {
     finalDecision: pickRaw(raw, "finaldecison", "finaldecision"),
     finalDecisionReason: pickRaw(raw, "reasonoffinaldecision"),
     createdTime: pickRaw(raw, "created_time") || null,
-    customerNote: [campaignName, adName, formName].filter(Boolean).join(" · "),
+    email,
+    formAnswers,
+    customerNote,
     raw,
   }
 }
@@ -437,7 +510,9 @@ export async function syncSheetTabSource(sourceRow, { assignLeads = true, db } =
       name: lead.name,
       mobile: lead.mobile,
       address: lead.address,
-      customer_note: [lead.campaignName, lead.adName].filter(Boolean).join(" · "),
+      email: lead.email || null,
+      form_answers: lead.formAnswers?.length ? lead.formAnswers : null,
+      customer_note: lead.customerNote || null,
       platform: lead.platform,
       lead_status: lead.leadStatus,
       remarks: lead.remarks,

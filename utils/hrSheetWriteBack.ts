@@ -368,23 +368,31 @@ export const writeBackHrLeadToSheetById = async (
   );
 
   const callRemark = String(assignment?.callRemark || '').trim();
+  const act = String(action || '').toLowerCase();
   const patch: Record<string, unknown> = {
     sheetLeadStatus,
     assignedPersonName: assignedDealerName || lead.assignedPersonName
   };
 
+  // Prefer fields already persisted by calling PATCH (§BV). Only fill gaps.
   if (callRemark) {
-    if (!lead.firstCallResponse) {
-      patch.firstCallResponse = callRemark;
-    } else if (callRemark !== lead.firstCallResponse) {
-      patch.secondCallResponse = callRemark;
-    }
     patch.remarks = callRemark;
+    if (!lead.secondCallResponse) {
+      if (!lead.firstCallResponse) {
+        patch.firstCallResponse = callRemark;
+      } else if (callRemark !== lead.firstCallResponse) {
+        patch.secondCallResponse = callRemark;
+      }
+    }
   }
 
-  if (String(action || '').toLowerCase() === 'not_interested') {
-    patch.finalDecision = lead.finalDecision || 'Not Interested';
-    if (callRemark) patch.finalDecisionReason = lead.finalDecisionReason || callRemark;
+  if (!lead.finalDecision) {
+    if (act === 'called') patch.finalDecision = 'Interested';
+    else if (act === 'not_interested') patch.finalDecision = 'Not Interested';
+    else if (act === 'rescheduled' || act === 'follow_up') patch.finalDecision = 'Pending';
+  }
+  if (!lead.finalDecisionReason && callRemark && (lead.finalDecision || patch.finalDecision)) {
+    patch.finalDecisionReason = callRemark;
   }
 
   await lead.update(patch as any);

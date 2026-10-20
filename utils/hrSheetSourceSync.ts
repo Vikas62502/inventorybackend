@@ -9,6 +9,11 @@ import {
 } from './hrSheetGoogleAuth';
 import { emitSheetSyncUploadsUpdated } from './realtime';
 import { scheduleHrLeadSheetWriteBackForBatch } from './hrSheetWriteBack';
+import {
+  buildFormCustomerNote,
+  extractFormAnswersFromRaw,
+  type FormAnswer
+} from './callingLeadFormFields';
 import { logError } from './loggerHelper';
 
 export {
@@ -38,6 +43,8 @@ export type MappedSheetLead = {
   finalDecision: string;
   finalDecisionReason: string;
   sheetCreatedTime: Date | null;
+  email: string;
+  formAnswers: FormAnswer[];
   customerNote: string;
   raw: Record<string, string>;
   sheetRowIndex: number;
@@ -124,6 +131,15 @@ export const rowToLeadObject = (
     pickRaw(raw, 'assigned_person', 'assignedperson') ||
     (fullName && nameCol && nameCol !== fullName ? nameCol : '');
 
+  // Meta form email + Q&A (§BW)
+  const { email, formAnswers } = extractFormAnswersFromRaw(raw);
+  const customerNote = buildFormCustomerNote(email, formAnswers, [
+    campaignName,
+    adName,
+    formName,
+    adsetName
+  ]);
+
   return {
     externalId: pickRaw(raw, 'id', 'lead_id', 'external_id') || null,
     name: customerName,
@@ -149,8 +165,9 @@ export const rowToLeadObject = (
     finalDecision: pickRaw(raw, 'finaldecison', 'finaldecision', 'final decision'),
     finalDecisionReason: pickRaw(raw, 'reasonoffinaldecision', 'reason of final decision'),
     sheetCreatedTime: parseSheetDate(pickRaw(raw, 'created_time', 'createdat', 'created')),
-    // form_name / adset_name enrich note only; ad_id / campaign_id etc. stay in raw
-    customerNote: [campaignName, adName, formName, adsetName].filter(Boolean).join(' · '),
+    email,
+    formAnswers,
+    customerNote,
     raw,
     sheetRowIndex: 0
   };
@@ -271,8 +288,14 @@ export const syncSheetTabSource = async (
         where: { sheetSourceId: sourceRow.id, externalId: lead.externalId }
       });
       if (byExternal) {
-        // Pull sync: existing (sheet_source_id, external_id) — do NOT clear CRM
-        // assignment/status/remarks from blank sheet cells. Only import new Meta rows.
+        // Pull sync: do NOT overwrite CRM call / final_decision fields from sheet.
+        // Fill empty email / formAnswers / customerNote / rawPayload only (§BW).
+        const patch: Record<string, unknown> = {};
+        if (!byExternal.email && lead.email) patch.email = lead.email;
+        if (!byExternal.formAnswers && lead.formAnswers?.length) patch.formAnswers = lead.formAnswers;
+        if (!byExternal.customerNote && lead.customerNote) patch.customerNote = lead.customerNote;
+        if (!byExternal.rawPayload && lead.raw) patch.rawPayload = lead.raw;
+        if (Object.keys(patch).length) await byExternal.update(patch);
         skipped += 1;
         continue;
       }
@@ -282,6 +305,12 @@ export const syncSheetTabSource = async (
       where: { mobileNormalized: lead.mobile }
     });
     if (byMobile) {
+      const patch: Record<string, unknown> = {};
+      if (!byMobile.email && lead.email) patch.email = lead.email;
+      if (!byMobile.formAnswers && lead.formAnswers?.length) patch.formAnswers = lead.formAnswers;
+      if (!byMobile.customerNote && lead.customerNote) patch.customerNote = lead.customerNote;
+      if (!byMobile.rawPayload && lead.raw) patch.rawPayload = lead.raw;
+      if (Object.keys(patch).length) await byMobile.update(patch);
       skipped += 1;
       continue;
     }
@@ -299,6 +328,8 @@ export const syncSheetTabSource = async (
         address: lead.address || null,
         city: lead.city,
         kNumber: lead.kw || null,
+        email: lead.email || null,
+        formAnswers: lead.formAnswers?.length ? lead.formAnswers : null,
         customerNote: lead.customerNote || null,
         platform: lead.platform || null,
         campaignName: lead.campaignName || null,

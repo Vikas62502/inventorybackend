@@ -51,6 +51,9 @@ const phase = {
  * -----------------------------------------------------------------------------
  *   After saving installments the SPA calls PUT /api/admin/subvendors/:id/leaser on the chosen office with
  *   payments whose id is `lp-collect-{quotationId}-{phaseNumber}` (older saves: `lp-self-…`).
+ *   Office Outside files: collectVendorId is the office_outside subvendor; PUT that vendor
+ *   (not Office Inside). customerIds may be OO-XXXXXXXX. OO installments live on
+ *   PATCH /admin/office-outside/:id/payment-details (installments_json), not quotations.
  *   - subvendor_leaser_payments.id is TEXT; client ids are stored verbatim, never replaced by a UUID.
  *     Rows without an id still get a server UUID.
  *   - Re-saving the same ids replaces rows (no duplicates).

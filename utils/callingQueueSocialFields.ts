@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import CallingLead from '../models/CallingLead';
 import CallingLeadUploadBatch from '../models/CallingLeadUploadBatch';
+import { buildLeadFormApiFields } from './callingLeadFormFields';
 
 type UploadBatchMeta = Pick<
   CallingLeadUploadBatch,
@@ -51,7 +52,10 @@ export const buildDealerQueueSocialFields = (
     platform: lead.platform || null
   };
 
-  if (!isSocial) return identity;
+  if (!isSocial) {
+    // Still echo email / form Q&A when present (CSV rarely has them)
+    return { ...identity, ...buildLeadFormApiFields(lead) };
+  }
 
   const uploadFileName = batch?.fileName || null;
   const leadStatus = lead.sheetLeadStatus || null;
@@ -91,8 +95,7 @@ export const buildDealerQueueSocialFields = (
     assigned_person_name: lead.assignedPersonName || null,
     loginFlag: lead.loginFlag ?? null,
     login_flag: lead.loginFlag ?? null,
-    raw: lead.rawPayload || null,
-    raw_json: lead.rawPayload || null
+    ...buildLeadFormApiFields(lead)
   };
 };
 

@@ -45,12 +45,26 @@ const outcomes = {
  *     lead (leaves Scheduled); Decision Pending re-schedules it.
  *   From Connected / Not Connected "Move" (lead already completed): the latest history row is updated to the new
  *     outcome; Decision Pending also puts the assignment back to rescheduled + nextFollowUpAt so it shows on
- *     Scheduled. Free remark may include "Transfer Reason: …".
+ *     Scheduled. Free remark may be `Transferred from Not Connected: {text}` (legacy `Transfer Reason:` still OK).
  *   After Move the lead's latest action is connected → it leaves Not Connected and shows on Connected
  *   (and Scheduled when Decision Pending).
+ *
+ * -----------------------------------------------------------------------------
+ * 3) Sheet Final Decision on Connected / Move (REQUIRED §BV / HANDOFF §71)
+ * -----------------------------------------------------------------------------
+ *   On Connected outcomes (and Move → Connected), PATCH also persists on calling_leads:
+ *     finalDecision / final_decision     → Interested | Not Interested | Pending
+ *     finalDecisionReason / final_decision_reason → free remark (transfer message)
+ *     secondCallResponse / second_call_response → full tagged callRemark
+ *   SPA may send finalDecision / secondCallResponse (camel + snake); else derived from status_text / action.
+ *   Not Connected (statusCategory = call_connectivity) → omit Final Decision.
+ *   After PATCH, if lead.sheetSourceId set → scheduleHrLeadSheetWriteBack(leadId) (immediate; cron ≤1h fallback).
+ *   Pull sync never overwrites these DB fields from empty/older sheet cells.
+ *   Code: utils/callingSheetDecision.ts · controllers/callingLeadController.ts · utils/hrSheetWriteBack.ts
  *
  * QA:
  *   1. Not Connected → Move → Decision Pending (+ date) → lead on Connected + Scheduled + Dialled, not on Not Connected.
  *   2. Scheduled (not yet due) → Interested → 200; lead leaves Scheduled, stays on Connected + Dialled.
  *   3. Decision Pending with future nextFollowUpAt still listed on Dialled + Connected.
+ *   4. Sheet lead + Interested → DB final_decision=Interested, 2nd Call Response = tagged remark; sheet Final Decision updates.
  */

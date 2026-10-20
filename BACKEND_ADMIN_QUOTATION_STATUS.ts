@@ -1837,15 +1837,21 @@ export async function patchDealerCallingQueueAction(req, res, db) {
  * Connected -> Interested:
  * - statusCategory: customer_intent (or schedule when moved to visit/sales step)
  * - action: called
+ * - persists finalDecision=Interested + secondCallResponse (§BV) → sheet write-back
  *
  * Connected -> Not Interested:
  * - statusCategory: competition
  * - action: not_interested
+ * - persists finalDecision=Not Interested + secondCallResponse (§BV) → sheet write-back
  *
  * Connected -> Decision Pending (hold + reschedule):
  * - statusCategory: schedule
  * - action: rescheduled (preferred) OR follow_up
  * - nextFollowUpAt required
+ * - persists finalDecision=Pending + secondCallResponse (§BV) → sheet write-back
+ *
+ * Not Connected (call_connectivity) omits Final Decision. Move → Connected uses the same
+ * Connected rows + free remark `Transferred from Not Connected: {msg}`.
  *
  * -----------------------------------------------------------------------------
  * E.1) Reschedule PATCH — fix 500 "Internal server error" (Jun 2026)

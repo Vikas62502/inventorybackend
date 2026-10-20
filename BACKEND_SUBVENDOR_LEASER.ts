@@ -34,8 +34,9 @@
  * -----------------------------------------------------------------------------
  * 2) Vendor id
  * -----------------------------------------------------------------------------
- *   `:id` and `?vendorId=` accept the subvendor UUID, or a dealer id → that dealer's
- *   office_inside subvendor. Unknown → 404 SUBVENDOR_404 (GET list → empty arrays).
+ *   `:id` and `?vendorId=` accept the subvendor UUID (office_inside **or office_outside**),
+ *   or a dealer id → that dealer's office_inside subvendor. Unknown → 404 SUBVENDOR_404
+ *   (GET list → empty arrays). Do not 404 office_outside vendors.
  *
  * -----------------------------------------------------------------------------
  * 3) Balance rule
@@ -81,7 +82,7 @@ const putBody = {
       amount: 20000, // whole INR (rounded), >= 0
       type: 'cash', // free text, max 64
       remark: 'first',
-      customerIds: ['quotation-id-1'], // or customer_ids; JSON string / comma list ok
+      customerIds: ['quotation-id-1', 'OO-A1B2C3D4'], // quotation ids or OO-* record ids; invalid / missing → []
       sortOrder: 1 // or sort_order / paymentNumber; missing / <= 0 → position (1-based)
     }
   ]
@@ -129,4 +130,14 @@ const vendorResponse = {
  *     - Neither handler writes the other's column; leaser_remaining only changes when sent on the leaser PUT
  *       (never derived from profit_ratio).
  *   Example: PI 153775, file 3000, GST 5004 → table siteCost 153775, vendor costOfSite 161779.
+ *
+ * -----------------------------------------------------------------------------
+ * §BX / Office Outside leaser (Oct 2026)
+ * -----------------------------------------------------------------------------
+ *   Office Outside profit is complete: subtotal − (PI + file + GST + others) = subtotal − costOfSite.
+ *   Ignore profit_ratio. Echoed as profit / vendorProfit on GET/PUT leaser for kind=office_outside.
+ *   Collect Other on an OO file posts to that outside vendor (PUT /subvendors/:outsideId/leaser
+ *   with customerIds including OO-XXXXXXXX), not Office Inside.
+ *   Dates: GET echoes date + payment_date as "YYYY-MM-DD" (not ISO datetime).
  */
+

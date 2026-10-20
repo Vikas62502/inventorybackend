@@ -1864,7 +1864,7 @@ Do **not** change Meta columns (`id`, `phone_number`, `full_name`, ads, …).
 
 ### 4. Pull sync rule
 
-For existing `(sheet_source_id, external_id)`: **do not** clear CRM assignment/status from blank sheet cells. Only import **new** Meta rows.
+For existing `(sheet_source_id, external_id)`: **do not** clear CRM assignment/status from blank sheet cells. Only import **new** Meta rows. Also do **not** overwrite DB `final_decision` / call-response fields from older or empty sheet cells (see **§BV**).
 
 ### Still required (if not live)
 
@@ -2716,6 +2716,96 @@ Installment replace (`PUT /quotations/:id/installments`, `PATCH …/payment-deta
 
 - [x] Cash + Other partial 20000 of 50000 → GET `other` / vendor id / `partial` / 20000 / 30000 (verified on dev, rolled back)
 - [x] Loan phase with Other sent → all null; Self + Complete unchanged
+
+---
+
+## §BV — Calling PATCH → Final Decision + sheet write-back — Oct 2026
+
+**Status: implemented** — HANDOFF **§71** · `BACKEND_CALLING_DATA_TABS.ts` §3 · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `utils/callingSheetDecision.ts`
+
+No new routes. On Connected outcomes / Move to Connected, `PATCH /dealers/me/calling-queue/:leadId/action` persists on `calling_leads`:
+
+| Field | Value |
+|-------|--------|
+| `finalDecision` / `final_decision` | `Interested` / `Not Interested` / `Pending` (body or tagged `status_text` / action) |
+| `finalDecisionReason` / `final_decision_reason` | free remark (e.g. `Transferred from Not Connected: {msg}`) |
+| `secondCallResponse` / `second_call_response` | full tagged `callRemark` |
+
+- SPA may send `finalDecision` / `secondCallResponse` (camel + snake).
+- Not Connected (`statusCategory = call_connectivity`) → omit Final Decision.
+- Transfer remark shape: `[customer_intent] Interested \| Transferred from Not Connected: {msg}` (legacy `Transfer Reason:` still OK).
+- After PATCH, if `sheetSourceId` set → `scheduleHrLeadSheetWriteBack(leadId)` → `writeBackHrLeadToSheet` (immediate; cron sync-all is the ≤1h fallback).
+- Pull sync: existing `(sheet_source_id, external_id)` skipped — never overwrite DB final_decision / call fields from empty/older sheet cells.
+
+### Done when
+
+- [x] Connected Interested / Not Interested / Pending → DB fields set; Not Connected omit
+- [x] Move transfer remark → `final_decision_reason`
+- [x] Sheet write-back scheduled after outcome PATCH (already wired; prefers persisted lead fields)
+
+---
+
+## §BW — Meta form email + Q&A on Current Lead — Oct 2026
+
+**Status: implemented** — HANDOFF **§72** · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `utils/callingLeadFormFields.ts`
+
+Table in this repo is `calling_leads` (FE docs say `hr_leads`). Columns (boot ensure + migration `20261017120000`):
+
+```sql
+ALTER TABLE calling_leads
+  ADD COLUMN IF NOT EXISTS email VARCHAR(256) NULL,
+  ADD COLUMN IF NOT EXISTS "formAnswers" JSONB NULL,
+  ADD COLUMN IF NOT EXISTS "rawPayload" JSONB NULL;  -- already present on most DBs
+```
+
+Sheet sync (`rowToLeadObject` / `syncSheetTabSource`) maps:
+
+| Sheet column | DB field |
+|--------------|----------|
+| `email` | `email` |
+| `what_is_your_average_monthly_electricity_bill?` | `formAnswers[]` |
+| `when_are_you_planning_to_install_solar?` | `formAnswers[]` |
+| `do_you_have_an_open_rooftop?` | `formAnswers[]` |
+| full row | `rawPayload` |
+
+`formAnswers` shape: `[{ question, answer }, …]` with humanized answers (`_-_` → ` - `, `_` → space).  
+`customerNote` = `Email: … · Average monthly electricity bill: … · When planning to install solar: … · Open rooftop: …`.
+
+API echo (camel + snake) on dealer queue `currentLead` / next / lists, calling actions, and HR upload rows: `email`, `formAnswers` / `form_answers`, `raw` / `raw_json`, `customerNote` / `customer_note`. Falls back to parsing `rawPayload` when columns are empty (leads imported before the migration). Existing sheet leads get empty email/formAnswers filled on the next sync without overwriting CRM call fields.
+
+### Done when
+
+- [x] Migration / boot ensure adds columns
+- [x] Sync persists email + formAnswers + customerNote + rawPayload
+- [x] Queue / HR list echo fields
+
+---
+
+## §BX — Office Outside is a separate dataset (not All quotations) — Oct 2026
+
+**Status: implemented** — HANDOFF **§73** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+Office Outside files live in `office_outside_records` + `office_outside_ledger`. They are **not** quotations and never appear on `GET /admin/quotations`.
+
+### Endpoints (admin JWT)
+
+- `GET/POST /api/admin/office-outside`
+- `GET/PATCH/DELETE /api/admin/office-outside/:id`
+- `POST /api/admin/office-outside/:id/send-to-accounts` — status `sent_to_accounts` only (no quotation insert)
+- `PATCH /api/admin/office-outside/:id/slip` — `{ items, notes }`; 1-page slip, no Chairbord branding
+- `GET /api/admin/office-outside/ledger` · `GET/PATCH /api/admin/office-outside/ledger/:id` (id = record id)
+
+`GET /admin/subvendors?kind=office_outside` is still the vendor list. `vendorId` on a record/ledger must be an `office_outside` subvendor (`VAL_VENDOR`). Display amount is `subtotal` (whole INR). `fileType` is `loan` | `cash` | `mix`. Extra body keys ignored.
+
+Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not a quotations row).
+
+### Done when
+
+- [x] Create + list do not show in All quotations
+- [x] Ledger PATCH is partial; slip persists items + notes
+- [x] office_inside vendorId → 400
+
+**Follow-up (Oct 2026):** installments_json / payment_status / payment_mode; `PATCH …/:id/payment-details`; GST + cash_amount + cost_of_site on OO ledger; `?status=sent`; leaser allows office_outside + OO-* customerIds. Sent-row vendor/fileType PATCH is allowed (no `OO_ALREADY_SENT`). fileType omitted on create is not 400.
 
 ---
 

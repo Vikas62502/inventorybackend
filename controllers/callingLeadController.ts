@@ -35,6 +35,8 @@ import {
   resolveCallingActionSource,
   loadUploadBatchMapByIds
 } from '../utils/callingQueueSocialFields';
+import { resolveCallingSheetDecisionFields } from '../utils/callingSheetDecision';
+import { buildLeadFormApiFields } from '../utils/callingLeadFormFields';
 
 /** Non-blocking Google Sheet write-back for social/sheet leads (P0 §AQ). */
 const scheduleSheetWriteBack = (leadId: string | null | undefined): void => {
@@ -1405,6 +1407,8 @@ const callingActionToApiJson = (row: any) => {
     customer_note: row.lead?.customerNote ?? row.customerNote ?? null,
     city: row.lead?.city ?? row.city ?? null,
     state: row.lead?.state ?? row.state ?? null,
+    // §BW — Meta form email + Q&A
+    ...buildLeadFormApiFields(row.lead || row),
     // §AY / §AN / §BS — Social Media vs Calling data source (snapshot on the action, else the lead)
     ...callingActionSourceFields(row)
   };
@@ -2699,7 +2703,8 @@ const buildCallingLeadQueuePayload = async (
     statusLabel: statusText,
     nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
     actionAt: toIsoStringOrNull(assignment.actionAt),
-    customer_note: lead?.customerNote || null
+    customer_note: lead?.customerNote || null,
+    ...buildLeadFormApiFields(lead)
   });
 };
 
@@ -3544,6 +3549,7 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
         state: lead.state,
         customerNote: lead.customerNote ?? null,
         customer_note: lead.customerNote ?? null,
+        ...buildLeadFormApiFields(lead),
         uploadBatchId: lead.batchId || null,
         queuedAt: toIsoStringOrNull(row.assignedAt || row.createdAt),
         dealerId: null,
@@ -4550,6 +4556,16 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       }
     }
 
+    // §BV — Connected / Move: Final Decision + 2nd Call Response (sheet write-back reads these)
+    const sheetDecisionFields = resolveCallingSheetDecisionFields({
+      action,
+      statusCategory: effectiveStatusCategory,
+      statusLabel: effectiveStatusLabel,
+      statusReason: effectiveStatusReason,
+      callRemark: legacyCallRemark || rawCallRemarkInput,
+      body: requestBody
+    });
+
     const OUTCOME_ACTIONS: Array<'called' | 'follow_up' | 'not_interested' | 'rescheduled'> = [
       'called',
       'follow_up',
@@ -4706,6 +4722,18 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         return persistedActionRow;
       };
 
+      const persistSheetDecisionOnLead = async () => {
+        if (!sheetDecisionFields) return;
+        await CallingLead.update(
+          {
+            finalDecision: sheetDecisionFields.finalDecision,
+            finalDecisionReason: sheetDecisionFields.finalDecisionReason,
+            secondCallResponse: sheetDecisionFields.secondCallResponse
+          },
+          { where: { id: assignment.leadId }, transaction }
+        );
+      };
+
       // --- Completed assignment: history-only edit (no assignment transition guard) ---
       if (canEditCompleted) {
         if (!OUTCOME_ACTIONS.includes(action as (typeof OUTCOME_ACTIONS)[number])) {
@@ -4715,6 +4743,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         }
         const historyAction = action as CallingActionType;
         await upsertActionHistory({ isEditLatest: true, historyAction });
+        await persistSheetDecisionOnLead();
         // Connected / Move-to-Connected outcome on a finished lead: Decision Pending puts it back on Scheduled.
         await assignment.update(
           historyAction === 'rescheduled'
@@ -4741,7 +4770,17 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
           action: assignment.action,
           callRemark: assignment.callRemark,
           nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
-          actionAt: toIsoStringOrNull(assignment.actionAt)
+          actionAt: toIsoStringOrNull(assignment.actionAt),
+          ...(sheetDecisionFields
+            ? {
+                finalDecision: sheetDecisionFields.finalDecision,
+                final_decision: sheetDecisionFields.finalDecision,
+                finalDecisionReason: sheetDecisionFields.finalDecisionReason,
+                final_decision_reason: sheetDecisionFields.finalDecisionReason,
+                secondCallResponse: sheetDecisionFields.secondCallResponse,
+                second_call_response: sheetDecisionFields.secondCallResponse
+              }
+            : {})
         });
         return;
       }
@@ -4839,6 +4878,7 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       }
 
       await upsertActionHistory({ isEditLatest: false, historyAction: action as CallingActionType });
+      await persistSheetDecisionOnLead();
 
       await assignment.reload({ transaction });
 
@@ -4858,7 +4898,17 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
         statusText: effectiveStatusLabel,
         remark: effectiveStatusReason,
         nextFollowUpAt: toIsoStringOrNull(assignment.nextFollowUpAt),
-        actionAt: toIsoStringOrNull(assignment.actionAt)
+        actionAt: toIsoStringOrNull(assignment.actionAt),
+        ...(sheetDecisionFields
+          ? {
+              finalDecision: sheetDecisionFields.finalDecision,
+              final_decision: sheetDecisionFields.finalDecision,
+              finalDecisionReason: sheetDecisionFields.finalDecisionReason,
+              final_decision_reason: sheetDecisionFields.finalDecisionReason,
+              secondCallResponse: sheetDecisionFields.secondCallResponse,
+              second_call_response: sheetDecisionFields.secondCallResponse
+            }
+          : {})
       });
     });
 
@@ -5714,18 +5764,30 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
         .map((row) => resolvedLeadIdForRow(row))
         .filter((leadId): leadId is string => Boolean(leadId))
     ));
-    const assignments = leadIds.length
-      ? await DealerLeadAssignment.findAll({
-        where: {
-          leadId: { [Op.in]: leadIds },
-          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
-        },
-        attributes: ['leadId', 'dealerId', 'status']
-      })
-      : [];
+    const [assignments, callingLeads] = await Promise.all([
+      leadIds.length
+        ? DealerLeadAssignment.findAll({
+            where: {
+              leadId: { [Op.in]: leadIds },
+              [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+            },
+            attributes: ['leadId', 'dealerId', 'status']
+          })
+        : Promise.resolve([] as DealerLeadAssignment[]),
+      leadIds.length
+        ? CallingLead.findAll({
+            where: { id: { [Op.in]: leadIds } },
+            attributes: ['id', 'email', 'formAnswers', 'customerNote', 'rawPayload']
+          })
+        : Promise.resolve([] as CallingLead[])
+    ]);
     const assignmentByLeadId = new Map<string, DealerLeadAssignment>();
     for (const assignment of assignments) {
       assignmentByLeadId.set(assignment.leadId, assignment);
+    }
+    const callingLeadById = new Map<string, CallingLead>();
+    for (const lead of callingLeads) {
+      callingLeadById.set(String(lead.id), lead);
     }
     const assignedDealers = Array.isArray(batch.assignedDealers) ? batch.assignedDealers : [];
     const dealerIds = Array.from(
@@ -5775,6 +5837,10 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
       const assignedDealerName = assignedDealerId ? (dealerNameMap.get(String(assignedDealerId)) || null) : null;
       const assignmentStatus = resolveRowAssignmentStatus(assignment);
       const rawPayload = (row.rawPayload || {}) as Record<string, unknown>;
+      const callingLead = resolvedLeadId ? callingLeadById.get(resolvedLeadId) : null;
+      const formFields = buildLeadFormApiFields(
+        callingLead || { rawPayload: row.rawPayload as Record<string, unknown> }
+      );
       return {
         id: row.id,
         rowIndex: row.rowIndex,
@@ -5796,7 +5862,8 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
         assigned_dealer_name: assignedDealerName,
         assignment_status: assignmentStatus,
         leadId: resolvedLeadId || row.leadId,
-        rawPayload: row.rawPayload
+        rawPayload: row.rawPayload,
+        ...formFields
       };
     });
     const poolDealers = assignedDealers

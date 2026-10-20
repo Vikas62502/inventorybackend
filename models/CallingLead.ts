@@ -13,6 +13,8 @@ interface CallingLeadAttributes {
   city?: string | null;
   state?: string | null;
   customerNote?: string | null;
+  email?: string | null;
+  formAnswers?: object | null;
   rawPayload?: object | null;
   sheetSourceId?: string | null;
   externalId?: string | null;
@@ -34,7 +36,7 @@ interface CallingLeadAttributes {
   updatedAt?: Date;
 }
 
-interface CallingLeadCreationAttributes extends Optional<CallingLeadAttributes, 'id' | 'batchId' | 'altMobile' | 'kNumber' | 'address' | 'city' | 'state' | 'customerNote' | 'rawPayload' | 'sheetSourceId' | 'externalId' | 'sheetRowIndex' | 'platform' | 'campaignName' | 'adName' | 'sheetLeadStatus' | 'remarks' | 'remarks2' | 'assignedPersonName' | 'firstCallResponse' | 'secondCallResponse' | 'loginFlag' | 'finalDecision' | 'finalDecisionReason' | 'sheetCreatedTime' | 'createdAt' | 'updatedAt'> {}
+interface CallingLeadCreationAttributes extends Optional<CallingLeadAttributes, 'id' | 'batchId' | 'altMobile' | 'kNumber' | 'address' | 'city' | 'state' | 'customerNote' | 'email' | 'formAnswers' | 'rawPayload' | 'sheetSourceId' | 'externalId' | 'sheetRowIndex' | 'platform' | 'campaignName' | 'adName' | 'sheetLeadStatus' | 'remarks' | 'remarks2' | 'assignedPersonName' | 'firstCallResponse' | 'secondCallResponse' | 'loginFlag' | 'finalDecision' | 'finalDecisionReason' | 'sheetCreatedTime' | 'createdAt' | 'updatedAt'> {}
 
 class CallingLead extends Model<CallingLeadAttributes, CallingLeadCreationAttributes> implements CallingLeadAttributes {
   public id!: string;
@@ -48,6 +50,8 @@ class CallingLead extends Model<CallingLeadAttributes, CallingLeadCreationAttrib
   public city!: string | null;
   public state!: string | null;
   public customerNote!: string | null;
+  public email!: string | null;
+  public formAnswers!: object | null;
   public rawPayload!: object | null;
   public sheetSourceId!: string | null;
   public externalId!: string | null;
@@ -115,6 +119,14 @@ CallingLead.init(
     },
     customerNote: {
       type: DataTypes.TEXT,
+      allowNull: true
+    },
+    email: {
+      type: DataTypes.STRING(256),
+      allowNull: true
+    },
+    formAnswers: {
+      type: DataTypes.JSONB,
       allowNull: true
     },
     rawPayload: {

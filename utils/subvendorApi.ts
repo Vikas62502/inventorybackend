@@ -204,6 +204,7 @@ const parseLeaserDate = (raw: unknown): string | null | undefined => {
   return toDateOnly(s);
 };
 
+/** Quotation ids and/or OO-* office-outside public ids. Invalid / missing → []. */
 const parseCustomerIds = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw.map(str).filter(Boolean);
   if (typeof raw === 'string' && raw.trim()) {

@@ -30,6 +30,19 @@ import {
   replaceVendorLeaser
 } from '../controllers/subvendorController';
 import {
+  listOfficeOutside,
+  getOfficeOutside,
+  createOfficeOutside,
+  updateOfficeOutside,
+  deleteOfficeOutside,
+  sendOfficeOutsideToAccounts,
+  saveOfficeOutsideSlip,
+  listOfficeOutsideLedger,
+  getOfficeOutsideLedger,
+  updateOfficeOutsideLedger,
+  updateOfficeOutsidePaymentDetails
+} from '../controllers/officeOutsideController';
+import {
   updateQuotationInstallationRelease,
   updateQuotationInstallationScheduledAt,
   updateQuotationPaymentDetails,
@@ -222,6 +235,19 @@ router.get('/subvendors', listSubvendors);
 router.post('/subvendors', createSubvendor);
 router.patch('/subvendors/:id', updateSubvendor);
 router.delete('/subvendors/:id', deleteSubvendor);
+
+/** §BX — Office Outside records (not quotations). See BACKEND_OFFICE_OUTSIDE.ts. */
+router.get('/office-outside/ledger', listOfficeOutsideLedger);
+router.get('/office-outside/ledger/:id', getOfficeOutsideLedger);
+router.patch('/office-outside/ledger/:id', updateOfficeOutsideLedger);
+router.post('/office-outside/:id/send-to-accounts', sendOfficeOutsideToAccounts);
+router.patch('/office-outside/:id/payment-details', updateOfficeOutsidePaymentDetails);
+router.patch('/office-outside/:id/slip', saveOfficeOutsideSlip);
+router.get('/office-outside', listOfficeOutside);
+router.post('/office-outside', createOfficeOutside);
+router.get('/office-outside/:id', getOfficeOutside);
+router.patch('/office-outside/:id', updateOfficeOutside);
+router.delete('/office-outside/:id', deleteOfficeOutside);
 
 /**
  * Admin Product Needed — installation-pending or file-login (not approved) aggregates.

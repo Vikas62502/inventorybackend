@@ -3,6 +3,8 @@ import { Op, UniqueConstraintError, WhereOptions } from 'sequelize';
 import {
   Customer,
   Dealer,
+  OfficeOutsideLedger,
+  OfficeOutsideRecord,
   Quotation,
   Subvendor,
   SubvendorLedger,
@@ -24,6 +26,11 @@ import {
   publicSubvendor,
   SubvendorKindValue
 } from '../utils/subvendorApi';
+import {
+  officeOutsideCostOfSite,
+  officeOutsideGstCharges,
+  officeOutsideVendorProfit
+} from '../utils/officeOutsideApi';
 
 const fail = (res: Response, status: number, code: string, message: string): void => {
   res.status(status).json({ success: false, error: { code, message } });
@@ -292,7 +299,7 @@ export const listSubvendorLedger = async (req: Request, res: Response): Promise<
   }
 };
 
-/** `:id` / `?vendorId=` may be the subvendor UUID or a dealer id (→ that dealer's office_inside row). */
+/** `:id` / `?vendorId=` = subvendor UUID (office_inside or office_outside) or a dealer id → office_inside. */
 const resolveLeaserVendor = async (idOrDealerId: string): Promise<Subvendor | null> => {
   const id = String(idOrDealerId || '').trim();
   if (!id) return null;
@@ -303,15 +310,35 @@ const resolveLeaserVendor = async (idOrDealerId: string): Promise<Subvendor | nu
   return Subvendor.findOne({ where: { kind: 'office_inside', dealerId: id } });
 };
 
+const officeOutsideProfitForVendor = async (vendorId: string): Promise<number> => {
+  const rows = await OfficeOutsideLedger.findAll({
+    where: { vendorId },
+    include: [
+      { model: OfficeOutsideRecord, as: 'record', attributes: ['subtotal'], required: false }
+    ]
+  });
+  return rows.reduce((sum, row) => {
+    const plain = row.get({ plain: true }) as any;
+    const gst = officeOutsideGstCharges(plain.proposal, plain.pi);
+    const cost = officeOutsideCostOfSite(plain.pi, plain.fileCharges, gst, plain.others);
+    return sum + officeOutsideVendorProfit(plain.record?.subtotal, cost);
+  }, 0);
+};
+
 const sumLeaserAmounts = (rows: Array<{ amount: unknown }>): number =>
   rows.reduce((total, row) => total + roundInr(row.amount), 0);
 
-const leaserVendorPayload = (vendor: Subvendor, payments: SubvendorLeaserPayment[]) => {
+const leaserVendorPayload = (
+  vendor: Subvendor,
+  payments: SubvendorLeaserPayment[],
+  outsideProfit?: number
+) => {
   const plainVendor = publicSubvendor(vendor.get({ plain: true }));
   const currentBalance = sumLeaserAmounts(payments);
-  return {
+  const base = {
     vendorId: vendor.id,
     vendor_id: vendor.id,
+    kind: vendor.kind,
     dealerId: plainVendor.dealerId || null,
     dealer_id: plainVendor.dealerId || null,
     currentBalance,
@@ -325,6 +352,14 @@ const leaserVendorPayload = (vendor: Subvendor, payments: SubvendorLeaserPayment
     fileCostPerKw: plainVendor.fileCostPerKw,
     file_cost_per_kw: plainVendor.fileCostPerKw,
     payments: payments.map((row) => publicLeaserPayment(row.get({ plain: true })))
+  };
+  if (vendor.kind !== 'office_outside') return base;
+  const profit = outsideProfit ?? 0;
+  return {
+    ...base,
+    profit,
+    vendorProfit: profit,
+    vendor_profit: profit
   };
 };
 
@@ -357,10 +392,18 @@ export const listLeaserPayments = async (req: Request, res: Response): Promise<v
       list.push(row);
       byVendor.set(row.vendorId, list);
     }
-    const balances = vendors.map((vendor) => {
-      const { payments: _omit, ...summary } = leaserVendorPayload(vendor, byVendor.get(vendor.id) || []);
-      return summary;
-    });
+    const balances = await Promise.all(
+      vendors.map(async (vendor) => {
+        const profit =
+          vendor.kind === 'office_outside' ? await officeOutsideProfitForVendor(vendor.id) : undefined;
+        const { payments: _omit, ...summary } = leaserVendorPayload(
+          vendor,
+          byVendor.get(vendor.id) || [],
+          profit
+        );
+        return summary;
+      })
+    );
     res.json({
       success: true,
       data: {
@@ -386,7 +429,9 @@ export const getVendorLeaser = async (req: Request, res: Response): Promise<void
       where: { vendorId: vendor.id },
       order: LEASER_ORDER as any
     });
-    res.json({ success: true, data: leaserVendorPayload(vendor, payments) });
+    const profit =
+      vendor.kind === 'office_outside' ? await officeOutsideProfitForVendor(vendor.id) : undefined;
+    res.json({ success: true, data: leaserVendorPayload(vendor, payments, profit) });
   } catch (error) {
     logError('Get vendor leaser error', error, { id: req.params.id });
     internalError(res);
@@ -466,7 +511,9 @@ export const replaceVendorLeaser = async (req: Request, res: Response): Promise<
       where: { vendorId: vendor.id },
       order: LEASER_ORDER as any
     });
-    res.json({ success: true, data: leaserVendorPayload(vendor, payments) });
+    const profit =
+      vendor.kind === 'office_outside' ? await officeOutsideProfitForVendor(vendor.id) : undefined;
+    res.json({ success: true, data: leaserVendorPayload(vendor, payments, profit) });
   } catch (error) {
     logError('Replace vendor leaser error', error, { id: req.params.id });
     internalError(res);

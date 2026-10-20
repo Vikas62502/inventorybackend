@@ -107,6 +107,10 @@
 | 95 | High | Calling actions echo Social Media vs Calling data source (snapshot at PATCH) | **Done** | §68 / REQUIRED §BS / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
 | 96 | Medium | Calling Reports list filter `source` / `connection` / `search`; cards unchanged | **Done** | §69 / REQUIRED §BT / `BACKEND_CALLING_SOCIAL_SOURCE.ts` |
 | 97 | High | Installment Collect = Other (office subvendor) + `collectVendorId` persist / echo | **Done** | §70 / REQUIRED §BU / `BACKEND_COLLECT_SELF_LEASER.ts` |
+| 98 | High | Calling PATCH persists Final Decision + 2nd Call Response; sheet write-back | **Done** | §71 / REQUIRED §BV / `BACKEND_CALLING_DATA_TABS.ts` |
+| 99 | High | Meta form email + Q&A on Current Lead (email / formAnswers / raw) | **Done** | §72 / REQUIRED §BW / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
+| 100 | High | Office Outside separate dataset (not quotations) + slip + ledger | **Done** | §73 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 101 | High | OO installments, GST/cost ledger, sent-list, outside leaser | **Done** | §74 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 
 **Deploy before QA:**
 
@@ -3658,4 +3662,64 @@ Applies to `GET /admin/calling-actions`, `/hr/calling-actions`, `/dealers/me/cal
 | Schema | `quotation_payment_phases."collectVendorId"` VARCHAR(64) — boot ensure + migration `20261014120000` |
 
 Code: `utils/paymentMode.ts`, `utils/quotationPaymentPhases.ts`, `models/QuotationPaymentPhase.ts`, `validations/quotationValidations.ts`, `config/sequelizeBootstrap.ts`.
+
+## 71. Calling PATCH → Final Decision + sheet write-back (§BV) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BV** · `BACKEND_CALLING_DATA_TABS.ts` §3 · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `utils/callingSheetDecision.ts`
+
+| Item | Detail |
+|------|--------|
+| Persist | Connected / Move → `finalDecision` (`Interested` \| `Not Interested` \| `Pending`), `finalDecisionReason`, `secondCallResponse` on `calling_leads` |
+| Source | Body `finalDecision` / `secondCallResponse` (camel + snake), else tagged `status_text` / action |
+| Omit | `statusCategory = call_connectivity` (Not Connected reasons) — no Final Decision |
+| Transfer | Free remark `Transferred from Not Connected: {msg}` (legacy `Transfer Reason:` OK) |
+| Write-back | After outcome PATCH → `scheduleHrLeadSheetWriteBack` when `sheetSourceId` set (immediate; cron ≤1h fallback) |
+| Pull sync | Existing sheet leads skipped — never overwrite DB final_decision / call fields from empty/older cells |
+
+Code: `utils/callingSheetDecision.ts`, `controllers/callingLeadController.ts` (`updateDealerCallingQueueAction`), `utils/hrSheetWriteBack.ts`, `utils/hrSheetSourceSync.ts`.
+
+## 72. Meta form email + Q&A on Current Lead (§BW) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BW** · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `utils/callingLeadFormFields.ts`
+
+| Item | Detail |
+|------|--------|
+| Schema | `calling_leads.email`, `"formAnswers"` JSONB, `"rawPayload"` JSONB — boot ensure + migration `20261017120000` |
+| Sync | Sheet `email` + 3 Meta Q&A columns → `formAnswers[{question,answer}]`; full row → `rawPayload`; `customerNote` human-readable summary |
+| Echo | Dealer queue current/next/lists, calling actions, HR upload rows — `email`, `formAnswers`/`form_answers`, `raw`/`raw_json`, `customerNote`/`customer_note` |
+| Fallback | API derives from `rawPayload` when columns empty; sync fills empty email/formAnswers on existing sheet leads without touching CRM call fields |
+
+Code: `models/CallingLead.ts`, `utils/callingLeadFormFields.ts`, `utils/hrSheetSourceSync.ts`, `utils/callingQueueSocialFields.ts`, `controllers/callingLeadController.ts`.
+
+## 73. Office Outside records — not All quotations (§BX) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| Dataset | `office_outside_records` + `office_outside_ledger` — never written into `quotations` |
+| Vendors | `GET /admin/subvendors?kind=office_outside` only; `vendorId` must be that kind |
+| Amount | `subtotal` is the display amount (whole INR) |
+| File type | `loan` \| `cash` \| `mix` |
+| Slip | `PATCH …/:id/slip` `{ items, notes }` — no Chairbord branding / PDF logo |
+| Send | `POST …/:id/send-to-accounts` → `sent_to_accounts`; still absent from All quotations |
+| Ledger | `GET/PATCH /admin/office-outside/ledger/:id` keyed by record id; extra `GET …/ledger` list |
+
+Code: `models/OfficeOutsideRecord.ts`, `models/OfficeOutsideLedger.ts`, `utils/officeOutsideApi.ts`, `controllers/officeOutsideController.ts`, `routes/adminRoutes.ts`, `config/sequelizeBootstrap.ts`, migration `20261020120000`.
+
+## 74. Office Outside installments + GST ledger + outside leaser (§BX) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| Columns | `installments_json`, `payment_status`, `payment_mode`; `file_type` nullable; ledger `cash_amount` |
+| Payment | `PATCH /admin/office-outside/:id/payment-details` — quotation installment body, stored on the OO record (not quotations) |
+| Sent rows | PATCH vendor / fileType still allowed (no `OO_ALREADY_SENT`); create without fileType is 201 |
+| Accounts | `GET /admin/office-outside?status=sent` — never mixed into quotations GET |
+| Ledger | GST `(proposal − PI) × 8.9%` if PI > 0 else 0; `costOfSite = PI + file + GST + others`; persist loan/cash/remaining |
+| Leaser | `office_outside` vendors 200; `customerIds` may be `OO-*`; profit = subtotal − costOfSite (ignore `profit_ratio`) |
+| Collect Other | SPA PUTs the outside vendor, not Office Inside |
+
+Code: same as §73 + migration `20261020140000`.
 

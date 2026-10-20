@@ -20,6 +20,8 @@ import InstallationTeam from './InstallationTeam';
 import Subvendor from './Subvendor';
 import SubvendorLedger from './SubvendorLedger';
 import SubvendorLeaserPayment from './SubvendorLeaserPayment';
+import OfficeOutsideRecord from './OfficeOutsideRecord';
+import OfficeOutsideLedger from './OfficeOutsideLedger';
 
 // ================================================================================
 // DEALER ASSOCIATIONS
@@ -99,6 +101,12 @@ Quotation.hasOne(SubvendorLedger, { foreignKey: 'quotationId', as: 'subvendorLed
 SubvendorLedger.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
 Subvendor.hasMany(SubvendorLeaserPayment, { foreignKey: 'vendorId', as: 'leaserPayments', onDelete: 'CASCADE' });
 SubvendorLeaserPayment.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
+Subvendor.hasMany(OfficeOutsideRecord, { foreignKey: 'vendorId', as: 'officeOutsideRecords' });
+OfficeOutsideRecord.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
+OfficeOutsideRecord.hasOne(OfficeOutsideLedger, { foreignKey: 'recordId', as: 'ledger', onDelete: 'CASCADE' });
+OfficeOutsideLedger.belongsTo(OfficeOutsideRecord, { foreignKey: 'recordId', as: 'record' });
+Subvendor.hasMany(OfficeOutsideLedger, { foreignKey: 'vendorId', as: 'officeOutsideLedgerRows' });
+OfficeOutsideLedger.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
 
 // ================================================================================
 // SYNC DATABASE
@@ -134,6 +142,8 @@ export {
   InstallationTeam,
   Subvendor,
   SubvendorLedger,
-  SubvendorLeaserPayment
+  SubvendorLeaserPayment,
+  OfficeOutsideRecord,
+  OfficeOutsideLedger
 };
 
