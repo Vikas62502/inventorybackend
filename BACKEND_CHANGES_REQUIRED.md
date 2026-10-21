@@ -2807,6 +2807,8 @@ Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not
 
 **Follow-up (Oct 2026):** installments_json / payment_status / payment_mode; `PATCH …/:id/payment-details`; GST + cash_amount + cost_of_site on OO ledger; `?status=sent`; leaser allows office_outside + OO-* customerIds. Sent-row vendor/fileType PATCH is allowed (no `OO_ALREADY_SENT`). fileType omitted on create is not 400.
 
+**Follow-up (Oct 2026) — one customer = one row:** last-10 `customer_mobile` unique (`office_outside_mobile_unique`); POST upserts the same `OO-*`; PATCH mobile collision → `409 OO_DUPLICATE_CUSTOMER` + `existingId`; `GET ?mobile=` exact lookup; empty list is `200 { records: [] }` (never 204). Persist only in `office_outside_records`.
+
 ---
 
 ## File index (May–June 2026 handoff)

@@ -156,7 +156,15 @@ OfficeOutsideRecord.init(
     tableName: 'office_outside_records',
     underscored: true,
     timestamps: true,
-    freezeTableName: true
+    freezeTableName: true,
+    indexes: [
+      {
+        name: 'office_outside_mobile_unique',
+        unique: true,
+        fields: ['customer_mobile'],
+        where: sequelize.literal('length(customer_mobile) = 10')
+      }
+    ]
   }
 );
 

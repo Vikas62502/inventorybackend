@@ -369,6 +369,30 @@ const ensureOfficeOutsideTables = async (): Promise<void> => {
       ALTER TABLE office_outside_ledger
         ADD COLUMN IF NOT EXISTS cash_amount NUMERIC(14, 2) NOT NULL DEFAULT 0;
     `);
+    await sequelize.query(`
+      UPDATE office_outside_records
+      SET customer_mobile = RIGHT(regexp_replace(COALESCE(customer_mobile, ''), '[^0-9]', '', 'g'), 10);
+    `);
+    await sequelize.query(`
+      DELETE FROM office_outside_records
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+            ROW_NUMBER() OVER (
+              PARTITION BY customer_mobile
+              ORDER BY updated_at DESC, created_at DESC, id DESC
+            ) AS rn
+          FROM office_outside_records
+          WHERE length(customer_mobile) = 10
+        ) ranked
+        WHERE rn > 1
+      );
+    `);
+    await sequelize.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS office_outside_mobile_unique
+        ON office_outside_records (customer_mobile)
+        WHERE length(customer_mobile) = 10;
+    `);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn('Could not ensure office_outside tables', { message });

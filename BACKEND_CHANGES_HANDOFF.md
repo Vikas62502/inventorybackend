@@ -111,6 +111,7 @@
 | 99 | High | Meta form email + Q&A on Current Lead (email / formAnswers / raw) | **Done** | §72 / REQUIRED §BW / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
 | 100 | High | Office Outside separate dataset (not quotations) + slip + ledger | **Done** | §73 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 101 | High | OO installments, GST/cost ledger, sent-list, outside leaser | **Done** | §74 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 102 | High | OO one customer = one row (mobile unique, POST upsert, live GET) | **Done** | §75 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 
 **Deploy before QA:**
 
@@ -3722,4 +3723,19 @@ Code: `models/OfficeOutsideRecord.ts`, `models/OfficeOutsideLedger.ts`, `utils/o
 | Collect Other | SPA PUTs the outside vendor, not Office Inside |
 
 Code: same as §73 + migration `20261020140000`.
+
+## 75. Office Outside one customer = one row (§BX) — Oct 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| Storage | `office_outside_records` only — never quotations, never SPA localStorage |
+| Mobile | Last 10 digits on every write; unique index `office_outside_mobile_unique` where length = 10 |
+| Dedupe | Keep newest `updated_at` before creating the index |
+| POST | If that mobile exists, update the same id / `OO-*`. Unique race → upsert or `409 OO_DUPLICATE_CUSTOMER` + `existingId` |
+| PATCH | Moving a 10-digit mobile onto another row → same 409 |
+| GET | `?mobile=` exact one-customer lookup; `?status=sent` Accounts; empty list `200 { records: [] }` (never 204) |
+
+Code: same as §73–§74 + migration `20261021120000`.
 

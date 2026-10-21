@@ -16,7 +16,8 @@ export const OFFICE_OUTSIDE_ERROR_CODES = {
   VAL_VENDOR: 'VAL_VENDOR',
   VAL_FILE_TYPE: 'VAL_FILE_TYPE',
   RECORD_404: 'RECORD_404',
-  SUBVENDOR_404: 'SUBVENDOR_404'
+  SUBVENDOR_404: 'SUBVENDOR_404',
+  OO_DUPLICATE_CUSTOMER: 'OO_DUPLICATE_CUSTOMER'
 } as const;
 
 /** Office Inside GST: (proposal − PI) × 8.9% when PI > 0, else 0. */
@@ -39,6 +40,16 @@ export const officeOutsideVendorProfit = (subtotal: unknown, costOfSite: unknown
   const n = roundInr(subtotal) - roundInr(costOfSite);
   return n > 0 ? n : 0;
 };
+
+/** Vendor Outside complete profit = subtotal − (PI + file + GST + others). */
+export const officeOutsideCompleteProfit = officeOutsideVendorProfit;
+
+/** Last 10 digits. Empty / non-digits → ''. Unique index only applies when length is 10. */
+export const normalizeOfficeOutsideMobile = (raw: unknown): string =>
+  String(raw ?? '').replace(/\D/g, '').slice(-10);
+
+export const isTenDigitMobile = (mobile: unknown): boolean =>
+  normalizeOfficeOutsideMobile(mobile).length === 10;
 
 /** Stable public id for leaser customer_ids: OO- + first 8 hex of the UUID. */
 export const officeOutsidePublicId = (id: unknown): string => {
@@ -67,6 +78,9 @@ export const normalizeOfficeOutsideFileType = (raw: unknown): OfficeOutsideFileT
   if (key === 'mix' || key === 'mixed' || key === 'loan_cash' || key === 'cash_loan') return 'mix';
   return null;
 };
+
+export const normalizeFileType = normalizeOfficeOutsideFileType;
+export const normalizeMobile = normalizeOfficeOutsideMobile;
 
 export const parseSystemKw = (raw: unknown): number | undefined => {
   if (raw === undefined || raw === null || raw === '') return undefined;
@@ -113,7 +127,7 @@ export const parseOfficeOutsideRecordPatch = (
   if (customerName !== undefined) out.customerName = str(customerName);
 
   const customerMobile = pick(body, 'customerMobile', 'customer_mobile', 'mobile');
-  if (customerMobile !== undefined) out.customerMobile = str(customerMobile);
+  if (customerMobile !== undefined) out.customerMobile = normalizeOfficeOutsideMobile(customerMobile);
 
   const address = pick(body, 'address', 'customerAddress', 'customer_address');
   if (address !== undefined) out.address = str(address);
@@ -198,6 +212,7 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     customer_name: customerName,
     customerMobile,
     customer_mobile: customerMobile,
+    mobile: customerMobile,
     address: row.address || '',
     city: row.city || '',
     systemKw,

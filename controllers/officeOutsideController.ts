@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Op, Sequelize, WhereOptions } from 'sequelize';
+import { Op, Sequelize, UniqueConstraintError, WhereOptions } from 'sequelize';
 import {
   OfficeOutsideLedger,
   OfficeOutsideRecord,
@@ -10,6 +10,8 @@ import { isUuid, parseLedgerAmountPatch, roundInr } from '../utils/subvendorApi'
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import {
   applyOfficeOutsideLedgerAmounts,
+  isTenDigitMobile,
+  normalizeOfficeOutsideMobile,
   OFFICE_OUTSIDE_ERROR_CODES,
   normalizeOfficeOutsidePhases,
   parseOfficeOutsidePublicIdPrefix,
@@ -93,18 +95,75 @@ const ensureLedger = async (record: OfficeOutsideRecord, updatedBy: string | nul
 
 const ledgerPayload = (row: Record<string, unknown>) => publicOfficeOutsideLedger(row);
 
+const findByTenDigitMobile = async (mobile: string) => {
+  if (!isTenDigitMobile(mobile)) return null;
+  return OfficeOutsideRecord.findOne({
+    where: { customerMobile: normalizeOfficeOutsideMobile(mobile) },
+    include: recordInclude
+  });
+};
+
+const isMobileUniqueError = (error: unknown): boolean => {
+  if (!(error instanceof UniqueConstraintError)) return false;
+  const constraint = String((error as any).parent?.constraint || (error as any).index || '');
+  if (constraint.includes('office_outside_mobile_unique')) return true;
+  const fields = (error.fields || {}) as Record<string, unknown>;
+  return 'customerMobile' in fields || 'customer_mobile' in fields;
+};
+
+const duplicateCustomer = (res: Response, existing: OfficeOutsideRecord): void => {
+  const record = recordPayload(existing);
+  res.status(409).json({
+    success: false,
+    error: {
+      code: OFFICE_OUTSIDE_ERROR_CODES.OO_DUPLICATE_CUSTOMER,
+      message: 'A record already exists for this mobile',
+      existingId: existing.id,
+      existing_id: existing.id,
+      publicId: record.publicId,
+      public_id: record.publicId
+    },
+    data: { existingId: existing.id, existing_id: existing.id, record, item: record }
+  });
+};
+
+const persistRecordPatch = async (
+  row: OfficeOutsideRecord,
+  patch: Record<string, unknown>,
+  actor: string | null
+) => {
+  await row.update({ ...patch, updatedBy: actor } as any);
+  if (patch.vendorId !== undefined) {
+    await OfficeOutsideLedger.update(
+      { vendorId: patch.vendorId as string | null },
+      { where: { recordId: row.id } }
+    );
+  }
+  await ensureLedger(row, actor);
+  await row.reload({ include: recordInclude });
+};
+
+const listPayload = (records: ReturnType<typeof recordPayload>[]) => ({
+  success: true,
+  data: { records, items: records, officeOutside: records }
+});
+
 /** GET /admin/office-outside */
 export const listOfficeOutside = async (req: Request, res: Response): Promise<void> => {
   try {
     const vendorId = String(req.query.vendorId ?? req.query.vendor_id ?? '').trim();
     const search = String(req.query.search ?? req.query.q ?? '').trim();
     const status = String(req.query.status ?? '').trim().toLowerCase();
+    const mobile = normalizeOfficeOutsideMobile(
+      req.query.mobile ?? req.query.customerMobile ?? req.query.customer_mobile
+    );
 
     const and: WhereOptions[] = [];
     if (vendorId) and.push({ vendorId });
     const statusKey = sentStatusWhere(status);
     if (statusKey) and.push({ status: statusKey });
-    if (search) {
+    if (mobile) and.push({ customerMobile: mobile });
+    if (search && !mobile) {
       const like = `%${search}%`;
       and.push({
         [Op.or]: [
@@ -119,13 +178,10 @@ export const listOfficeOutside = async (req: Request, res: Response): Promise<vo
     const rows = await OfficeOutsideRecord.findAll({
       where: and.length ? { [Op.and]: and } : {},
       include: recordInclude,
-      order: [['createdAt', 'DESC']]
+      order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
     });
     const records = rows.map(recordPayload);
-    res.json({
-      success: true,
-      data: { records, items: records, officeOutside: records }
-    });
+    res.status(200).json(listPayload(records));
   } catch (error) {
     logError('List office-outside error', error);
     internalError(res);
@@ -141,14 +197,14 @@ export const getOfficeOutside = async (req: Request, res: Response): Promise<voi
       return;
     }
     const record = recordPayload(row);
-    res.json({ success: true, data: { record, item: record } });
+    res.status(200).json({ success: true, data: { record, item: record } });
   } catch (error) {
     logError('Get office-outside error', error, { id: req.params.id });
     internalError(res);
   }
 };
 
-/** POST /admin/office-outside */
+/** POST /admin/office-outside — upsert by last-10 mobile; never mint a second OO-* for that customer. */
 export const createOfficeOutside = async (req: Request, res: Response): Promise<void> => {
   try {
     const body = (req.body || {}) as Record<string, unknown>;
@@ -165,25 +221,58 @@ export const createOfficeOutside = async (req: Request, res: Response): Promise<
     }
 
     const actor = actorId(req);
-    const row = await OfficeOutsideRecord.create({
-      vendorId: patch.vendorId ?? null,
-      customerName,
-      customerMobile: patch.customerMobile || '',
-      address: patch.address || '',
-      city: patch.city || '',
-      systemKw: patch.systemKw ?? 0,
-      subtotal: patch.subtotal ?? 0,
-      fileType: patch.fileType ?? null,
-      notes: patch.notes || '',
-      slipItems: patch.slipItems ?? [],
-      slipNotes: patch.slipNotes || '',
-      createdBy: actor,
-      updatedBy: actor
-    } as any);
-    await ensureLedger(row, actor);
-    const loaded = await loadRecord(row.id);
-    const record = recordPayload(loaded || row);
-    res.status(201).json({ success: true, data: { record, item: record } });
+    const mobile = patch.customerMobile || '';
+    const respond = (row: OfficeOutsideRecord, created: boolean) => {
+      const record = recordPayload(row);
+      res.status(created ? 201 : 200).json({ success: true, data: { record, item: record } });
+    };
+
+    const upsertExisting = async (existing: OfficeOutsideRecord) => {
+      await persistRecordPatch(existing, patch as Record<string, unknown>, actor);
+      respond(existing, false);
+    };
+
+    if (isTenDigitMobile(mobile)) {
+      const existing = await findByTenDigitMobile(mobile);
+      if (existing) {
+        await upsertExisting(existing);
+        return;
+      }
+    }
+
+    try {
+      const row = await OfficeOutsideRecord.create({
+        vendorId: patch.vendorId ?? null,
+        customerName,
+        customerMobile: mobile,
+        address: patch.address || '',
+        city: patch.city || '',
+        systemKw: patch.systemKw ?? 0,
+        subtotal: patch.subtotal ?? 0,
+        fileType: patch.fileType ?? null,
+        notes: patch.notes || '',
+        slipItems: patch.slipItems ?? [],
+        slipNotes: patch.slipNotes || '',
+        createdBy: actor,
+        updatedBy: actor
+      } as any);
+      await ensureLedger(row, actor);
+      const loaded = await loadRecord(row.id);
+      respond(loaded || row, true);
+    } catch (error) {
+      if (!isMobileUniqueError(error)) throw error;
+      const existing = await findByTenDigitMobile(mobile);
+      if (existing) {
+        await upsertExisting(existing);
+        return;
+      }
+      fail(
+        res,
+        409,
+        OFFICE_OUTSIDE_ERROR_CODES.OO_DUPLICATE_CUSTOMER,
+        'A record already exists for this mobile'
+      );
+    }
   } catch (error) {
     logError('Create office-outside error', error);
     internalError(res);
@@ -206,18 +295,33 @@ export const updateOfficeOutside = async (req: Request, res: Response): Promise<
         return;
       }
     }
-    // Sent rows stay editable for vendor + fileType — never OO_ALREADY_SENT.
-    const values: Record<string, unknown> = { ...patch, updatedBy: actorId(req) };
-    await row.update(values as any);
-    if (patch.vendorId !== undefined) {
-      await OfficeOutsideLedger.update(
-        { vendorId: patch.vendorId },
-        { where: { recordId: row.id } }
-      );
+    if (patch.customerMobile !== undefined && isTenDigitMobile(patch.customerMobile)) {
+      const other = await findByTenDigitMobile(patch.customerMobile);
+      if (other && other.id !== row.id) {
+        duplicateCustomer(res, other);
+        return;
+      }
     }
-    await row.reload({ include: recordInclude });
+    // Sent rows stay editable for vendor + fileType — never OO_ALREADY_SENT.
+    try {
+      await persistRecordPatch(row, patch as Record<string, unknown>, actorId(req));
+    } catch (error) {
+      if (!isMobileUniqueError(error)) throw error;
+      const other = await findByTenDigitMobile(String(patch.customerMobile || ''));
+      if (other && other.id !== row.id) {
+        duplicateCustomer(res, other);
+        return;
+      }
+      fail(
+        res,
+        409,
+        OFFICE_OUTSIDE_ERROR_CODES.OO_DUPLICATE_CUSTOMER,
+        'A record already exists for this mobile'
+      );
+      return;
+    }
     const record = recordPayload(row);
-    res.json({ success: true, data: { record, item: record } });
+    res.status(200).json({ success: true, data: { record, item: record } });
   } catch (error) {
     logError('Update office-outside error', error, { id: req.params.id });
     internalError(res);

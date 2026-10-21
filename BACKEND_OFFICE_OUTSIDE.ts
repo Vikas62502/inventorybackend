@@ -1,30 +1,34 @@
 // @ts-nocheck
 /**
  * =============================================================================
- * BACKEND REFERENCE — Office Outside records (REQUIRED §BX / HANDOFF §73–§74, Oct 2026)
+ * BACKEND REFERENCE — Office Outside records (REQUIRED §BX / HANDOFF §73–§75, Oct 2026)
  * =============================================================================
  *
- * Status: IMPLEMENTED. Admin JWT only. Not quotations — GET /admin/quotations never
- * includes these rows. Accounts sent files: GET /admin/office-outside?status=sent
+ * Status: IMPLEMENTED. Admin JWT only. Persist ONLY in office_outside_records
+ * (+ office_outside_ledger). Do not write quotations. Do not treat SPA localStorage
+ * as storage. One customer = one row (last-10 mobile).
  *
- * Vendors stay on GET /admin/subvendors?kind=office_outside.
- * Leaser: GET/PUT /admin/subvendors/:id/leaser works for office_outside (no 404).
+ * Live GET: SPA re-fetches after every mutation. Empty list is 200 { records: [] },
+ * never 204. Mount /ledger before /:id.
  *
  * -----------------------------------------------------------------------------
  * 1) Endpoints
  * -----------------------------------------------------------------------------
  *
- *   GET    /api/admin/office-outside
- *          ?vendorId= &search= &status=draft|sent|sent_to_accounts
- *          → { success, data: { records, items, officeOutside } }
+ *   GET    /api/admin/office-outside                  Admin All Outside
+ *   GET    /api/admin/office-outside?mobile=8920094209  exact one-customer lookup
+ *   GET    /api/admin/office-outside?status=sent        Accounts + Vendor Outside
+ *          also ?vendorId= &search= &status=draft|sent|sent_to_accounts
+ *          → 200 { success, data: { records, items, officeOutside } }  (never 204)
  *
  *   POST   /api/admin/office-outside
- *          fileType optional (frontend may set it later). Do not 400 if omitted.
- *          → 201 { success, data: { record, item } }
+ *          fileType optional. If last-10 mobile already exists, UPDATE that same id
+ *          (Aman Rajak / 8920094209 stays OO-1402E036). Do not mint a second OO-*.
+ *          If you cannot upsert → 409 OO_DUPLICATE_CUSTOMER with existingId.
  *
  *   GET    /api/admin/office-outside/:id     (UUID or OO-XXXXXXXX)
  *   PATCH  /api/admin/office-outside/:id     vendor + fileType stay writable after Send
- *          (never 400 OO_ALREADY_SENT)
+ *          (never 400 OO_ALREADY_SENT). Moving a 10-digit mobile onto another row → 409.
  *   DELETE /api/admin/office-outside/:id
  *
  *   POST   /api/admin/office-outside/:id/send-to-accounts
@@ -33,39 +37,127 @@
  *   PATCH  /api/admin/office-outside/:id/slip   { items, notes } — no Chairbord branding
  *
  *   PATCH  /api/admin/office-outside/:id/payment-details
- *          Same installment body as quotations (phases / installments / paymentPhases).
- *          Stored on office_outside_records.installments_json — NOT quotation_payment_phases.
+ *          Same installment body as quotations. Stored on installments_json — NOT quotations.
  *
  *   GET    /api/admin/office-outside/ledger
  *   GET/PATCH /api/admin/office-outside/ledger/:id
  *          GST = (proposal − PI) × 8.9% when PI > 0, else 0.
  *          costOfSite = PI + fileCharges + GST + others.
- *          Also persist loanAmount, cashAmount, remaining.
+ *          officeOutsideCompleteProfit = subtotal − costOfSite (ignore profit_ratio).
  *          Never writes subvendor_ledger.quotation_id.
  *
  * -----------------------------------------------------------------------------
- * 2) Schema extras
+ * 2) One customer = one row (mobile unique)
  * -----------------------------------------------------------------------------
  *
- *   ALTER TABLE office_outside_records
- *     ADD COLUMN IF NOT EXISTS installments_json JSONB NOT NULL DEFAULT '[]'::jsonb,
- *     ADD COLUMN IF NOT EXISTS payment_status VARCHAR(16) NOT NULL DEFAULT 'pending',
- *     ADD COLUMN IF NOT EXISTS payment_mode VARCHAR(30) NULL;
- *   file_type is nullable (omitted on create stays null).
- *   office_outside_ledger.cash_amount NUMERIC(14,2) NOT NULL DEFAULT 0.
+ * Normalize mobile to the last 10 digits on every write.
  *
+ * -- After dedupe (keep newest updated_at):
+ * -- CREATE UNIQUE INDEX IF NOT EXISTS office_outside_mobile_unique
+ * --   ON office_outside_records (customer_mobile) WHERE length(customer_mobile) = 10;
+ *
+ * Column is customer_mobile (API: mobile / customerMobile).
+ */
+const DEDUPE_AND_UNIQUE_SQL = `
+UPDATE office_outside_records
+SET customer_mobile = RIGHT(regexp_replace(COALESCE(customer_mobile, ''), '[^0-9]', '', 'g'), 10);
+
+DELETE FROM office_outside_records
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id,
+      ROW_NUMBER() OVER (
+        PARTITION BY customer_mobile
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+      ) AS rn
+    FROM office_outside_records
+    WHERE length(customer_mobile) = 10
+  ) ranked
+  WHERE rn > 1
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS office_outside_mobile_unique
+  ON office_outside_records (customer_mobile)
+  WHERE length(customer_mobile) = 10;
+`;
+
+const sequelizeUniqueIndex = {
+  name: 'office_outside_mobile_unique',
+  unique: true,
+  fields: ['customer_mobile'],
+  where: 'length(customer_mobile) = 10'
+};
+
+function normalizeMobile(raw) {
+  return String(raw ?? '').replace(/\D/g, '').slice(-10);
+}
+
+const conflict409 = {
+  success: false,
+  error: {
+    code: 'OO_DUPLICATE_CUSTOMER',
+    message: 'A record already exists for this mobile',
+    existingId: 'uuid',
+    publicId: 'OO-1402E036'
+  },
+  data: { existingId: 'uuid', record: { id: 'uuid', publicId: 'OO-1402E036' } }
+};
+
+/**
+ * Copy-paste handlers (Express-style). Persist ONLY in office_outside_records.
+ * Do not write quotations. Do not 204 empty lists.
+ *
+ *   GET list: if query.mobile, exact match on last-10 customer_mobile.
+ *   POST: find by last-10 mobile → update same id; else create. Unique race → upsert or 409.
+ *   PATCH: if new mobile belongs to another row → 409 with existingId so SPA can PATCH it.
+ */
+async function listOfficeOutside(req, res) {
+  const mobile = normalizeMobile(req.query.mobile ?? req.query.customerMobile);
+  const records = []; // findAll; if mobile, where customerMobile = mobile
+  res.status(200).json({ success: true, data: { records, items: records, officeOutside: records } });
+}
+
+async function createOfficeOutside(req, res, { OfficeOutsideRecord }) {
+  const mobile = normalizeMobile(req.body.mobile ?? req.body.customerMobile);
+  if (mobile.length === 10) {
+    const existing = await OfficeOutsideRecord.findOne({ where: { customerMobile: mobile } });
+    if (existing) {
+      await existing.update(/* patch */); // same id / publicId
+      return res.status(200).json({ success: true, data: { record: existing } });
+    }
+  }
+  const row = await OfficeOutsideRecord.create(/* patch */);
+  return res.status(201).json({ success: true, data: { record: row } });
+}
+
+async function updateOfficeOutside(req, res, { OfficeOutsideRecord, Subvendor, OfficeOutsideLedger }) {
+  const row = await OfficeOutsideRecord.findByPk(req.params.id);
+  const mobile = normalizeMobile(req.body.mobile ?? req.body.customerMobile);
+  if (mobile.length === 10) {
+    const other = await OfficeOutsideRecord.findOne({ where: { customerMobile: mobile } });
+    if (other && other.id !== row.id) {
+      return res.status(409).json(conflict409);
+    }
+  }
+  await row.update(/* patch */);
+  return res.status(200).json({ success: true, data: { record: row } });
+}
+
+/**
  * -----------------------------------------------------------------------------
- * 3) Record echo extras
+ * 3) Record / ledger echo
  * -----------------------------------------------------------------------------
  */
 const record = {
-  id: "uuid",
-  publicId: "OO-AA7E4404", // leaser customerIds
-  fileType: "loan", // or null when omitted
-  paymentStatus: "pending",
-  paymentMode: "cash",
+  id: 'uuid',
+  publicId: 'OO-1402E036',
+  mobile: '8920094209',
+  customerMobile: '8920094209',
+  fileType: 'loan', // or null when omitted
+  paymentStatus: 'pending',
+  paymentMode: 'cash',
   installments: [],
-  status: "sent_to_accounts",
+  status: 'sent_to_accounts',
   sent: true
 };
 
@@ -76,22 +168,18 @@ const ledger = {
   proposal: 200000,
   pi: 153775,
   fileCharges: 3000,
-  gstCharges: 4114, // round((200000-153775)*0.089) because PI > 0
+  gstCharges: 4114,
   others: 0,
-  costOfSite: 160889, // PI + file + GST + others
-  profit: 49111 // subtotal − costOfSite; ignore profit_ratio
+  costOfSite: 160889,
+  profit: 39111 // officeOutsideCompleteProfit
 };
 
 /**
- * Leaser customerIds may be quotation ids or OO-* ids.
- * Collect Other on an OO file: SPA PUTs leaser onto that office_outside vendor
- * (collectVendorId), not Office Inside.
- *
  * QA:
- *   1. POST without fileType → 201, fileType null; later PATCH { fileType: "loan" } after Send → 200.
- *   2. PATCH payment-details { phases } → GET record.installments; GET quotations unchanged.
- *   3. Ledger PATCH { proposal: 200000, pi: 153775, fileCharges: 3000 } → gst + costOfSite computed.
- *   4. GET /office-outside?status=sent returns sent rows only.
- *   5. GET /subvendors/:outsideId/leaser → 200, not 404. PUT customerIds: ["OO-AA7E4404"].
+ *   1. POST Aman Rajak / 8920094209 twice → same publicId, one row.
+ *   2. GET ?mobile=8920094209 → that one record. GET empty → 200 { records: [] }.
+ *   3. PATCH another row to 8920094209 → 409 OO_DUPLICATE_CUSTOMER existingId.
+ *   4. POST without fileType → 201, fileType null; PATCH fileType after Send → 200.
+ *   5. GET ?status=sent for Accounts. GET quotations unchanged.
  */
 export {};
