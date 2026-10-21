@@ -2811,6 +2811,8 @@ Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not
 
 **Follow-up (Oct 21 2026) — Send to Accounts (no new route):** persist `outsideVendorId` on PATCH/GET; `:id` is UUID PK or `OO-*` (do not 404 UUID-only ids); Send sets `sentToAccountsAt` and returns the row; empty vendor → `400 OO_VENDOR_REQUIRED`; missing id → `404 OO_404`; `GET ?status=sent` is `sentToAccountsAt IS NOT NULL`.
 
+**Follow-up (Oct 21 2026) — Revert / retrieve-from-accounts:** `POST /admin/office-outside/:id/retrieve-from-accounts` (admin or accounts JWT) sets `sent_to_accounts_at = NULL`, does not delete the row, echoes `sentToAccountsAt: null`. Idempotent 200 if already pending. Fallback `PATCH { sentToAccountsAt: null }`. After revert, `?status=sent` omits it; all / pending show Send again. Never `OO_VENDOR_REQUIRED` / `OO_ALREADY_SENT` on retrieve.
+
 ---
 
 ## File index (May–June 2026 handoff)

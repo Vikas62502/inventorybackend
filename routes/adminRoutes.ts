@@ -36,6 +36,7 @@ import {
   updateOfficeOutside,
   deleteOfficeOutside,
   sendOfficeOutsideToAccounts,
+  retrieveOfficeOutsideFromAccounts,
   saveOfficeOutsideSlip,
   listOfficeOutsideLedger,
   getOfficeOutsideLedger,
@@ -222,6 +223,25 @@ router.get(
   getAllDealers
 );
 
+/** §BX — Office Outside (admin or accounts JWT). Retrieve must not sit behind admin-only. */
+const authorizeAdminOrAccounts = requireAnyAccess(['admin', 'accounts']);
+router.get('/office-outside/ledger', authorizeAdminOrAccounts, listOfficeOutsideLedger);
+router.get('/office-outside/ledger/:id', authorizeAdminOrAccounts, getOfficeOutsideLedger);
+router.patch('/office-outside/ledger/:id', authorizeAdminOrAccounts, updateOfficeOutsideLedger);
+router.post('/office-outside/:id/send-to-accounts', authorizeAdminOrAccounts, sendOfficeOutsideToAccounts);
+router.post(
+  '/office-outside/:id/retrieve-from-accounts',
+  authorizeAdminOrAccounts,
+  retrieveOfficeOutsideFromAccounts
+);
+router.patch('/office-outside/:id/payment-details', authorizeAdminOrAccounts, updateOfficeOutsidePaymentDetails);
+router.patch('/office-outside/:id/slip', authorizeAdminOrAccounts, saveOfficeOutsideSlip);
+router.get('/office-outside', authorizeAdminOrAccounts, listOfficeOutside);
+router.post('/office-outside', authorizeAdminOrAccounts, createOfficeOutside);
+router.get('/office-outside/:id', authorizeAdminOrAccounts, getOfficeOutside);
+router.patch('/office-outside/:id', authorizeAdminOrAccounts, updateOfficeOutside);
+router.delete('/office-outside/:id', authorizeAdminOrAccounts, deleteOfficeOutside);
+
 // All routes below require admin authorization
 router.use(authorizeAdmin);
 
@@ -235,19 +255,6 @@ router.get('/subvendors', listSubvendors);
 router.post('/subvendors', createSubvendor);
 router.patch('/subvendors/:id', updateSubvendor);
 router.delete('/subvendors/:id', deleteSubvendor);
-
-/** §BX — Office Outside records (not quotations). See BACKEND_OFFICE_OUTSIDE.ts. */
-router.get('/office-outside/ledger', listOfficeOutsideLedger);
-router.get('/office-outside/ledger/:id', getOfficeOutsideLedger);
-router.patch('/office-outside/ledger/:id', updateOfficeOutsideLedger);
-router.post('/office-outside/:id/send-to-accounts', sendOfficeOutsideToAccounts);
-router.patch('/office-outside/:id/payment-details', updateOfficeOutsidePaymentDetails);
-router.patch('/office-outside/:id/slip', saveOfficeOutsideSlip);
-router.get('/office-outside', listOfficeOutside);
-router.post('/office-outside', createOfficeOutside);
-router.get('/office-outside/:id', getOfficeOutside);
-router.patch('/office-outside/:id', updateOfficeOutside);
-router.delete('/office-outside/:id', deleteOfficeOutside);
 
 /**
  * Admin Product Needed — installation-pending or file-login (not approved) aggregates.

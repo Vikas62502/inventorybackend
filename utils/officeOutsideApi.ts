@@ -110,6 +110,10 @@ export type OfficeOutsideRecordPatch = {
   notes?: string;
   slipItems?: unknown[];
   slipNotes?: string;
+  /** PATCH fallback for retrieve: `{ sentToAccountsAt: null }`. */
+  sentToAccountsAt?: null;
+  status?: 'draft';
+  sentToAccountsBy?: null;
 };
 
 /** Only keys present in the body (camel or snake). Extra keys ignored. */
@@ -167,6 +171,13 @@ export const parseOfficeOutsideRecordPatch = (
   const slipNotes = pick(body, 'slipNotes', 'slip_notes');
   if (slipNotes !== undefined) out.slipNotes = str(slipNotes);
 
+  const sentAt = pick(body, 'sentToAccountsAt', 'sent_to_accounts_at');
+  if (sentAt !== undefined && (sentAt === null || sentAt === '' || sentAt === false)) {
+    out.sentToAccountsAt = null;
+    out.status = 'draft';
+    out.sentToAccountsBy = null;
+  }
+
   return out;
 };
 
@@ -200,8 +211,9 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
       ? row.slip_items
       : [];
   const slipNotes = row.slipNotes || row.slip_notes || '';
-  const sentToAccountsAt = row.sentToAccountsAt || row.sent_to_accounts_at || null;
-  const sent = Boolean(sentToAccountsAt) || status === 'sent_to_accounts' || status === 'sent';
+  const sentAtRaw = row.sentToAccountsAt ?? row.sent_to_accounts_at ?? null;
+  const sentToAccountsAt = sentAtRaw || null;
+  const sent = sentToAccountsAt != null;
   const createdAt = row.createdAt || row.created_at;
   const updatedAt = row.updatedAt || row.updated_at;
   return {

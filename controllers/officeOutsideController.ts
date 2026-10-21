@@ -75,9 +75,21 @@ const loadRecord = async (id: string) => {
 const notFound = (res: Response): void =>
   fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.OO_404, 'Office outside record not found');
 
-const sentListWhere = (): WhereOptions => ({
-  [Op.or]: [{ sentToAccountsAt: { [Op.ne]: null } }, { status: 'sent_to_accounts' }]
-});
+const sentListWhere = (): WhereOptions => ({ sentToAccountsAt: { [Op.ne]: null } });
+
+const pendingListWhere = (): WhereOptions => ({ sentToAccountsAt: { [Op.is]: null } });
+
+const clearSentToAccounts = async (row: OfficeOutsideRecord, actor: string | null) => {
+  if (!row.sentToAccountsAt && row.status !== 'sent_to_accounts') return row;
+  await row.update({
+    status: 'draft',
+    sentToAccountsAt: null,
+    sentToAccountsBy: null,
+    updatedBy: actor
+  } as any);
+  await row.reload({ include: recordInclude });
+  return row;
+};
 
 const recordPayload = (row: OfficeOutsideRecord) =>
   publicOfficeOutsideRecord(row.get({ plain: true }));
@@ -167,7 +179,7 @@ export const listOfficeOutside = async (req: Request, res: Response): Promise<vo
 
     const and: WhereOptions[] = [];
     if (vendorId) and.push({ vendorId });
-    if (status === 'draft') and.push({ status: 'draft' });
+    if (status === 'draft' || status === 'pending') and.push(pendingListWhere());
     if (status === 'sent' || status === 'sent_to_accounts' || status === 'accounts') {
       and.push(sentListWhere());
     }
@@ -312,6 +324,9 @@ export const updateOfficeOutside = async (req: Request, res: Response): Promise<
       }
     }
     // Sent rows stay editable for vendor + fileType — never OO_ALREADY_SENT.
+    if (patch.sentToAccountsAt === null) {
+      await clearSentToAccounts(row, actorId(req));
+    }
     try {
       await persistRecordPatch(row, patch as Record<string, unknown>, actorId(req));
     } catch (error) {
@@ -383,6 +398,23 @@ export const sendOfficeOutsideToAccounts = async (req: Request, res: Response): 
     res.status(200).json({ success: true, data: { record, item: record } });
   } catch (error) {
     logError('Send office-outside to accounts error', error, { id: req.params.id });
+    internalError(res);
+  }
+};
+
+/** POST /admin/office-outside/:id/retrieve-from-accounts — revert Send. Idempotent 200 if already pending. */
+export const retrieveOfficeOutsideFromAccounts = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await loadRecord(req.params.id);
+    if (!row) {
+      notFound(res);
+      return;
+    }
+    await clearSentToAccounts(row, actorId(req));
+    const record = recordPayload(row);
+    res.status(200).json({ success: true, data: { record, item: record } });
+  } catch (error) {
+    logError('Retrieve office-outside from accounts error', error, { id: req.params.id });
     internalError(res);
   }
 };

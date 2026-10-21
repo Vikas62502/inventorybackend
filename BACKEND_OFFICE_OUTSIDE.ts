@@ -37,6 +37,13 @@
  *          Sets sentToAccountsAt + status=sent_to_accounts. Does NOT insert into quotations.
  *          No new route — SPA Send button is always clickable on pending rows.
  *
+ *   POST   /api/admin/office-outside/:id/retrieve-from-accounts
+ *          Revert Send (Accounts ↺ / All Outside Revert). :id = UUID PK or OO-*.
+ *          Auth: admin or accounts JWT. sent_to_accounts_at = NULL. Do not delete the row.
+ *          Keep vendor, file type, ledger. Echo sentToAccountsAt: null (do not omit the key).
+ *          Idempotent 200 if already pending. Never 400 OO_VENDOR_REQUIRED / OO_ALREADY_SENT.
+ *          Fallback: PATCH /admin/office-outside/:id { "sentToAccountsAt": null }
+ *
  *   PATCH  /api/admin/office-outside/:id/slip   { items, notes } — no Chairbord branding
  *
  *   PATCH  /api/admin/office-outside/:id/payment-details
@@ -143,7 +150,25 @@ async function updateOfficeOutside(req, res, { OfficeOutsideRecord, Subvendor, O
     }
   }
   await row.update(/* patch */);
+  if (req.body?.sentToAccountsAt === null) {
+    await row.update({ sentToAccountsAt: null, sent_to_accounts_at: null, status: 'draft' });
+  }
   return res.status(200).json({ success: true, data: { record: row } });
+}
+
+async function retrieveOfficeOutsideFromAccounts(req, res, { OfficeOutsideRecord }) {
+  const row = await OfficeOutsideRecord.findByPk(req.params.id); // UUID PK; also accept OO-*
+  if (!row) return res.status(404).json({ success: false, error: { code: 'OO_404' } });
+  await row.update({
+    sentToAccountsAt: null,
+    sent_to_accounts_at: null,
+    sentToAccountsBy: null,
+    status: 'draft'
+  });
+  return res.status(200).json({
+    success: true,
+    data: { record: { ...row.get({ plain: true }), sentToAccountsAt: null, sent: false } }
+  });
 }
 
 /**
@@ -204,5 +229,8 @@ const ledger = {
  *   5. GET ?status=sent for Accounts. GET quotations unchanged.
  *   6. PATCH outsideVendorId → GET echoes it; Send without vendor → 400 OO_VENDOR_REQUIRED.
  *   7. POST send-to-accounts with UUID PK (not OO-*) → 200 + sentToAccountsAt; row in ?status=sent.
+ *   8. POST retrieve-from-accounts → sentToAccountsAt null (key present); GET ?status=sent omits it;
+ *      GET all / ?status=pending includes it. Second retrieve is 200. Row is not deleted.
+ *   9. PATCH { sentToAccountsAt: null } is the same revert. Ignore profit_ratio for office_outside.
  */
 export {};

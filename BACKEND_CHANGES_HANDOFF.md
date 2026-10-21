@@ -113,6 +113,7 @@
 | 101 | High | OO installments, GST/cost ledger, sent-list, outside leaser | **Done** | §74 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 102 | High | OO one customer = one row (mobile unique, POST upsert, live GET) | **Done** | §75 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 103 | High | OO Send to Accounts: persist vendor, UUID/:id, sent list | **Done** | §76 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 104 | High | OO Revert / retrieve-from-accounts (null sentToAccountsAt) | **Done** | §77 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 
 **Deploy before QA:**
 
@@ -3752,4 +3753,18 @@ SPA Send button is frontend-only. Same `POST /admin/office-outside/:id/send-to-a
 | Send | Sets `sentToAccountsAt` + `sent_to_accounts`; returns the row. Empty vendor → `400 OO_VENDOR_REQUIRED` |
 | `:id` | UUID PK first, then `OO-*`. Do not 404 because the id is not OO-prefixed. Missing → `404 OO_404` |
 | Accounts | `GET ?status=sent` = `sentToAccountsAt IS NOT NULL` (and status sent) |
+
+## 77. Office Outside Revert / retrieve-from-accounts — Oct 21 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| Route | `POST /admin/office-outside/:id/retrieve-from-accounts` — admin or accounts JWT |
+| `:id` | UUID PK or `OO-*` (same as Send). Missing → `404 OO_404` |
+| Write | `sent_to_accounts_at = NULL`, status `draft`. Do not delete the row. Keep vendor / file type / ledger |
+| Echo | `sentToAccountsAt: null` (key present). `sent: false` |
+| Lists | After revert, `GET ?status=sent` omits it; GET all / `?status=pending` includes it |
+| Idempotent | Already pending → 200. Never `OO_VENDOR_REQUIRED` / `OO_ALREADY_SENT` |
+| Fallback | `PATCH /admin/office-outside/:id { "sentToAccountsAt": null }` |
 
