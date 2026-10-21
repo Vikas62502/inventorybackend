@@ -112,6 +112,7 @@
 | 100 | High | Office Outside separate dataset (not quotations) + slip + ledger | **Done** | §73 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 101 | High | OO installments, GST/cost ledger, sent-list, outside leaser | **Done** | §74 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 102 | High | OO one customer = one row (mobile unique, POST upsert, live GET) | **Done** | §75 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 103 | High | OO Send to Accounts: persist vendor, UUID/:id, sent list | **Done** | §76 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 
 **Deploy before QA:**
 
@@ -3738,4 +3739,17 @@ Code: same as §73 + migration `20261020140000`.
 | GET | `?mobile=` exact one-customer lookup; `?status=sent` Accounts; empty list `200 { records: [] }` (never 204) |
 
 Code: same as §73–§74 + migration `20261021120000`.
+
+## 76. Office Outside Send to Accounts (no new route) — Oct 21 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+SPA Send button is frontend-only. Same `POST /admin/office-outside/:id/send-to-accounts`.
+
+| Item | Detail |
+|------|--------|
+| Vendor | PATCH `outsideVendorId` (kind `office_outside`) persisted as `vendor_id`; GET echoes `outsideVendorId` / `vendorId` |
+| Send | Sets `sentToAccountsAt` + `sent_to_accounts`; returns the row. Empty vendor → `400 OO_VENDOR_REQUIRED` |
+| `:id` | UUID PK first, then `OO-*`. Do not 404 because the id is not OO-prefixed. Missing → `404 OO_404` |
+| Accounts | `GET ?status=sent` = `sentToAccountsAt IS NOT NULL` (and status sent) |
 

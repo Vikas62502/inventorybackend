@@ -41,7 +41,7 @@ const findOfficeOutsideVendor = async (vendorId: string | null | undefined) => {
       ok: false as const,
       status: 400,
       code: OFFICE_OUTSIDE_ERROR_CODES.VAL_VENDOR,
-      message: 'vendorId must be an office_outside subvendor'
+      message: 'outsideVendorId must be an office_outside subvendor'
     };
   }
   const vendor = await Subvendor.findByPk(vendorId);
@@ -50,12 +50,13 @@ const findOfficeOutsideVendor = async (vendorId: string | null | undefined) => {
       ok: false as const,
       status: 400,
       code: OFFICE_OUTSIDE_ERROR_CODES.VAL_VENDOR,
-      message: 'vendorId must be an office_outside subvendor'
+      message: 'outsideVendorId must be an office_outside subvendor'
     };
   }
   return { ok: true as const, vendor };
 };
 
+/** UUID PK first (Rajkumar Saini / 2e5620c8-…), then OO-XXXXXXXX. Never 404 only because id is not OO-. */
 const loadRecord = async (id: string) => {
   const raw = String(id || '').trim();
   if (!raw) return null;
@@ -71,12 +72,12 @@ const loadRecord = async (id: string) => {
   });
 };
 
-const sentStatusWhere = (raw: string): string | null => {
-  const key = raw.replace(/[\s-]+/g, '_');
-  if (key === 'draft') return 'draft';
-  if (key === 'sent' || key === 'sent_to_accounts' || key === 'accounts') return 'sent_to_accounts';
-  return null;
-};
+const notFound = (res: Response): void =>
+  fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.OO_404, 'Office outside record not found');
+
+const sentListWhere = (): WhereOptions => ({
+  [Op.or]: [{ sentToAccountsAt: { [Op.ne]: null } }, { status: 'sent_to_accounts' }]
+});
 
 const recordPayload = (row: OfficeOutsideRecord) =>
   publicOfficeOutsideRecord(row.get({ plain: true }));
@@ -151,17 +152,25 @@ const listPayload = (records: ReturnType<typeof recordPayload>[]) => ({
 /** GET /admin/office-outside */
 export const listOfficeOutside = async (req: Request, res: Response): Promise<void> => {
   try {
-    const vendorId = String(req.query.vendorId ?? req.query.vendor_id ?? '').trim();
+    const vendorId = String(
+      req.query.outsideVendorId ??
+        req.query.outside_vendor_id ??
+        req.query.vendorId ??
+        req.query.vendor_id ??
+        ''
+    ).trim();
     const search = String(req.query.search ?? req.query.q ?? '').trim();
-    const status = String(req.query.status ?? '').trim().toLowerCase();
+    const status = String(req.query.status ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
     const mobile = normalizeOfficeOutsideMobile(
       req.query.mobile ?? req.query.customerMobile ?? req.query.customer_mobile
     );
 
     const and: WhereOptions[] = [];
     if (vendorId) and.push({ vendorId });
-    const statusKey = sentStatusWhere(status);
-    if (statusKey) and.push({ status: statusKey });
+    if (status === 'draft') and.push({ status: 'draft' });
+    if (status === 'sent' || status === 'sent_to_accounts' || status === 'accounts') {
+      and.push(sentListWhere());
+    }
     if (mobile) and.push({ customerMobile: mobile });
     if (search && !mobile) {
       const like = `%${search}%`;
@@ -193,7 +202,7 @@ export const getOfficeOutside = async (req: Request, res: Response): Promise<voi
   try {
     const row = await loadRecord(req.params.id);
     if (!row) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     const record = recordPayload(row);
@@ -284,7 +293,7 @@ export const updateOfficeOutside = async (req: Request, res: Response): Promise<
   try {
     const row = await loadRecord(req.params.id);
     if (!row) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     const patch = parseOfficeOutsideRecordPatch((req.body || {}) as Record<string, unknown>);
@@ -333,7 +342,7 @@ export const deleteOfficeOutside = async (req: Request, res: Response): Promise<
   try {
     const row = await loadRecord(req.params.id);
     if (!row) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     await row.destroy();
@@ -344,25 +353,34 @@ export const deleteOfficeOutside = async (req: Request, res: Response): Promise<
   }
 };
 
-/** POST /admin/office-outside/:id/send-to-accounts — does not create a quotation. */
+/** POST /admin/office-outside/:id/send-to-accounts — :id is UUID PK or OO-*. No quotation insert. */
 export const sendOfficeOutsideToAccounts = async (req: Request, res: Response): Promise<void> => {
   try {
     const row = await loadRecord(req.params.id);
     if (!row) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
-    if (row.status !== 'sent_to_accounts') {
+    if (!row.vendorId) {
+      fail(
+        res,
+        400,
+        OFFICE_OUTSIDE_ERROR_CODES.OO_VENDOR_REQUIRED,
+        'outsideVendorId is required before send to accounts'
+      );
+      return;
+    }
+    if (row.status !== 'sent_to_accounts' || !row.sentToAccountsAt) {
       await row.update({
         status: 'sent_to_accounts',
-        sentToAccountsAt: new Date(),
+        sentToAccountsAt: row.sentToAccountsAt || new Date(),
         sentToAccountsBy: actorId(req),
         updatedBy: actorId(req)
       } as any);
       await row.reload({ include: recordInclude });
     }
     const record = recordPayload(row);
-    res.json({ success: true, data: { record, item: record } });
+    res.status(200).json({ success: true, data: { record, item: record } });
   } catch (error) {
     logError('Send office-outside to accounts error', error, { id: req.params.id });
     internalError(res);
@@ -374,7 +392,7 @@ export const saveOfficeOutsideSlip = async (req: Request, res: Response): Promis
   try {
     const row = await loadRecord(req.params.id);
     if (!row) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     const body = (req.body || {}) as Record<string, unknown>;
@@ -442,7 +460,7 @@ export const getOfficeOutsideLedger = async (req: Request, res: Response): Promi
   try {
     const record = await loadRecord(req.params.id);
     if (!record) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     const row = await ensureLedger(record, actorId(req));
@@ -462,7 +480,7 @@ export const updateOfficeOutsideLedger = async (req: Request, res: Response): Pr
   try {
     const record = await loadRecord(req.params.id);
     if (!record) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     const body = (req.body || {}) as Record<string, unknown>;
@@ -505,7 +523,7 @@ export const updateOfficeOutsidePaymentDetails = async (req: Request, res: Respo
   try {
     const row = await loadRecord(req.params.id);
     if (!row) {
-      fail(res, 404, OFFICE_OUTSIDE_ERROR_CODES.RECORD_404, 'Office outside record not found');
+      notFound(res);
       return;
     }
     const body = (req.body || {}) as Record<string, unknown>;

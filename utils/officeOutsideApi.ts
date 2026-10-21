@@ -15,7 +15,9 @@ export const OFFICE_OUTSIDE_ERROR_CODES = {
   VAL_CUSTOMER: 'VAL_CUSTOMER',
   VAL_VENDOR: 'VAL_VENDOR',
   VAL_FILE_TYPE: 'VAL_FILE_TYPE',
-  RECORD_404: 'RECORD_404',
+  OO_404: 'OO_404',
+  RECORD_404: 'OO_404',
+  OO_VENDOR_REQUIRED: 'OO_VENDOR_REQUIRED',
   SUBVENDOR_404: 'SUBVENDOR_404',
   OO_DUPLICATE_CUSTOMER: 'OO_DUPLICATE_CUSTOMER'
 } as const;
@@ -117,7 +119,15 @@ export const parseOfficeOutsideRecordPatch = (
   const out: OfficeOutsideRecordPatch = {};
   if (!body) return out;
 
-  const vendorRaw = pick(body, 'vendorId', 'vendor_id', 'subvendorId', 'subvendor_id');
+  const vendorRaw = pick(
+    body,
+    'outsideVendorId',
+    'outside_vendor_id',
+    'vendorId',
+    'vendor_id',
+    'subvendorId',
+    'subvendor_id'
+  );
   if (vendorRaw !== undefined) {
     const id = str(vendorRaw);
     out.vendorId = id || null;
@@ -191,6 +201,7 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
       : [];
   const slipNotes = row.slipNotes || row.slip_notes || '';
   const sentToAccountsAt = row.sentToAccountsAt || row.sent_to_accounts_at || null;
+  const sent = Boolean(sentToAccountsAt) || status === 'sent_to_accounts' || status === 'sent';
   const createdAt = row.createdAt || row.created_at;
   const updatedAt = row.updatedAt || row.updated_at;
   return {
@@ -206,6 +217,8 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     oo_id: publicId,
     vendorId,
     vendor_id: vendorId,
+    outsideVendorId: vendorId,
+    outside_vendor_id: vendorId,
     vendorName,
     vendor_name: vendorName,
     customerName,
@@ -238,7 +251,7 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     paymentPhases: installments,
     phases: installments,
     status,
-    sent: status === 'sent_to_accounts' || status === 'sent',
+    sent,
     sentToAccountsAt,
     sent_to_accounts_at: sentToAccountsAt,
     slipItems,

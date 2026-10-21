@@ -2809,6 +2809,8 @@ Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not
 
 **Follow-up (Oct 2026) — one customer = one row:** last-10 `customer_mobile` unique (`office_outside_mobile_unique`); POST upserts the same `OO-*`; PATCH mobile collision → `409 OO_DUPLICATE_CUSTOMER` + `existingId`; `GET ?mobile=` exact lookup; empty list is `200 { records: [] }` (never 204). Persist only in `office_outside_records`.
 
+**Follow-up (Oct 21 2026) — Send to Accounts (no new route):** persist `outsideVendorId` on PATCH/GET; `:id` is UUID PK or `OO-*` (do not 404 UUID-only ids); Send sets `sentToAccountsAt` and returns the row; empty vendor → `400 OO_VENDOR_REQUIRED`; missing id → `404 OO_404`; `GET ?status=sent` is `sentToAccountsAt IS NOT NULL`.
+
 ---
 
 ## File index (May–June 2026 handoff)

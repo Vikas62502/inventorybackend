@@ -26,13 +26,16 @@
  *          (Aman Rajak / 8920094209 stays OO-1402E036). Do not mint a second OO-*.
  *          If you cannot upsert → 409 OO_DUPLICATE_CUSTOMER with existingId.
  *
- *   GET    /api/admin/office-outside/:id     (UUID or OO-XXXXXXXX)
- *   PATCH  /api/admin/office-outside/:id     vendor + fileType stay writable after Send
+ *   GET    /api/admin/office-outside/:id     UUID PK or OO-XXXXXXXX (do not 404 UUID-only ids)
+ *   PATCH  /api/admin/office-outside/:id     outsideVendorId / vendorId + fileType stay writable after Send
  *          (never 400 OO_ALREADY_SENT). Moving a 10-digit mobile onto another row → 409.
  *   DELETE /api/admin/office-outside/:id
  *
  *   POST   /api/admin/office-outside/:id/send-to-accounts
- *          status=sent_to_accounts. Does NOT insert into quotations.
+ *          :id = UUID PK or OO-*. Look up by PK first (Rajkumar Saini / 2e5620c8-…).
+ *          404 OO_404 if missing. 400 OO_VENDOR_REQUIRED if outside_vendor_id is null.
+ *          Sets sentToAccountsAt + status=sent_to_accounts. Does NOT insert into quotations.
+ *          No new route — SPA Send button is always clickable on pending rows.
  *
  *   PATCH  /api/admin/office-outside/:id/slip   { items, notes } — no Chairbord branding
  *
@@ -148,17 +151,35 @@ async function updateOfficeOutside(req, res, { OfficeOutsideRecord, Subvendor, O
  * 3) Record / ledger echo
  * -----------------------------------------------------------------------------
  */
+/**
+ * CHANGELOG Oct 21 2026 (later) — Send to Accounts
+ *   No new route. SPA button is now always clickable on pending rows.
+ *   Send still calls POST /admin/office-outside/:id/send-to-accounts.
+ *   1. PATCH { outsideVendorId } (subvendors.kind must be office_outside) — echoed on GET
+ *   2. POST send-to-accounts → sets sentToAccountsAt (id = OO-* or UUID PK)
+ *   3. Accounts list = GET ?status=sent → sentToAccountsAt IS NOT NULL
+ *   Also: leaser accepts office_outside vendor ids + OO-* customer_ids.
+ */
+const sendFlow = {
+  patch: { outsideVendorId: 'office-outside-subvendor-uuid' },
+  send: 'POST /admin/office-outside/2e5620c8-5519-4aaa-8bbb-cccccccccccc/send-to-accounts',
+  accounts: 'GET /admin/office-outside?status=sent'
+};
+
 const record = {
   id: 'uuid',
   publicId: 'OO-1402E036',
   mobile: '8920094209',
   customerMobile: '8920094209',
+  outsideVendorId: 'office-outside-subvendor-uuid',
+  vendorId: 'office-outside-subvendor-uuid',
   fileType: 'loan', // or null when omitted
   paymentStatus: 'pending',
   paymentMode: 'cash',
   installments: [],
   status: 'sent_to_accounts',
-  sent: true
+  sent: true,
+  sentToAccountsAt: '2026-10-21T09:00:00.000Z'
 };
 
 const ledger = {
@@ -181,5 +202,7 @@ const ledger = {
  *   3. PATCH another row to 8920094209 → 409 OO_DUPLICATE_CUSTOMER existingId.
  *   4. POST without fileType → 201, fileType null; PATCH fileType after Send → 200.
  *   5. GET ?status=sent for Accounts. GET quotations unchanged.
+ *   6. PATCH outsideVendorId → GET echoes it; Send without vendor → 400 OO_VENDOR_REQUIRED.
+ *   7. POST send-to-accounts with UUID PK (not OO-*) → 200 + sentToAccountsAt; row in ?status=sent.
  */
 export {};
