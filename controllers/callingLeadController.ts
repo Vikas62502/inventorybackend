@@ -37,6 +37,11 @@ import {
 } from '../utils/callingQueueSocialFields';
 import { resolveCallingSheetDecisionFields } from '../utils/callingSheetDecision';
 import { buildLeadFormApiFields } from '../utils/callingLeadFormFields';
+import {
+  echoCallingQueueStatus,
+  hasCallingAssignee,
+  isCreatedOrBlankFinalSheetLead
+} from '../utils/callingAssignmentStatus';
 
 /** Non-blocking Google Sheet write-back for social/sheet leads (P0 §AQ). */
 const scheduleSheetWriteBack = (leadId: string | null | undefined): void => {
@@ -363,7 +368,7 @@ const fetchHrUploadBatchCountRows = async (batchIds: string[]): Promise<Map<stri
       SUM(
         CASE
           WHEN LOWER(COALESCE(dla."status"::text, '')) IN (
-            'assigned', 'in_progress', 'active', 'queued'
+            'assigned', 'in_progress', 'active', 'queued', 'created', 'open', 'pending'
           )
             AND dla."dealerId" IS NOT NULL
             AND TRIM(dla."dealerId") <> ''
@@ -959,6 +964,136 @@ export const assignUploadBatchWithActiveCap = async ({
   });
   scheduleSheetWriteBackForBatch(batchId);
   return result;
+};
+
+const REMAP_CREATED_ASSIGNMENT_SQL = `
+  UPDATE "dealer_lead_assignments"
+  SET
+    "status" = (
+      CASE
+        WHEN "dealerId" IS NULL OR BTRIM("dealerId") = ''
+          OR LOWER(BTRIM("dealerId")) IN ('unassigned', 'pool', 'open', 'null', 'none', '-', 'na', 'n/a')
+        THEN 'queued'
+        ELSE 'assigned'
+      END
+    )::"enum_dealer_lead_assignments_status",
+    "assignedAt" = COALESCE("assignedAt", NOW()),
+    "updatedAt" = NOW()
+  WHERE LOWER(BTRIM(COALESCE("status"::text, ''))) IN ('created', 'open', 'pending');
+`;
+
+export const remapCreatedCallingAssignmentStatuses = async (transaction?: any): Promise<void> => {
+  try {
+    await sequelize.query(REMAP_CREATED_ASSIGNMENT_SQL, transaction ? { transaction } : {});
+  } catch (error) {
+    logError('Could not remap created calling assignment statuses', error);
+  }
+};
+
+/**
+ * Round-robin leftover Meta CREATED / blank-Final leads on a sheet tab onto the dealer pool.
+ * Calling status becomes assigned (never CREATED). lead_status stays CREATED on the lead row.
+ */
+export const assignCreatedSheetSourceLeads = async ({
+  sheetSourceId,
+  dealerIds,
+  assignedByUserId = '1'
+}: {
+  sheetSourceId: string;
+  dealerIds: string[];
+  assignedByUserId?: string;
+}): Promise<{ assigned: number }> => {
+  const pool = dealerIds.filter((id) => isValidHrCallingAssigneeDealerId(id));
+  if (!sheetSourceId || !pool.length) return { assigned: 0 };
+
+  await ensureCallingPoolDealerExists();
+  const assignedBy = String(assignedByUserId || '').trim() || '1';
+  const now = new Date();
+
+  const assigned = await sequelize.transaction(async (transaction) => {
+    await remapCreatedCallingAssignmentStatuses(transaction);
+
+    const leads = await CallingLead.findAll({
+      where: { sheetSourceId },
+      order: [['createdAt', 'ASC'], ['id', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    let moved = 0;
+    let cursor = 0;
+    for (const lead of leads) {
+      if (!isCreatedOrBlankFinalSheetLead(lead)) continue;
+
+      const assignment = await DealerLeadAssignment.findOne({
+        where: { leadId: lead.id },
+        transaction,
+        lock: transaction.LOCK.UPDATE
+      });
+
+      if (assignment && hasCallingAssignee(assignment.dealerId)) {
+        const st = String(assignment.status || '').toLowerCase();
+        if (st === 'created' || st === 'open' || st === 'pending') {
+          await assignment.update(
+            {
+              status: 'assigned',
+              assignedAt: assignment.assignedAt || now
+            },
+            { transaction }
+          );
+          moved += 1;
+        }
+        continue;
+      }
+
+      const dealerId = pool[cursor % pool.length];
+      cursor += 1;
+      if (assignment) {
+        await assignment.update(
+          {
+            dealerId,
+            status: 'assigned',
+            assignedAt: now,
+            assignedBy,
+            action: null,
+            callRemark: null,
+            nextFollowUpAt: null,
+            actionAt: null
+          },
+          { transaction }
+        );
+      } else {
+        await DealerLeadAssignment.create(
+          {
+            id: uuidv4(),
+            leadId: lead.id,
+            dealerId,
+            assignedBy,
+            assignedAt: now,
+            status: 'assigned'
+          },
+          { transaction }
+        );
+      }
+      moved += 1;
+    }
+    return moved;
+  });
+
+  const batchIds = [
+    ...new Set(
+      (
+        await CallingLead.findAll({
+          where: { sheetSourceId },
+          attributes: ['batchId']
+        })
+      )
+        .map((row) => row.batchId)
+        .filter(Boolean) as string[]
+    )
+  ];
+  for (const batchId of batchIds) scheduleSheetWriteBackForBatch(batchId);
+  return { assigned };
 };
 
 /**
@@ -2653,7 +2788,7 @@ const shouldAllowClaimOnAction = (
 const normalizeAssignmentStatusFromClient = (raw?: unknown): string | null => {
   if (raw === undefined || raw === null || raw === '') return null;
   const normalized = String(raw).trim().toLowerCase().replace(/\s+/g, '_');
-  if (normalized === 'pending') return 'queued';
+  if (normalized === 'pending' || normalized === 'open' || normalized === 'created') return 'assigned';
   if (normalized === 'inprogress') return 'in_progress';
   if (['queued', 'assigned', 'active', 'in_progress', 'rescheduled', 'completed'].includes(normalized)) {
     return normalized;
@@ -2696,8 +2831,8 @@ const buildCallingLeadQueuePayload = async (
     assigned_dealer_name: assignedDealerName,
     assignedToDealerId: assignment.dealerId,
     assigned_to_dealer_id: assignment.dealerId,
-    status: assignment.status,
-    assignmentStatus: assignment.status,
+    status: echoCallingQueueStatus(assignment.status, assignment.dealerId),
+    assignmentStatus: echoCallingQueueStatus(assignment.status, assignment.dealerId),
     callRemark: assignment.callRemark,
     statusCategory,
     statusLabel: statusText,
@@ -3452,6 +3587,9 @@ const findOpenAssignedLeadsForDealer = async (dealerId: string, limit = 500) => 
           dealerId,
           [Op.or]: [
             { status: { [Op.in]: [...CALLABLE_QUEUE_STATUSES] } },
+            Sequelize.literal(
+              `LOWER(BTRIM(COALESCE("DealerLeadAssignment"."status"::text, ''))) IN ('created', 'open', 'pending')`
+            ),
             { status: 'rescheduled', nextFollowUpAt: { [Op.lte]: now } }
           ]
         },
@@ -3559,7 +3697,7 @@ const mapAssignmentRowsToQueueLeads = async (dealerId: string, rows: any[]) => {
         assigned_dealer_name: assignedDealerName,
         assignedToDealerId: row.dealerId,
         assigned_to_dealer_id: row.dealerId,
-        status: row.status,
+        status: echoCallingQueueStatus(row.status, row.dealerId),
         callRemark: row.callRemark,
         statusCategory: latestStatus?.statusCategory || null,
         statusLabel: latestStatus?.statusLabel || null,

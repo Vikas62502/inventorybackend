@@ -139,5 +139,7 @@ const vendorResponse = {
  *   Collect Other on an OO file posts to that outside vendor (PUT /subvendors/:outsideId/leaser
  *   with customerIds including OO-XXXXXXXX), not Office Inside.
  *   Dates: GET echoes date + payment_date as "YYYY-MM-DD" (not ISO datetime).
+ *   Bills are a separate table — PUT leaser must not write /admin/subvendors/:id/bills.
+ *   See BACKEND_SUBVENDOR_BILLS.ts.
  */
 

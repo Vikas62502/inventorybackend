@@ -20,6 +20,7 @@ import {
   patchHrSheetSource,
   postHrSheetSourceSync,
   postHrSheetSourcesSyncAll,
+  postHrSheetSourceAssignCreated,
   getHrSheetSourceLeads
 } from '../controllers/hrSheetSourceController';
 import { validate } from '../middleware/validate';
@@ -154,6 +155,7 @@ router.post('/sheet-sources/discover', validate(discoverHrSheetTabsSchema), disc
 // sync-all is registered above authenticate (cron + HR)
 router.patch('/sheet-sources/:id', validate(patchHrSheetSourceSchema), patchHrSheetSource);
 router.post('/sheet-sources/:id/sync', postHrSheetSourceSync);
+router.post('/sheet-sources/:id/assign-created', postHrSheetSourceAssignCreated);
 router.get('/sheet-sources/:id/leads', validate(hrSheetSourceLeadsQuerySchema), getHrSheetSourceLeads);
 
 export default router;

@@ -182,7 +182,7 @@ export const emitCallingActionsUpdated = (payload: {
   );
 };
 
-export type SheetSyncSocketReason = 'sheet_sync' | 'sheet_auto_sync';
+export type SheetSyncSocketReason = 'sheet_sync' | 'sheet_auto_sync' | 'sheet_assign_created';
 
 /** P0: emit after sheet sync/assign so SPA HR Social Media live-updates. */
 export const emitSheetSyncUploadsUpdated = (opts: {

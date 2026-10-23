@@ -17,8 +17,10 @@
  *
  *   GET    /api/admin/office-outside                  Admin All Outside
  *   GET    /api/admin/office-outside?mobile=8920094209  exact one-customer lookup
- *   GET    /api/admin/office-outside?status=sent        Accounts + Vendor Outside
- *          also ?vendorId= &search= &status=draft|sent|sent_to_accounts
+ *   GET    /api/admin/office-outside?status=sent        Accounts (sent_to_accounts_at IS NOT NULL)
+ *   GET    /api/admin/office-outside?status=outside     Vendor Outside (sent_to_outside_at IS NOT NULL)
+ *   GET    /api/admin/office-outside?status=pending     both timestamps null
+ *          also ?vendorId= &search= &status=draft|sent|sent_to_accounts|outside
  *          → 200 { success, data: { records, items, officeOutside } }  (never 204)
  *
  *   POST   /api/admin/office-outside
@@ -29,20 +31,22 @@
  *   GET    /api/admin/office-outside/:id     UUID PK or OO-XXXXXXXX (do not 404 UUID-only ids)
  *   PATCH  /api/admin/office-outside/:id     outsideVendorId / vendorId + fileType stay writable after Send
  *          (never 400 OO_ALREADY_SENT). Moving a 10-digit mobile onto another row → 409.
+ *          Also persists subtotal / amount / loanAmount / cashAmount (partial; omitted keys stay).
  *   DELETE /api/admin/office-outside/:id
  *
  *   POST   /api/admin/office-outside/:id/send-to-accounts
- *          :id = UUID PK or OO-*. Look up by PK first (Rajkumar Saini / 2e5620c8-…).
- *          404 OO_404 if missing. 400 OO_VENDOR_REQUIRED if outside_vendor_id is null.
- *          Sets sentToAccountsAt + status=sent_to_accounts. Does NOT insert into quotations.
- *          No new route — SPA Send button is always clickable on pending rows.
+ *          All Outside → Accounts. Set sent_to_accounts_at only. Do not set sent_to_outside_at.
+ *          :id = UUID PK or OO-*. 404 OO_404 if missing. 400 OO_VENDOR_REQUIRED if vendor is null.
+ *
+ *   POST   /api/admin/office-outside/:id/send-to-outside
+ *          Accounts → Vendor Outside. Set sent_to_outside_at. Do not clear sent_to_accounts_at.
+ *          Auth: admin or accounts JWT (Accounts Send to Outside button).
  *
  *   POST   /api/admin/office-outside/:id/retrieve-from-accounts
- *          Revert Send (Accounts ↺ / All Outside Revert). :id = UUID PK or OO-*.
- *          Auth: admin or accounts JWT. sent_to_accounts_at = NULL. Do not delete the row.
- *          Keep vendor, file type, ledger. Echo sentToAccountsAt: null (do not omit the key).
- *          Idempotent 200 if already pending. Never 400 OO_VENDOR_REQUIRED / OO_ALREADY_SENT.
- *          Fallback: PATCH /admin/office-outside/:id { "sentToAccountsAt": null }
+ *          Clear both timestamps and echo them as null. Row goes back to All Outside Pending.
+ *          Auth: admin or accounts JWT. Do not delete the row.
+ *          Fallback: PATCH { sentToAccountsAt: null } (clears both).
+ *          PATCH { sentToOutsideAt: null } clears only the outside timestamp (keep accounts).
  *
  *   PATCH  /api/admin/office-outside/:id/slip   { items, notes } — no Chairbord branding
  *
@@ -51,6 +55,10 @@
  *
  *   GET    /api/admin/office-outside/ledger
  *   GET/PATCH /api/admin/office-outside/ledger/:id
+ *          Partial upsert. Missing keys must NOT reset to 0.
+ *          All Outside Save sends { proposal, loanAmount, cashAmount } only — keep PI/file/GST.
+ *          Copy loan_amount / cash_amount onto office_outside_records so GET list echoes them.
+ *          GET ledger: if loan_amount is 0, fill from the record (loan file → subtotal).
  *          GST = (proposal − PI) × 8.9% when PI > 0, else 0.
  *          costOfSite = PI + fileCharges + GST + others.
  *          officeOutsideCompleteProfit = subtotal − costOfSite (ignore profit_ratio).
@@ -121,10 +129,30 @@ const conflict409 = {
  *   POST: find by last-10 mobile → update same id; else create. Unique race → upsert or 409.
  *   PATCH: if new mobile belongs to another row → 409 with existingId so SPA can PATCH it.
  */
-async function listOfficeOutside(req, res) {
+async function listOfficeOutside(req, res, { OfficeOutsideRecord, Op }) {
   const mobile = normalizeMobile(req.query.mobile ?? req.query.customerMobile);
-  const records = []; // findAll; if mobile, where customerMobile = mobile
-  res.status(200).json({ success: true, data: { records, items: records, officeOutside: records } });
+  const status = String(req.query.status ?? '').trim().toLowerCase();
+  const where = {};
+  if (mobile) where.customerMobile = mobile;
+  if (status === 'pending' || status === 'draft') {
+    where.sentToAccountsAt = null;
+    where.sentToOutsideAt = null;
+  }
+  if (status === 'sent' || status === 'sent_to_accounts' || status === 'accounts') {
+    where.sentToAccountsAt = { [Op.ne]: null }; // do not require both timestamps
+  }
+  if (status === 'outside' || status === 'sent_to_outside') {
+    where.sentToOutsideAt = { [Op.ne]: null }; // include rows already on Accounts
+  }
+  const records = await OfficeOutsideRecord.findAll({ where });
+  const all = await OfficeOutsideRecord.count();
+  const pending = await OfficeOutsideRecord.count({
+    where: { sentToAccountsAt: null, sentToOutsideAt: null }
+  });
+  res.status(200).json({
+    success: true,
+    data: { records, items: records, officeOutside: records, counts: { all, pending } }
+  });
 }
 
 async function createOfficeOutside(req, res, { OfficeOutsideRecord }) {
@@ -151,23 +179,60 @@ async function updateOfficeOutside(req, res, { OfficeOutsideRecord, Subvendor, O
   }
   await row.update(/* patch */);
   if (req.body?.sentToAccountsAt === null) {
-    await row.update({ sentToAccountsAt: null, sent_to_accounts_at: null, status: 'draft' });
+    await row.update({
+      sentToAccountsAt: null,
+      sentToOutsideAt: null,
+      status: 'draft'
+    });
+  } else if (req.body?.sentToOutsideAt === null) {
+    await row.update({ sentToOutsideAt: null });
   }
   return res.status(200).json({ success: true, data: { record: row } });
+}
+
+async function sendOfficeOutsideToAccounts(req, res, { OfficeOutsideRecord }) {
+  const row = await OfficeOutsideRecord.findByPk(req.params.id); // UUID PK; also accept OO-*
+  if (!row) return res.status(404).json({ success: false, error: { code: 'OO_404' } });
+  const loanCash = officeOutsideLoanCashAmounts(row);
+  // All Outside → Accounts. Do not set sentToOutsideAt (Vendor Outside is a later step).
+  if (!row.sentToAccountsAt) row.sentToAccountsAt = new Date();
+  row.updatedBy = req.user?.id || row.updatedBy;
+  await row.save();
+  return res.status(200).json({ success: true, data: { record: row, loanCash } });
+}
+
+async function sendOfficeOutsideToOutside(req, res, { OfficeOutsideRecord }) {
+  const row = await OfficeOutsideRecord.findByPk(req.params.id);
+  if (!row) return res.status(404).json({ success: false, error: { code: 'OO_404' } });
+  const loanCash = officeOutsideLoanCashAmounts(row);
+  // Accounts → Vendor Outside. Keep sentToAccountsAt so the file stays on Accounts.
+  if (!row.sentToOutsideAt) row.sentToOutsideAt = new Date();
+  row.updatedBy = req.user?.id || row.updatedBy;
+  await row.save();
+  return res.status(200).json({ success: true, data: { record: row, loanCash } });
 }
 
 async function retrieveOfficeOutsideFromAccounts(req, res, { OfficeOutsideRecord }) {
   const row = await OfficeOutsideRecord.findByPk(req.params.id); // UUID PK; also accept OO-*
   if (!row) return res.status(404).json({ success: false, error: { code: 'OO_404' } });
-  await row.update({
-    sentToAccountsAt: null,
-    sent_to_accounts_at: null,
-    sentToAccountsBy: null,
-    status: 'draft'
-  });
+  row.sentToAccountsAt = null;
+  row.sentToOutsideAt = null;
+  row.sentToAccountsBy = null;
+  row.status = 'draft';
+  row.updatedBy = req.user?.id || row.updatedBy;
+  // Echo both timestamps as null (do not omit) so SPA returns the row to Pending.
+  await row.save();
   return res.status(200).json({
     success: true,
-    data: { record: { ...row.get({ plain: true }), sentToAccountsAt: null, sent: false } }
+    data: {
+      record: {
+        ...row.get({ plain: true }),
+        sentToAccountsAt: null,
+        sentToOutsideAt: null,
+        sent: false,
+        outside: false
+      }
+    }
   });
 }
 
@@ -199,12 +264,18 @@ const record = {
   outsideVendorId: 'office-outside-subvendor-uuid',
   vendorId: 'office-outside-subvendor-uuid',
   fileType: 'loan', // or null when omitted
+  subtotal: 200000,
+  amount: 200000,
+  loanAmount: 200000,
+  cashAmount: 0,
   paymentStatus: 'pending',
   paymentMode: 'cash',
   installments: [],
   status: 'sent_to_accounts',
   sent: true,
-  sentToAccountsAt: '2026-10-21T09:00:00.000Z'
+  outside: false,
+  sentToAccountsAt: '2026-10-21T09:00:00.000Z',
+  sentToOutsideAt: null
 };
 
 const ledger = {
@@ -232,5 +303,56 @@ const ledger = {
  *   8. POST retrieve-from-accounts → sentToAccountsAt null (key present); GET ?status=sent omits it;
  *      GET all / ?status=pending includes it. Second retrieve is 200. Row is not deleted.
  *   9. PATCH { sentToAccountsAt: null } is the same revert. Ignore profit_ratio for office_outside.
+ *  10. PATCH record/ledger { loanAmount, cashAmount, amount } → GET list + ledger echo those values.
+ *      Save { proposal, loanAmount, cashAmount } only must keep PI / file / GST.
+ *      Loan file with loan 0 uses the amount; a saved loan > 0 stays.
+ *  11. POST send-to-accounts → GET ?status=sent includes it; GET ?status=outside does not.
+ *      POST send-to-outside → GET ?status=outside includes it; GET ?status=sent still includes it.
+ *      POST retrieve-from-accounts → both timestamps null; GET ?status=pending includes it.
+ *      PATCH { sentToOutsideAt: null } → outside null, accounts timestamp kept.
+ */
+/**
+ * CHANGELOG Oct 23 2026 — Amount / loan persist
+ *   ALTER TABLE office_outside_records
+ *     ADD COLUMN IF NOT EXISTS loan_amount INTEGER NOT NULL DEFAULT 0,
+ *     ADD COLUMN IF NOT EXISTS cash_amount INTEGER NOT NULL DEFAULT 0;
+ *   ALTER TABLE office_outside_ledger
+ *     ADD COLUMN IF NOT EXISTS loan_amount INTEGER NOT NULL DEFAULT 0,
+ *     ADD COLUMN IF NOT EXISTS cash_amount INTEGER NOT NULL DEFAULT 0;
+ *
+ *   PATCH /admin/office-outside/:id — save subtotal / amount / loanAmount / cashAmount
+ *   PATCH /admin/office-outside/ledger/:id — same loan/cash onto the ledger (partial)
+ *   GET record and ledger — echo loanAmount / cashAmount
+ *   Loan file with loan 0 → use the amount. A saved loan > 0 stays as-is.
+ *   Mount /ledger before /:id. After deploy, Save on All Outside keeps the loan on Vendor Outside.
+ */
+/**
+ * CHANGELOG Oct 23 2026 — Accounts → Vendor Outside hop
+ *   ALTER TABLE office_outside_records
+ *     ADD COLUMN IF NOT EXISTS sent_to_outside_at TIMESTAMPTZ NULL;
+ *
+ *   POST send-to-accounts — set sent_to_accounts_at only. Do not set sent_to_outside_at.
+ *   POST send-to-outside — set sent_to_outside_at. Do not clear sent_to_accounts_at. Accounts JWT allowed.
+ *   POST retrieve-from-accounts — clear both timestamps; echo them as null.
+ *   PATCH { sentToOutsideAt: null } — clear only the outside timestamp.
+ *   GET ?status=sent | outside | pending as timestamp filters (sent does not require both).
+ */
+/**
+ * CHANGELOG Oct 23 2026 — Vendor leaser bills  ← APPLY WITH BACKEND_SUBVENDOR_BILLS.ts
+ *   Vendor Outside → Manage → Bills now persists on the API:
+ *     GET  /admin/subvendors/bills
+ *     GET  /admin/subvendors/:id/bills
+ *     PUT  /admin/subvendors/:id/bills — full replace on Save payments
+ *   Same PUT `/admin/subvendors/:id/leaser`. customer_ids may be OO-* record ids.
+ *   Bills for that vendor: PUT `/admin/subvendors/:id/bills` (see BACKEND_SUBVENDOR_BILLS.ts).
+ *   Profit on that vendor card is COMPLETE file profit (frontend GST 9.8%).
+ *   Treat loan_amount / cash_amount 0 as unset; a saved amount > 0 must stick.
+ *   Persist Vendor Outside bills on GET/PUT /admin/subvendors/:id/bills
+ *     (date, basic, paymentMode, customerIds OO-* or UUID, uploaded file).
+ *
+ *   Do not:
+ *   - Ignore PATCH loanAmount on the record (Vendor Outside then stays ₹0)
+ *   - Put bill rows on PUT /admin/subvendors/:id/leaser (bills are a separate table)
+ *   - Leave sent_to_accounts_at or sent_to_outside_at set after a 200 retrieve
  */
 export {};

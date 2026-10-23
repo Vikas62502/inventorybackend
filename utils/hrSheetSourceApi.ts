@@ -3,6 +3,7 @@ import CallingLead from '../models/CallingLead';
 import DealerLeadAssignment from '../models/DealerLeadAssignment';
 import { HrUploadLeadCounts } from '../controllers/callingLeadController';
 import { asDealerIdArray } from './hrSheetSourceSync';
+import { echoCallingQueueStatus } from './callingAssignmentStatus';
 
 export { buildDealerQueueSocialFields, loadUploadBatchMapByIds } from './callingQueueSocialFields';
 
@@ -51,7 +52,7 @@ export const mapSocialLeadForApi = (
     )
       ? String(assignment.dealerId)
       : null;
-  const status = assignment?.status || 'queued';
+  const status = echoCallingQueueStatus(assignment?.status, assignedDealerId);
 
   return {
     id: lead.id,
@@ -70,6 +71,8 @@ export const mapSocialLeadForApi = (
     ad_name: lead.adName,
     leadStatus: lead.sheetLeadStatus,
     lead_status: lead.sheetLeadStatus,
+    sheetLeadStatus: lead.sheetLeadStatus,
+    sheet_lead_status: lead.sheetLeadStatus,
     remarks: lead.remarks,
     remarks2: lead.remarks2,
     remarks_2: lead.remarks2,

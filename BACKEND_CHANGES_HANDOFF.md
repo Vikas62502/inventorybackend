@@ -114,6 +114,10 @@
 | 102 | High | OO one customer = one row (mobile unique, POST upsert, live GET) | **Done** | §75 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 103 | High | OO Send to Accounts: persist vendor, UUID/:id, sent list | **Done** | §76 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 104 | High | OO Revert / retrieve-from-accounts (null sentToAccountsAt) | **Done** | §77 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 105 | High | Sheet CREATED ≠ calling status; assign-created + queue echo | **Done** | §78 / REQUIRED §AO / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
+| 106 | High | OO amount / loanAmount persist on record + ledger | **Done** | §79 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 107 | High | OO Accounts → Vendor Outside hop (`sent_to_outside_at`) | **Done** | §80 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
+| 108 | High | Vendor Outside bills persist (GET/PUT `/admin/subvendors/:id/bills`) | **Done** | §81 / REQUIRED §BX / `BACKEND_SUBVENDOR_BILLS.ts` |
 
 **Deploy before QA:**
 
@@ -3767,4 +3771,53 @@ SPA Send button is frontend-only. Same `POST /admin/office-outside/:id/send-to-a
 | Lists | After revert, `GET ?status=sent` omits it; GET all / `?status=pending` includes it |
 | Idempotent | Already pending → 200. Never `OO_VENDOR_REQUIRED` / `OO_ALREADY_SENT` |
 | Fallback | `PATCH /admin/office-outside/:id { "sentToAccountsAt": null }` |
+
+## 78. Sheet CREATED is not calling status — Oct 22 2026
+
+**Status: implemented** — REQUIRED **§AO** · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `BACKEND_CALLING_QUEUE_CURRENT.ts`
+
+| Item | Detail |
+|------|--------|
+| Persist | Meta `lead_status=CREATED` stays on `calling_leads.sheetLeadStatus` only |
+| Calling status | `queued` or `assigned` — never `CREATED`. One-shot remaps leftover `created`/`open`/`pending` |
+| Assign | `POST /hr/sheet-sources/:id/assign-created` round-robins leftover CREATED / blank-Final rows to the tab dealer pool (or another enabled tab on the same spreadsheet). Sync also runs this after active_cap |
+| Queue | `GET /dealers/me/calling-queue/current` + `/next` return those assigned rows; echo `lead_status` / `sheetLeadStatus` separately |
+
+## 79. Office Outside amount / loan persist — Oct 23 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| Columns | `loan_amount` / `cash_amount` on `office_outside_records` and `office_outside_ledger` |
+| Record PATCH | `PATCH /admin/office-outside/:id` saves `subtotal` / `amount` / `loanAmount` / `cashAmount` (partial) |
+| Ledger PATCH | Same loan/cash; omitted keys stay (All Outside Save `{ proposal, loanAmount, cashAmount }` keeps PI/file/GST) |
+| Copy | Ledger loan/cash written onto the record so GET list echoes them |
+| Echo | GET record and ledger return `loanAmount` / `cashAmount` |
+| Fill | Loan file with loan 0 → use the amount. A saved loan > 0 stays as-is |
+
+## 80. Office Outside Accounts → Vendor Outside hop — Oct 23 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| Column | `sent_to_outside_at TIMESTAMPTZ NULL` |
+| Send to Accounts | `POST …/send-to-accounts` sets `sent_to_accounts_at` only — never `sent_to_outside_at` |
+| Send to Outside | `POST …/send-to-outside` (admin or accounts JWT) sets `sent_to_outside_at`; keeps `sent_to_accounts_at` |
+| Retrieve | `POST …/retrieve-from-accounts` clears **both** timestamps and echoes them as `null` |
+| PATCH | `{ sentToOutsideAt: null }` clears only outside; `{ sentToAccountsAt: null }` clears both |
+| GET | `?status=sent` = accounts timestamp set; `?status=outside` = outside timestamp set; `?status=pending` = both null |
+
+## 81. Vendor Outside bills persist — Oct 23 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_SUBVENDOR_BILLS.ts`
+
+| Item | Detail |
+|------|--------|
+| Table | `subvendor_bills` — date, basic_amount, payment_mode, remark, customer_ids, bill file name/data/url |
+| Routes | `GET /admin/subvendors/bills` · `GET/PUT /admin/subvendors/:id/bills` (admin JWT; mount `/bills` before `/:id`) |
+| PUT | Full replace on Save payments. Same id without a new file keeps the previous file. File max 2.5 MB; body 5 MB |
+| Not leaser | PUT `/admin/subvendors/:id/leaser` does not write bills |
+| Loan/cash | `0` is unset on PATCH record; a saved amount > 0 sticks |
 

@@ -2,7 +2,10 @@ import { v4 as uuidv4 } from 'uuid';
 import CallingLeadSheetSource from '../models/CallingLeadSheetSource';
 import CallingLeadUploadBatch from '../models/CallingLeadUploadBatch';
 import CallingLead from '../models/CallingLead';
-import { assignUploadBatchWithActiveCap } from '../controllers/callingLeadController';
+import {
+  assignCreatedSheetSourceLeads,
+  assignUploadBatchWithActiveCap
+} from '../controllers/callingLeadController';
 import {
   getSheetsClient,
   resolveSpreadsheetId
@@ -380,6 +383,19 @@ export const syncSheetTabSource = async (
       assigned = assignResult.assigned;
     } catch (error) {
       logError('Sheet sync assign active_cap failed (non-fatal)', error, {
+        sheetSourceId: sourceRow.id,
+        uploadId: upload.id
+      });
+    }
+    try {
+      const createdAssign = await assignCreatedSheetSourceLeads({
+        sheetSourceId: sourceRow.id,
+        dealerIds,
+        assignedByUserId
+      });
+      assigned += createdAssign.assigned;
+    } catch (error) {
+      logError('Sheet sync assign-created failed (non-fatal)', error, {
         sheetSourceId: sourceRow.id,
         uploadId: upload.id
       });

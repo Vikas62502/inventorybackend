@@ -8,7 +8,8 @@ import {
   Quotation,
   Subvendor,
   SubvendorLedger,
-  SubvendorLeaserPayment
+  SubvendorLeaserPayment,
+  SubvendorBill
 } from '../models/index-quotation';
 import { logError } from '../utils/loggerHelper';
 import {
@@ -17,7 +18,11 @@ import {
   normalizeSubvendorKind,
   parseLedgerAmountPatch,
   parseLeaserPayments,
+  parseSubvendorBills,
   publicLeaserPayment,
+  publicSubvendorBill,
+  BILLS_JSON_MAX_BYTES,
+  SubvendorBillInput,
   roundInr,
   parseSubvendorDealerId,
   parseSubvendorRateFields,
@@ -516,6 +521,137 @@ export const replaceVendorLeaser = async (req: Request, res: Response): Promise<
     res.json({ success: true, data: leaserVendorPayload(vendor, payments, profit) });
   } catch (error) {
     logError('Replace vendor leaser error', error, { id: req.params.id });
+    internalError(res);
+  }
+};
+
+const BILL_ORDER: [string, string][] = [
+  ['sortOrder', 'ASC'],
+  ['createdAt', 'ASC']
+];
+
+const billsPayload = (vendor: Subvendor, bills: SubvendorBill[]) => ({
+  vendorId: vendor.id,
+  vendor_id: vendor.id,
+  kind: vendor.kind,
+  bills: bills.map((row) => publicSubvendorBill(row.get({ plain: true }))),
+  items: bills.map((row) => publicSubvendorBill(row.get({ plain: true })))
+});
+
+const mergeKeptBillFiles = (incoming: SubvendorBillInput[], existing: SubvendorBill[]) => {
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  return incoming.map((bill) => {
+    const prev = bill.id ? byId.get(bill.id) : undefined;
+    if (!prev) return bill;
+    const keepData = !bill.billFileData && prev.billFileData;
+    const keepUrl = !bill.billFileUrl && prev.billFileUrl;
+    const keepName = !bill.billFileName && prev.billFileName;
+    if (!keepData && !keepUrl && !keepName) return bill;
+    return {
+      ...bill,
+      billFileName: keepName ? prev.billFileName : bill.billFileName,
+      billFileData: keepData ? prev.billFileData : bill.billFileData,
+      billFileUrl: keepUrl ? prev.billFileUrl : bill.billFileUrl
+    };
+  });
+};
+
+/** GET /admin/subvendors/bills?vendorId= */
+export const listSubvendorBills = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const vendorQuery = String(req.query.vendorId ?? req.query.vendor_id ?? '').trim();
+    let vendors: Subvendor[];
+    if (vendorQuery) {
+      const vendor = await resolveLeaserVendor(vendorQuery);
+      vendors = vendor ? [vendor] : [];
+    } else {
+      vendors = await Subvendor.findAll({ order: [['name', 'ASC']] });
+    }
+    const vendorIds = vendors.map((v) => v.id);
+    const bills = vendorIds.length
+      ? await SubvendorBill.findAll({
+          where: { vendorId: { [Op.in]: vendorIds } },
+          order: [['vendorId', 'ASC'], ...BILL_ORDER] as any
+        })
+      : [];
+    res.json({
+      success: true,
+      data: {
+        bills: bills.map((row) => publicSubvendorBill(row.get({ plain: true }))),
+        items: bills.map((row) => publicSubvendorBill(row.get({ plain: true })))
+      }
+    });
+  } catch (error) {
+    logError('List subvendor bills error', error);
+    internalError(res);
+  }
+};
+
+/** GET /admin/subvendors/:id/bills */
+export const getVendorBills = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const vendor = await resolveLeaserVendor(req.params.id);
+    if (!vendor) {
+      fail(res, 404, SUBVENDOR_ERROR_CODES.SUBVENDOR_404, 'Subvendor not found');
+      return;
+    }
+    const bills = await SubvendorBill.findAll({
+      where: { vendorId: vendor.id },
+      order: BILL_ORDER as any
+    });
+    res.json({ success: true, data: billsPayload(vendor, bills) });
+  } catch (error) {
+    logError('Get vendor bills error', error, { id: req.params.id });
+    internalError(res);
+  }
+};
+
+/** PUT /admin/subvendors/:id/bills — full replace. Bills stay off the leaser PUT. */
+export const replaceVendorBills = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const vendor = await resolveLeaserVendor(req.params.id);
+    if (!vendor) {
+      fail(res, 404, SUBVENDOR_ERROR_CODES.SUBVENDOR_404, 'Subvendor not found');
+      return;
+    }
+    const rawSize = Buffer.byteLength(JSON.stringify(req.body ?? {}), 'utf8');
+    if (rawSize > BILLS_JSON_MAX_BYTES) {
+      fail(res, 413, SUBVENDOR_ERROR_CODES.VAL_BILL, 'bills body must be 5 MB or smaller');
+      return;
+    }
+    const parsed = parseSubvendorBills(req.body);
+    if (!parsed.ok) {
+      fail(res, 400, SUBVENDOR_ERROR_CODES.VAL_BILL, parsed.message);
+      return;
+    }
+    const existing = await SubvendorBill.findAll({ where: { vendorId: vendor.id } });
+    const bills = mergeKeptBillFiles(parsed.bills, existing);
+    const updatedBy = req.dealer?.id || req.user?.id || null;
+
+    await Subvendor.sequelize!.transaction(async (transaction) => {
+      await SubvendorBill.destroy({ where: { vendorId: vendor.id }, transaction });
+      const clientIds = bills.map((p) => p.id).filter((id): id is string => Boolean(id));
+      if (clientIds.length) {
+        await SubvendorBill.destroy({
+          where: { id: { [Op.in]: clientIds }, vendorId: { [Op.ne]: vendor.id } },
+          transaction
+        });
+      }
+      if (bills.length) {
+        await SubvendorBill.bulkCreate(
+          bills.map((p) => ({ ...p, vendorId: vendor.id, updatedBy })),
+          { transaction }
+        );
+      }
+    });
+
+    const saved = await SubvendorBill.findAll({
+      where: { vendorId: vendor.id },
+      order: BILL_ORDER as any
+    });
+    res.json({ success: true, data: billsPayload(vendor, saved) });
+  } catch (error) {
+    logError('Replace vendor bills error', error, { id: req.params.id });
     internalError(res);
   }
 };

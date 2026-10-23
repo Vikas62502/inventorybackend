@@ -20,6 +20,7 @@ import InstallationTeam from './InstallationTeam';
 import Subvendor from './Subvendor';
 import SubvendorLedger from './SubvendorLedger';
 import SubvendorLeaserPayment from './SubvendorLeaserPayment';
+import SubvendorBill from './SubvendorBill';
 import OfficeOutsideRecord from './OfficeOutsideRecord';
 import OfficeOutsideLedger from './OfficeOutsideLedger';
 
@@ -101,6 +102,8 @@ Quotation.hasOne(SubvendorLedger, { foreignKey: 'quotationId', as: 'subvendorLed
 SubvendorLedger.belongsTo(Quotation, { foreignKey: 'quotationId', as: 'quotation' });
 Subvendor.hasMany(SubvendorLeaserPayment, { foreignKey: 'vendorId', as: 'leaserPayments', onDelete: 'CASCADE' });
 SubvendorLeaserPayment.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
+Subvendor.hasMany(SubvendorBill, { foreignKey: 'vendorId', as: 'bills', onDelete: 'CASCADE' });
+SubvendorBill.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
 Subvendor.hasMany(OfficeOutsideRecord, { foreignKey: 'vendorId', as: 'officeOutsideRecords' });
 OfficeOutsideRecord.belongsTo(Subvendor, { foreignKey: 'vendorId', as: 'vendor' });
 OfficeOutsideRecord.hasOne(OfficeOutsideLedger, { foreignKey: 'recordId', as: 'ledger', onDelete: 'CASCADE' });
@@ -143,6 +146,7 @@ export {
   Subvendor,
   SubvendorLedger,
   SubvendorLeaserPayment,
+  SubvendorBill,
   OfficeOutsideRecord,
   OfficeOutsideLedger
 };

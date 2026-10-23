@@ -16,7 +16,12 @@ import {
 } from '../utils/hrSheetSourceSync';
 import { googleSheetsErrorResponse, isGoogleSheetsCredentialsError } from '../utils/hrSheetGoogleAuth';
 import { mapSheetSourceForApi, mapSocialLeadForApi } from '../utils/hrSheetSourceApi';
-import { fetchHrUploadBatchCounts, isValidHrCallingAssigneeDealerId, resolveAssignedByUserId } from './callingLeadController';
+import {
+  assignCreatedSheetSourceLeads,
+  fetchHrUploadBatchCounts,
+  isValidHrCallingAssigneeDealerId,
+  resolveAssignedByUserId
+} from './callingLeadController';
 import { sequelize, User } from '../models';
 import { emitSheetSyncUploadsUpdated } from '../utils/realtime';
 
@@ -221,6 +226,74 @@ export const postHrSheetSourceSync = async (req: Request, res: Response): Promis
     res.status(mapped.status).json({
       success: false,
       error: { code: mapped.code, message: mapped.message }
+    });
+  }
+};
+
+const resolveSheetSourceDealerPool = async (
+  source: CallingLeadSheetSource
+): Promise<string[]> => {
+  const own = asDealerIdArray(source.dealerIds).filter(isValidHrCallingAssigneeDealerId);
+  if (own.length) return own;
+  const siblings = await CallingLeadSheetSource.findAll({
+    where: {
+      spreadsheetId: source.spreadsheetId,
+      enabled: true,
+      id: { [Op.ne]: source.id }
+    },
+    order: [['sheetTabName', 'ASC']]
+  });
+  for (const sibling of siblings) {
+    const ids = asDealerIdArray(sibling.dealerIds).filter(isValidHrCallingAssigneeDealerId);
+    if (ids.length) return ids;
+  }
+  return [];
+};
+
+/**
+ * POST /hr/sheet-sources/:id/assign-created
+ * Round-robin leftover Meta CREATED / blank-Final leads on this tab to the dealer pool.
+ */
+export const postHrSheetSourceAssignCreated = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await CallingLeadSheetSource.findByPk(req.params.id);
+    if (!row) {
+      res.status(404).json({
+        success: false,
+        error: { code: 'RES_001', message: 'Sheet source not found' }
+      });
+      return;
+    }
+
+    const dealerIds = await resolveSheetSourceDealerPool(row);
+    const assignedByUserId = await sequelize.transaction((transaction) =>
+      resolveAssignedByUserId(req, transaction)
+    );
+    const result = await assignCreatedSheetSourceLeads({
+      sheetSourceId: row.id,
+      dealerIds,
+      assignedByUserId
+    });
+    emitSheetSyncUploadsUpdated({
+      reason: 'sheet_assign_created',
+      spreadsheetId: row.spreadsheetId,
+      sourceId: row.id,
+      path: '/hr/sheet-sources/assign-created'
+    });
+    const counts = await sheetSourceCounts(row);
+    res.json({
+      success: true,
+      data: {
+        assigned: result.assigned,
+        dealerIds,
+        source: mapSheetSourceForApi(row, counts)
+      }
+    });
+  } catch (error) {
+    logError('postHrSheetSourceAssignCreated error', error, { id: req.params.id });
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
     });
   }
 };

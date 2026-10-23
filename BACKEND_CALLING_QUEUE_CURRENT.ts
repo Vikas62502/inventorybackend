@@ -22,6 +22,10 @@
  *   resolveDealerQueueHead — in_progress wins; else first sorted (social)
  *
  * Echo on every lead (§AN): sheet_source_id, source_type, platform (+ Meta fields)
+ * Echo lead_status / sheetLeadStatus separately from calling status.
+ * Meta CREATED stays in lead_status. Calling status is queued|assigned (never CREATED).
+ * Leftover assignment status=created|open|pending is treated as open (assigned if a
+ * dealer is set, else queued) so /current and /next still return the row.
  *
  * Docs: REQUIRED §AT · HANDOFF §4.5.3
  */

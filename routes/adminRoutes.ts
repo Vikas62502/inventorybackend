@@ -27,7 +27,10 @@ import {
   upsertSubvendorLedger,
   listLeaserPayments,
   getVendorLeaser,
-  replaceVendorLeaser
+  replaceVendorLeaser,
+  listSubvendorBills,
+  getVendorBills,
+  replaceVendorBills
 } from '../controllers/subvendorController';
 import {
   listOfficeOutside,
@@ -36,6 +39,7 @@ import {
   updateOfficeOutside,
   deleteOfficeOutside,
   sendOfficeOutsideToAccounts,
+  sendOfficeOutsideToOutside,
   retrieveOfficeOutsideFromAccounts,
   saveOfficeOutsideSlip,
   listOfficeOutsideLedger,
@@ -229,6 +233,7 @@ router.get('/office-outside/ledger', authorizeAdminOrAccounts, listOfficeOutside
 router.get('/office-outside/ledger/:id', authorizeAdminOrAccounts, getOfficeOutsideLedger);
 router.patch('/office-outside/ledger/:id', authorizeAdminOrAccounts, updateOfficeOutsideLedger);
 router.post('/office-outside/:id/send-to-accounts', authorizeAdminOrAccounts, sendOfficeOutsideToAccounts);
+router.post('/office-outside/:id/send-to-outside', authorizeAdminOrAccounts, sendOfficeOutsideToOutside);
 router.post(
   '/office-outside/:id/retrieve-from-accounts',
   authorizeAdminOrAccounts,
@@ -251,6 +256,9 @@ router.patch('/subvendors/ledger/:quotationId', upsertSubvendorLedger);
 router.get('/subvendors/leaser', listLeaserPayments);
 router.get('/subvendors/:id/leaser', getVendorLeaser);
 router.put('/subvendors/:id/leaser', replaceVendorLeaser);
+router.get('/subvendors/bills', listSubvendorBills);
+router.get('/subvendors/:id/bills', getVendorBills);
+router.put('/subvendors/:id/bills', replaceVendorBills);
 router.get('/subvendors', listSubvendors);
 router.post('/subvendors', createSubvendor);
 router.patch('/subvendors/:id', updateSubvendor);

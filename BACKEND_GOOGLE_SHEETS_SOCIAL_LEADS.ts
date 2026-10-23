@@ -753,6 +753,7 @@ router.post("/hr/sheet-sources/discover", authHr, discoverHrSheetTabs)
 router.post("/hr/sheet-sources/sync-all", authHrOrCron, postHrSheetSourcesSyncAll) // BEFORE :id routes
 router.patch("/hr/sheet-sources/:id", authHr, patchHrSheetSource)
 router.post("/hr/sheet-sources/:id/sync", authHr, postHrSheetSourceSync)
+router.post("/hr/sheet-sources/:id/assign-created", authHr, postHrSheetSourceAssignCreated)
 router.get("/hr/sheet-sources/:id/leads", authHr, getHrSheetSourceLeads)
 
 Cron (required for auto-sync — Google Sheets cannot push via socket):
@@ -772,4 +773,25 @@ Cron (required for auto-sync — Google Sheets cannot push via socket):
 5. HR Social Media tab shows coloured status badges.
 6. Dealer Calling Data queue receives assigned leads.
 7. Re-sync skips duplicate mobiles.
+8. Upload with assignmentMode=round_robin_all → queuedAtUpload 0.
+9. Sheet lead_status=CREATED assigned to dealer → /current returns status=assigned
+   (not CREATED) and lead_status=CREATED. Dealer Calling Data shows Start Call.
+10. Enable Chairbord - Ajme Leads, save dealer pool, Sync or POST assign-created.
 */
+
+/**
+ * CHANGELOG Oct 22 2026 — Meta CREATED is not calling status
+ *
+ *   lead_status / sheetLeadStatus = CREATED (Meta). Calling status is queued|assigned
+ *   never CREATED. Unassigned CREATED / blank-Final rows on the tab are round-robin
+ *   assigned to that tab's dealer pool (or another enabled tab on the same spreadsheet).
+ *
+ *   POST /hr/sheet-sources/:id/assign-created
+ *   One-shot:
+ *     UPDATE dealer_lead_assignments
+ *     SET status = CASE WHEN dealer is empty THEN 'queued' ELSE 'assigned' END
+ *     WHERE lower(status::text) IN ('created','open','pending');
+ *
+ *   GET /dealers/me/calling-queue/current and /next return those assigned rows.
+ *   Treat leftover status=created as open (queued/assigned).
+ */

@@ -10,6 +10,8 @@ import { isUuid, parseLedgerAmountPatch, roundInr } from '../utils/subvendorApi'
 import { normalizePaymentModeInput } from '../utils/paymentMode';
 import {
   applyOfficeOutsideLedgerAmounts,
+  echoOfficeOutsideLoanCash,
+  officeOutsideLoanCashAmounts,
   isTenDigitMobile,
   normalizeOfficeOutsideMobile,
   OFFICE_OUTSIDE_ERROR_CODES,
@@ -77,14 +79,32 @@ const notFound = (res: Response): void =>
 
 const sentListWhere = (): WhereOptions => ({ sentToAccountsAt: { [Op.ne]: null } });
 
-const pendingListWhere = (): WhereOptions => ({ sentToAccountsAt: { [Op.is]: null } });
+const outsideListWhere = (): WhereOptions => ({ sentToOutsideAt: { [Op.ne]: null } });
 
-const clearSentToAccounts = async (row: OfficeOutsideRecord, actor: string | null) => {
-  if (!row.sentToAccountsAt && row.status !== 'sent_to_accounts') return row;
+const pendingListWhere = (): WhereOptions => ({
+  sentToAccountsAt: { [Op.is]: null },
+  sentToOutsideAt: { [Op.is]: null }
+});
+
+/** All Outside retrieve — clear both hops so the row returns to Pending. */
+const retrieveToPending = async (row: OfficeOutsideRecord, actor: string | null) => {
   await row.update({
     status: 'draft',
     sentToAccountsAt: null,
     sentToAccountsBy: null,
+    sentToOutsideAt: null,
+    updatedBy: actor
+  } as any);
+  await row.reload({ include: recordInclude });
+  return row;
+};
+
+/** Accounts revert of Send to Outside — keep sent_to_accounts_at. */
+const clearSentToOutside = async (row: OfficeOutsideRecord, actor: string | null) => {
+  if (!row.sentToOutsideAt) return row;
+  await row.update({
+    sentToOutsideAt: null,
+    status: row.sentToAccountsAt ? 'sent_to_accounts' : 'draft',
     updatedBy: actor
   } as any);
   await row.reload({ include: recordInclude });
@@ -140,6 +160,45 @@ const duplicateCustomer = (res: Response, existing: OfficeOutsideRecord): void =
   });
 };
 
+const syncLoanCashToLedger = async (
+  row: OfficeOutsideRecord,
+  actor: string | null,
+  opts?: { force?: boolean; patch?: Record<string, unknown> }
+) => {
+  const patch = opts?.patch || {};
+  const shouldSync =
+    opts?.force === true ||
+    patch.loanAmount !== undefined ||
+    patch.cashAmount !== undefined ||
+    patch.subtotal !== undefined ||
+    patch.fileType !== undefined;
+  if (!shouldSync) return;
+  const filled = echoOfficeOutsideLoanCash({
+    fileType: row.fileType,
+    amount: row.subtotal,
+    loanAmount: row.loanAmount,
+    cashAmount: row.cashAmount
+  });
+  if (
+    filled.loanAmount !== roundInr(row.loanAmount) ||
+    filled.cashAmount !== roundInr(row.cashAmount)
+  ) {
+    await row.update({
+      loanAmount: filled.loanAmount,
+      cashAmount: filled.cashAmount,
+      updatedBy: actor
+    } as any);
+  }
+  await OfficeOutsideLedger.update(
+    {
+      loanAmount: filled.loanAmount,
+      cashAmount: filled.cashAmount,
+      updatedBy: actor
+    } as any,
+    { where: { recordId: row.id } }
+  );
+};
+
 const persistRecordPatch = async (
   row: OfficeOutsideRecord,
   patch: Record<string, unknown>,
@@ -154,12 +213,9 @@ const persistRecordPatch = async (
   }
   await ensureLedger(row, actor);
   await row.reload({ include: recordInclude });
+  await syncLoanCashToLedger(row, actor, { patch });
+  await row.reload({ include: recordInclude });
 };
-
-const listPayload = (records: ReturnType<typeof recordPayload>[]) => ({
-  success: true,
-  data: { records, items: records, officeOutside: records }
-});
 
 /** GET /admin/office-outside */
 export const listOfficeOutside = async (req: Request, res: Response): Promise<void> => {
@@ -183,6 +239,9 @@ export const listOfficeOutside = async (req: Request, res: Response): Promise<vo
     if (status === 'sent' || status === 'sent_to_accounts' || status === 'accounts') {
       and.push(sentListWhere());
     }
+    if (status === 'outside' || status === 'sent_to_outside' || status === 'vendor_outside') {
+      and.push(outsideListWhere());
+    }
     if (mobile) and.push({ customerMobile: mobile });
     if (search && !mobile) {
       const like = `%${search}%`;
@@ -202,7 +261,21 @@ export const listOfficeOutside = async (req: Request, res: Response): Promise<vo
       order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
     });
     const records = rows.map(recordPayload);
-    res.status(200).json(listPayload(records));
+    const [all, pending, sent, outside] = await Promise.all([
+      OfficeOutsideRecord.count(),
+      OfficeOutsideRecord.count({ where: pendingListWhere() }),
+      OfficeOutsideRecord.count({ where: sentListWhere() }),
+      OfficeOutsideRecord.count({ where: outsideListWhere() })
+    ]);
+    res.status(200).json({
+      success: true,
+      data: {
+        records,
+        items: records,
+        officeOutside: records,
+        counts: { all, pending, sent, outside }
+      }
+    });
   } catch (error) {
     logError('List office-outside error', error);
     internalError(res);
@@ -270,6 +343,8 @@ export const createOfficeOutside = async (req: Request, res: Response): Promise<
         city: patch.city || '',
         systemKw: patch.systemKw ?? 0,
         subtotal: patch.subtotal ?? 0,
+        loanAmount: patch.loanAmount ?? 0,
+        cashAmount: patch.cashAmount ?? 0,
         fileType: patch.fileType ?? null,
         notes: patch.notes || '',
         slipItems: patch.slipItems ?? [],
@@ -278,6 +353,7 @@ export const createOfficeOutside = async (req: Request, res: Response): Promise<
         updatedBy: actor
       } as any);
       await ensureLedger(row, actor);
+      await syncLoanCashToLedger(row, actor, { force: true });
       const loaded = await loadRecord(row.id);
       respond(loaded || row, true);
     } catch (error) {
@@ -324,11 +400,16 @@ export const updateOfficeOutside = async (req: Request, res: Response): Promise<
       }
     }
     // Sent rows stay editable for vendor + fileType — never OO_ALREADY_SENT.
+    const actor = actorId(req);
     if (patch.sentToAccountsAt === null) {
-      await clearSentToAccounts(row, actorId(req));
+      // Full retrieve: both timestamps null → All Outside Pending.
+      await retrieveToPending(row, actor);
+    } else if (patch.sentToOutsideAt === null) {
+      // Accounts revert of Send to Outside — keep sent_to_accounts_at.
+      await clearSentToOutside(row, actor);
     }
     try {
-      await persistRecordPatch(row, patch as Record<string, unknown>, actorId(req));
+      await persistRecordPatch(row, patch as Record<string, unknown>, actor);
     } catch (error) {
       if (!isMobileUniqueError(error)) throw error;
       const other = await findByTenDigitMobile(String(patch.customerMobile || ''));
@@ -368,7 +449,7 @@ export const deleteOfficeOutside = async (req: Request, res: Response): Promise<
   }
 };
 
-/** POST /admin/office-outside/:id/send-to-accounts — :id is UUID PK or OO-*. No quotation insert. */
+/** POST /admin/office-outside/:id/send-to-accounts — All Outside → Accounts. Do not set sentToOutsideAt. */
 export const sendOfficeOutsideToAccounts = async (req: Request, res: Response): Promise<void> => {
   try {
     const row = await loadRecord(req.params.id);
@@ -385,10 +466,12 @@ export const sendOfficeOutsideToAccounts = async (req: Request, res: Response): 
       );
       return;
     }
-    if (row.status !== 'sent_to_accounts' || !row.sentToAccountsAt) {
+    officeOutsideLoanCashAmounts(row);
+    // All Outside → Accounts. Do not set sentToOutsideAt (Vendor Outside is a later step).
+    if (!row.sentToAccountsAt) {
       await row.update({
         status: 'sent_to_accounts',
-        sentToAccountsAt: row.sentToAccountsAt || new Date(),
+        sentToAccountsAt: new Date(),
         sentToAccountsBy: actorId(req),
         updatedBy: actorId(req)
       } as any);
@@ -402,7 +485,33 @@ export const sendOfficeOutsideToAccounts = async (req: Request, res: Response): 
   }
 };
 
-/** POST /admin/office-outside/:id/retrieve-from-accounts — revert Send. Idempotent 200 if already pending. */
+/** POST /admin/office-outside/:id/send-to-outside — Accounts → Vendor Outside. Keep sentToAccountsAt. */
+export const sendOfficeOutsideToOutside = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const row = await loadRecord(req.params.id);
+    if (!row) {
+      notFound(res);
+      return;
+    }
+    officeOutsideLoanCashAmounts(row);
+    // Accounts → Vendor Outside. Keep sentToAccountsAt so the file stays on Accounts.
+    if (!row.sentToOutsideAt) {
+      await row.update({
+        status: 'sent_to_outside',
+        sentToOutsideAt: new Date(),
+        updatedBy: actorId(req)
+      } as any);
+      await row.reload({ include: recordInclude });
+    }
+    const record = recordPayload(row);
+    res.status(200).json({ success: true, data: { record, item: record } });
+  } catch (error) {
+    logError('Send office-outside to outside error', error, { id: req.params.id });
+    internalError(res);
+  }
+};
+
+/** POST /admin/office-outside/:id/retrieve-from-accounts — clear both timestamps. Row → Pending. */
 export const retrieveOfficeOutsideFromAccounts = async (req: Request, res: Response): Promise<void> => {
   try {
     const row = await loadRecord(req.params.id);
@@ -410,7 +519,7 @@ export const retrieveOfficeOutsideFromAccounts = async (req: Request, res: Respo
       notFound(res);
       return;
     }
-    await clearSentToAccounts(row, actorId(req));
+    await retrieveToPending(row, actorId(req));
     const record = recordPayload(row);
     res.status(200).json({ success: true, data: { record, item: record } });
   } catch (error) {
@@ -459,7 +568,16 @@ export const listOfficeOutsideLedger = async (req: Request, res: Response): Prom
         {
           model: OfficeOutsideRecord,
           as: 'record',
-          attributes: ['id', 'customerName', 'customerMobile', 'subtotal', 'fileType', 'status'],
+          attributes: [
+            'id',
+            'customerName',
+            'customerMobile',
+            'subtotal',
+            'fileType',
+            'status',
+            'loanAmount',
+            'cashAmount'
+          ],
           required: false
         }
       ],
@@ -498,7 +616,10 @@ export const getOfficeOutsideLedger = async (req: Request, res: Response): Promi
     const row = await ensureLedger(record, actorId(req));
     const item = ledgerPayload({
       ...(row.get({ plain: true }) as any),
-      subtotal: record.subtotal
+      subtotal: record.subtotal,
+      fileType: record.fileType,
+      recordLoanAmount: record.loanAmount,
+      recordCashAmount: record.cashAmount
     });
     res.json({ success: true, data: { item, ledger: item } });
   } catch (error) {
@@ -518,9 +639,11 @@ export const updateOfficeOutsideLedger = async (req: Request, res: Response): Pr
     const body = (req.body || {}) as Record<string, unknown>;
     const amounts = parseLedgerAmountPatch(body);
     const cashRaw = body.cashAmount ?? body.cash_amount;
-    if (cashRaw !== undefined && cashRaw !== null) {
+    const cashInPatch = cashRaw !== undefined && cashRaw !== null;
+    if (cashInPatch) {
       (amounts as any).cashAmount = roundInr(cashRaw);
     }
+    const loanInPatch = amounts.loanAmount !== undefined;
     const vendorRaw = body.vendorId !== undefined ? body.vendorId : body.vendor_id;
     let vendorId = record.vendorId;
     if (vendorRaw !== undefined) {
@@ -533,15 +656,37 @@ export const updateOfficeOutsideLedger = async (req: Request, res: Response): Pr
     }
     const row = await ensureLedger(record, actorId(req));
     const computed = applyOfficeOutsideLedgerAmounts(row.get({ plain: true }) as any, amounts as any);
+    const filled = echoOfficeOutsideLoanCash({
+      fileType: record.fileType,
+      amount: record.subtotal,
+      loanAmount: computed.loanAmount,
+      cashAmount: computed.cashAmount,
+      recordLoanAmount: record.loanAmount,
+      recordCashAmount: record.cashAmount
+    });
+    if (loanInPatch) computed.loanAmount = filled.loanAmount;
+    if (cashInPatch) computed.cashAmount = filled.cashAmount;
+    const actor = actorId(req);
     await row.update({
       ...computed,
       vendorId,
-      updatedBy: actorId(req)
+      updatedBy: actor
     } as any);
+    if (loanInPatch || cashInPatch) {
+      await record.update({
+        ...(loanInPatch ? { loanAmount: computed.loanAmount } : {}),
+        ...(cashInPatch ? { cashAmount: computed.cashAmount } : {}),
+        updatedBy: actor
+      } as any);
+      await record.reload({ include: recordInclude });
+    }
     await row.reload();
     const item = ledgerPayload({
       ...(row.get({ plain: true }) as any),
-      subtotal: record.subtotal
+      subtotal: record.subtotal,
+      fileType: record.fileType,
+      recordLoanAmount: record.loanAmount,
+      recordCashAmount: record.cashAmount
     });
     res.json({ success: true, data: { item, ledger: item } });
   } catch (error) {

@@ -2,7 +2,7 @@ import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '../config/database';
 
 export type OfficeOutsideFileType = 'loan' | 'cash' | 'mix';
-export type OfficeOutsideStatus = 'draft' | 'sent_to_accounts';
+export type OfficeOutsideStatus = 'draft' | 'sent_to_accounts' | 'sent_to_outside';
 export type OfficeOutsidePaymentStatus = 'pending' | 'partial' | 'completed';
 
 interface OfficeOutsideRecordAttributes {
@@ -14,6 +14,8 @@ interface OfficeOutsideRecordAttributes {
   city: string;
   systemKw: number;
   subtotal: number;
+  loanAmount: number;
+  cashAmount: number;
   fileType: OfficeOutsideFileType | null;
   status: OfficeOutsideStatus;
   paymentStatus: OfficeOutsidePaymentStatus;
@@ -21,6 +23,7 @@ interface OfficeOutsideRecordAttributes {
   installmentsJson: unknown[] | null;
   sentToAccountsAt: Date | null;
   sentToAccountsBy: string | null;
+  sentToOutsideAt: Date | null;
   slipItems: unknown[] | null;
   slipNotes: string;
   notes: string;
@@ -40,6 +43,8 @@ interface OfficeOutsideRecordCreationAttributes
     | 'city'
     | 'systemKw'
     | 'subtotal'
+    | 'loanAmount'
+    | 'cashAmount'
     | 'fileType'
     | 'status'
     | 'paymentStatus'
@@ -47,6 +52,7 @@ interface OfficeOutsideRecordCreationAttributes
     | 'installmentsJson'
     | 'sentToAccountsAt'
     | 'sentToAccountsBy'
+    | 'sentToOutsideAt'
     | 'slipItems'
     | 'slipNotes'
     | 'notes'
@@ -67,6 +73,8 @@ class OfficeOutsideRecord
   public city!: string;
   public systemKw!: number;
   public subtotal!: number;
+  public loanAmount!: number;
+  public cashAmount!: number;
   public fileType!: OfficeOutsideFileType | null;
   public status!: OfficeOutsideStatus;
   public paymentStatus!: OfficeOutsidePaymentStatus;
@@ -74,6 +82,7 @@ class OfficeOutsideRecord
   public installmentsJson!: unknown[] | null;
   public sentToAccountsAt!: Date | null;
   public sentToAccountsBy!: string | null;
+  public sentToOutsideAt!: Date | null;
   public slipItems!: unknown[] | null;
   public slipNotes!: string;
   public notes!: string;
@@ -112,6 +121,18 @@ OfficeOutsideRecord.init(
       allowNull: false,
       defaultValue: 0
     },
+    loanAmount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'loan_amount'
+    },
+    cashAmount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: 'cash_amount'
+    },
     fileType: {
       type: DataTypes.STRING(16),
       allowNull: true,
@@ -145,6 +166,7 @@ OfficeOutsideRecord.init(
       allowNull: true,
       field: 'sent_to_accounts_by'
     },
+    sentToOutsideAt: { type: DataTypes.DATE, allowNull: true, field: 'sent_to_outside_at' },
     slipItems: { type: DataTypes.JSONB, allowNull: true, field: 'slip_items' },
     slipNotes: { type: DataTypes.TEXT, allowNull: false, defaultValue: '', field: 'slip_notes' },
     notes: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },

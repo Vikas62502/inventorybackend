@@ -15,7 +15,8 @@ export const SUBVENDOR_ERROR_CODES = {
   SUBVENDOR_DUP: 'SUBVENDOR_DUP',
   SUBVENDOR_404: 'SUBVENDOR_404',
   QUOTATION_404: 'QUOTATION_404',
-  VAL_LEASER: 'VAL_LEASER'
+  VAL_LEASER: 'VAL_LEASER',
+  VAL_BILL: 'VAL_BILL'
 } as const;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -291,6 +292,142 @@ export const publicLeaserPayment = (row: RowLike) => {
     sortOrder,
     sort_order: sortOrder,
     paymentNumber: sortOrder,
+    createdAt: row.createdAt || row.created_at,
+    updatedAt: row.updatedAt || row.updated_at
+  };
+};
+
+export const BILL_FILE_MAX_BYTES = Math.floor(2.5 * 1024 * 1024);
+export const BILLS_JSON_MAX_BYTES = 5 * 1024 * 1024;
+
+const dataUrlBytes = (raw: string): number => {
+  const marker = 'base64,';
+  const i = raw.indexOf(marker);
+  const b64 = i >= 0 ? raw.slice(i + marker.length) : raw;
+  return Math.floor(b64.replace(/\s/g, '').length * 0.75);
+};
+
+const parseBillFile = (
+  row: Record<string, unknown>
+): { ok: true; billFileName: string; billFileData: string | null; billFileUrl: string | null } | { ok: false; message: string } => {
+  const billFileName = str(
+    row.billFileName ?? row.bill_file_name ?? row.fileName ?? row.file_name
+  ).slice(0, 255);
+  const dataRaw = row.billFileData ?? row.bill_file_data ?? row.dataUrl ?? row.data_url ?? row.file;
+  const urlRaw = row.billFileUrl ?? row.bill_file_url ?? row.fileUrl ?? row.file_url;
+  let billFileData: string | null = null;
+  let billFileUrl: string | null = str(urlRaw) || null;
+
+  if (dataRaw !== undefined && dataRaw !== null && dataRaw !== '') {
+    const data = str(dataRaw);
+    if (data.startsWith('data:') || /^[A-Za-z0-9+/=\s]+$/.test(data.slice(0, 80))) {
+      if (dataUrlBytes(data) > BILL_FILE_MAX_BYTES) {
+        return { ok: false, message: 'bill file must be 2.5 MB or smaller' };
+      }
+      billFileData = data;
+    } else if (/^https?:\/\//i.test(data)) {
+      billFileUrl = data;
+    }
+  }
+
+  return { ok: true, billFileName, billFileData, billFileUrl };
+};
+
+export type SubvendorBillInput = {
+  id?: string;
+  date: string | null;
+  basicAmount: number;
+  paymentMode: string;
+  remark: string;
+  customerIds: string[];
+  billFileName: string;
+  billFileData: string | null;
+  billFileUrl: string | null;
+  sortOrder: number;
+};
+
+/** PUT body → bills list. Accepts `{ bills }`, `{ items }`, `{ rows }` or a bare array. */
+export const parseSubvendorBills = (
+  body: unknown
+): { ok: true; bills: SubvendorBillInput[] } | { ok: false; message: string } => {
+  const b = body as Record<string, unknown> | unknown[] | null;
+  const list = Array.isArray(b)
+    ? b
+    : b && typeof b === 'object'
+      ? (b.bills ?? b.items ?? b.rows)
+      : undefined;
+  if (!Array.isArray(list)) return { ok: false, message: 'bills must be an array' };
+
+  const bills: SubvendorBillInput[] = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const row = (list[i] || {}) as Record<string, unknown>;
+    const date = parseLeaserDate(row.date ?? row.paymentDate ?? row.payment_date);
+    if (date === undefined) return { ok: false, message: `bills[${i}].date is not a valid date` };
+    const file = parseBillFile(row);
+    if (!file.ok) return { ok: false, message: `bills[${i}]: ${file.message}` };
+    const sortRaw = Number(row.sortOrder ?? row.sort_order ?? row.billNumber ?? row.bill_number);
+    const id = str(row.id ?? row.key).slice(0, 255);
+    bills.push({
+      ...(id ? { id } : {}),
+      date,
+      basicAmount: roundInr(row.basic ?? row.basicAmount ?? row.basic_amount ?? row.amount),
+      paymentMode: str(row.paymentMode ?? row.payment_mode ?? row.type).slice(0, 64),
+      remark: str(row.remark ?? row.remarks ?? row.note),
+      customerIds: parseCustomerIds(row.customerIds ?? row.customer_ids),
+      billFileName: file.billFileName,
+      billFileData: file.billFileData,
+      billFileUrl: file.billFileUrl,
+      sortOrder: Number.isInteger(sortRaw) && sortRaw > 0 ? sortRaw : i + 1
+    });
+  }
+  const lastIndexById = new Map<string, number>();
+  bills.forEach((p, i) => {
+    if (p.id) lastIndexById.set(p.id, i);
+  });
+  const deduped = bills.filter((p, i) => !p.id || lastIndexById.get(p.id) === i);
+  return { ok: true, bills: deduped };
+};
+
+export const publicSubvendorBill = (row: RowLike) => {
+  const vendorId = row.vendorId || row.vendor_id;
+  const customerIds = Array.isArray(row.customerIds ?? row.customer_ids)
+    ? (row.customerIds ?? row.customer_ids)
+    : [];
+  const sortOrder = Number(row.sortOrder ?? row.sort_order) || 0;
+  const basicAmount = roundInr(row.basicAmount ?? row.basic_amount ?? row.basic ?? row.amount);
+  const date = toDateOnlyOrNull(row.date);
+  const paymentMode = String(row.paymentMode ?? row.payment_mode ?? row.type ?? '');
+  const billFileName = String(row.billFileName ?? row.bill_file_name ?? '');
+  const billFileData = (row.billFileData ?? row.bill_file_data ?? null) as string | null;
+  const billFileUrl = (row.billFileUrl ?? row.bill_file_url ?? null) as string | null;
+  return {
+    id: row.id,
+    vendorId,
+    vendor_id: vendorId,
+    date,
+    paymentDate: date,
+    payment_date: date,
+    basic: basicAmount,
+    basicAmount,
+    basic_amount: basicAmount,
+    amount: basicAmount,
+    paymentMode,
+    payment_mode: paymentMode,
+    type: paymentMode,
+    remark: row.remark || '',
+    customerIds,
+    customer_ids: customerIds,
+    billFileName,
+    bill_file_name: billFileName,
+    billFileData,
+    bill_file_data: billFileData,
+    dataUrl: billFileData,
+    data_url: billFileData,
+    billFileUrl,
+    bill_file_url: billFileUrl,
+    sortOrder,
+    sort_order: sortOrder,
+    billNumber: sortOrder,
     createdAt: row.createdAt || row.created_at,
     updatedAt: row.updatedAt || row.updated_at
   };

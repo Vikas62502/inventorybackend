@@ -297,6 +297,27 @@ const ensureSubvendorTables = async (): Promise<void> => {
     await sequelize.query(
       'CREATE INDEX IF NOT EXISTS subvendor_leaser_payments_vendor_idx ON subvendor_leaser_payments (vendor_id, sort_order);'
     );
+    await sequelize.query(`
+      CREATE TABLE IF NOT EXISTS subvendor_bills (
+        id              TEXT PRIMARY KEY,
+        vendor_id       UUID NOT NULL REFERENCES subvendors(id) ON DELETE CASCADE,
+        date            DATE NULL,
+        basic_amount    NUMERIC(14, 2) NOT NULL DEFAULT 0,
+        payment_mode    VARCHAR(64) NOT NULL DEFAULT '',
+        remark          TEXT NOT NULL DEFAULT '',
+        customer_ids    JSONB NOT NULL DEFAULT '[]'::jsonb,
+        bill_file_name  VARCHAR(255) NOT NULL DEFAULT '',
+        bill_file_data  TEXT NULL,
+        bill_file_url   TEXT NULL,
+        sort_order      INTEGER NOT NULL DEFAULT 0,
+        updated_by      VARCHAR(50) NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await sequelize.query(
+      'CREATE INDEX IF NOT EXISTS subvendor_bills_vendor_idx ON subvendor_bills (vendor_id, sort_order);'
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn('Could not ensure subvendors / subvendor_ledger tables', { message });
@@ -370,6 +391,54 @@ const ensureOfficeOutsideTables = async (): Promise<void> => {
         ADD COLUMN IF NOT EXISTS cash_amount NUMERIC(14, 2) NOT NULL DEFAULT 0;
     `);
     await sequelize.query(`
+      ALTER TABLE office_outside_records
+        ADD COLUMN IF NOT EXISTS loan_amount INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS cash_amount INTEGER NOT NULL DEFAULT 0;
+    `);
+    await sequelize.query(`
+      ALTER TABLE office_outside_records
+        ADD COLUMN IF NOT EXISTS sent_to_outside_at TIMESTAMPTZ NULL;
+    `);
+    await sequelize.query(`
+      ALTER TABLE office_outside_ledger
+        ADD COLUMN IF NOT EXISTS loan_amount INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS cash_amount INTEGER NOT NULL DEFAULT 0;
+    `);
+    await sequelize.query(`
+      UPDATE office_outside_records r
+      SET
+        loan_amount = CASE
+          WHEN COALESCE(r.loan_amount, 0) = 0 THEN ROUND(COALESCE(l.loan_amount, 0))::int
+          ELSE r.loan_amount
+        END,
+        cash_amount = CASE
+          WHEN COALESCE(r.cash_amount, 0) = 0 THEN ROUND(COALESCE(l.cash_amount, 0))::int
+          ELSE r.cash_amount
+        END
+      FROM office_outside_ledger l
+      WHERE l.record_id = r.id;
+    `);
+    await sequelize.query(`
+      UPDATE office_outside_records
+      SET loan_amount = ROUND(subtotal)::int
+      WHERE COALESCE(loan_amount, 0) = 0
+        AND LOWER(BTRIM(COALESCE(file_type, ''))) = 'loan'
+        AND ROUND(subtotal) > 0;
+    `);
+    await sequelize.query(`
+      UPDATE office_outside_ledger l
+      SET
+        loan_amount = r.loan_amount,
+        cash_amount = CASE
+          WHEN COALESCE(l.cash_amount, 0) = 0 THEN r.cash_amount
+          ELSE l.cash_amount
+        END
+      FROM office_outside_records r
+      WHERE l.record_id = r.id
+        AND COALESCE(l.loan_amount, 0) = 0
+        AND COALESCE(r.loan_amount, 0) > 0;
+    `);
+    await sequelize.query(`
       UPDATE office_outside_records
       SET customer_mobile = RIGHT(regexp_replace(COALESCE(customer_mobile, ''), '[^0-9]', '', 'g'), 10);
     `);
@@ -399,6 +468,30 @@ const ensureOfficeOutsideTables = async (): Promise<void> => {
   }
 };
 
+/** One-shot: Meta CREATED must not live on dealer_lead_assignments.status. */
+const ensureCreatedCallingAssignmentRemap = async (): Promise<void> => {
+  try {
+    await sequelize.query(`
+      UPDATE "dealer_lead_assignments"
+      SET
+        "status" = (
+          CASE
+            WHEN "dealerId" IS NULL OR BTRIM("dealerId") = ''
+              OR LOWER(BTRIM("dealerId")) IN ('unassigned', 'pool', 'open', 'null', 'none', '-', 'na', 'n/a')
+            THEN 'queued'
+            ELSE 'assigned'
+          END
+        )::"enum_dealer_lead_assignments_status",
+        "assignedAt" = COALESCE("assignedAt", NOW()),
+        "updatedAt" = NOW()
+      WHERE LOWER(BTRIM(COALESCE("status"::text, ''))) IN ('created', 'open', 'pending');
+    `);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not remap created calling assignment statuses', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -419,6 +512,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensurePaymentPhaseCollectDestinationColumn();
     await ensureCallingActionSourceColumns();
     await ensureCallingLeadFormColumns();
+    await ensureCreatedCallingAssignmentRemap();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

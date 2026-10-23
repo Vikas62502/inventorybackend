@@ -106,12 +106,16 @@ export type OfficeOutsideRecordPatch = {
   city?: string;
   systemKw?: number;
   subtotal?: number;
+  loanAmount?: number;
+  cashAmount?: number;
   fileType?: OfficeOutsideFileTypeValue;
   notes?: string;
   slipItems?: unknown[];
   slipNotes?: string;
-  /** PATCH fallback for retrieve: `{ sentToAccountsAt: null }`. */
+  /** PATCH fallback for retrieve: `{ sentToAccountsAt: null }` (clears both hops). */
   sentToAccountsAt?: null;
+  /** Accounts revert of Send to Outside: `{ sentToOutsideAt: null }` (keep accounts timestamp). */
+  sentToOutsideAt?: null;
   status?: 'draft';
   sentToAccountsBy?: null;
 };
@@ -155,6 +159,18 @@ export const parseOfficeOutsideRecordPatch = (
   const subtotal = pick(body, 'subtotal', 'amount', 'displayAmount', 'display_amount', 'totalAmount', 'total_amount');
   if (subtotal !== undefined) out.subtotal = roundInr(subtotal);
 
+  const loanAmount = pick(body, 'loanAmount', 'loan_amount');
+  if (loanAmount !== undefined && loanAmount !== null && loanAmount !== '') {
+    const n = roundInr(loanAmount);
+    if (n > 0) out.loanAmount = n;
+  }
+
+  const cashAmount = pick(body, 'cashAmount', 'cash_amount');
+  if (cashAmount !== undefined && cashAmount !== null && cashAmount !== '') {
+    const n = roundInr(cashAmount);
+    if (n > 0) out.cashAmount = n;
+  }
+
   const fileType = pick(body, 'fileType', 'file_type', 'paymentType', 'payment_type');
   if (fileType !== undefined) {
     const normalized = normalizeOfficeOutsideFileType(fileType);
@@ -174,12 +190,86 @@ export const parseOfficeOutsideRecordPatch = (
   const sentAt = pick(body, 'sentToAccountsAt', 'sent_to_accounts_at');
   if (sentAt !== undefined && (sentAt === null || sentAt === '' || sentAt === false)) {
     out.sentToAccountsAt = null;
+    out.sentToOutsideAt = null;
     out.status = 'draft';
     out.sentToAccountsBy = null;
   }
 
+  const sentOutsideAt = pick(body, 'sentToOutsideAt', 'sent_to_outside_at');
+  if (
+    sentOutsideAt !== undefined &&
+    (sentOutsideAt === null || sentOutsideAt === '' || sentOutsideAt === false) &&
+    out.sentToAccountsAt !== null
+  ) {
+    out.sentToOutsideAt = null;
+  }
+
   return out;
 };
+
+/** Loan file with loan 0 → use the amount. A saved loan > 0 stays as-is. */
+export const resolveOfficeOutsideLoanAmount = ({
+  fileType,
+  loanAmount,
+  amount
+}: {
+  fileType?: unknown;
+  loanAmount?: unknown;
+  amount?: unknown;
+}): number => {
+  const saved = roundInr(loanAmount);
+  if (saved > 0) return saved;
+  if (normalizeOfficeOutsideFileType(fileType) === 'loan') return roundInr(amount);
+  return saved;
+};
+
+/** Ledger loan 0 fills from the record; loan file still 0 → subtotal. */
+export const echoOfficeOutsideLoanCash = ({
+  fileType,
+  amount,
+  loanAmount,
+  cashAmount,
+  recordLoanAmount,
+  recordCashAmount
+}: {
+  fileType?: unknown;
+  amount?: unknown;
+  loanAmount?: unknown;
+  cashAmount?: unknown;
+  recordLoanAmount?: unknown;
+  recordCashAmount?: unknown;
+}): { loanAmount: number; cashAmount: number } => {
+  const ledgerLoan = roundInr(loanAmount);
+  const recordLoan = roundInr(recordLoanAmount);
+  const loan = resolveOfficeOutsideLoanAmount({
+    fileType,
+    loanAmount: ledgerLoan > 0 ? ledgerLoan : recordLoan,
+    amount
+  });
+  const ledgerCash = roundInr(cashAmount);
+  const recordCash = roundInr(recordCashAmount);
+  return {
+    loanAmount: loan,
+    cashAmount: ledgerCash > 0 ? ledgerCash : recordCash
+  };
+};
+
+export const officeOutsideLoanCashAmounts = (row: {
+  fileType?: unknown;
+  file_type?: unknown;
+  subtotal?: unknown;
+  amount?: unknown;
+  loanAmount?: unknown;
+  loan_amount?: unknown;
+  cashAmount?: unknown;
+  cash_amount?: unknown;
+}) =>
+  echoOfficeOutsideLoanCash({
+    fileType: row.fileType ?? row.file_type,
+    amount: row.subtotal ?? row.amount,
+    loanAmount: row.loanAmount ?? row.loan_amount,
+    cashAmount: row.cashAmount ?? row.cash_amount
+  });
 
 type RowLike = Record<string, any>;
 
@@ -192,6 +282,12 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
   const systemKw = Number(row.systemKw ?? row.system_kw ?? 0) || 0;
   const subtotal = roundInr(row.subtotal);
   const fileType = normalizeOfficeOutsideFileType(row.fileType ?? row.file_type);
+  const { loanAmount, cashAmount } = echoOfficeOutsideLoanCash({
+    fileType,
+    amount: subtotal,
+    loanAmount: row.loanAmount ?? row.loan_amount,
+    cashAmount: row.cashAmount ?? row.cash_amount
+  });
   const status = String(row.status || 'draft');
   const paymentStatus = String(row.paymentStatus || row.payment_status || 'pending');
   const paymentMode =
@@ -213,7 +309,10 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
   const slipNotes = row.slipNotes || row.slip_notes || '';
   const sentAtRaw = row.sentToAccountsAt ?? row.sent_to_accounts_at ?? null;
   const sentToAccountsAt = sentAtRaw || null;
+  const sentOutsideRaw = row.sentToOutsideAt ?? row.sent_to_outside_at ?? null;
+  const sentToOutsideAt = sentOutsideRaw || null;
   const sent = sentToAccountsAt != null;
+  const outside = sentToOutsideAt != null;
   const createdAt = row.createdAt || row.created_at;
   const updatedAt = row.updatedAt || row.updated_at;
   return {
@@ -249,6 +348,10 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     display_amount: subtotal,
     totalAmount: subtotal,
     total_amount: subtotal,
+    loanAmount,
+    loan_amount: loanAmount,
+    cashAmount,
+    cash_amount: cashAmount,
     fileType,
     file_type: fileType,
     paymentType: fileType,
@@ -264,8 +367,13 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     phases: installments,
     status,
     sent,
+    outside,
+    sentToOutside: outside,
+    sent_to_outside: outside,
     sentToAccountsAt,
     sent_to_accounts_at: sentToAccountsAt,
+    sentToOutsideAt,
+    sent_to_outside_at: sentToOutsideAt,
     slipItems,
     slip_items: slipItems,
     items: slipItems,
@@ -282,8 +390,19 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
 export const publicOfficeOutsideLedger = (row: RowLike) => {
   const recordId = row.recordId || row.record_id;
   const vendorId = row.vendorId || row.vendor_id || null;
-  const loanAmount = roundInr(row.loanAmount ?? row.loan_amount);
-  const cashAmount = roundInr(row.cashAmount ?? row.cash_amount);
+  const record = row.record || {};
+  const subtotal = roundInr(row.subtotal ?? record.subtotal);
+  const fileType = normalizeOfficeOutsideFileType(
+    row.fileType ?? row.file_type ?? record.fileType ?? record.file_type
+  );
+  const { loanAmount, cashAmount } = echoOfficeOutsideLoanCash({
+    fileType,
+    amount: subtotal,
+    loanAmount: row.loanAmount ?? row.loan_amount,
+    cashAmount: row.cashAmount ?? row.cash_amount,
+    recordLoanAmount: row.recordLoanAmount ?? record.loanAmount ?? record.loan_amount,
+    recordCashAmount: row.recordCashAmount ?? record.cashAmount ?? record.cash_amount
+  });
   const receivedAmount = roundInr(row.receivedAmount ?? row.received_amount);
   const pi = roundInr(row.pi);
   const proposal = roundInr(row.proposal);
@@ -292,7 +411,6 @@ export const publicOfficeOutsideLedger = (row: RowLike) => {
   const gstCharges = officeOutsideGstCharges(proposal, pi);
   const costOfSite = officeOutsideCostOfSite(pi, fileCharges, gstCharges, others);
   const remaining = roundInr(row.remaining);
-  const subtotal = roundInr(row.subtotal ?? row.record?.subtotal);
   const profit = officeOutsideVendorProfit(subtotal, costOfSite);
   const updatedAt = row.updatedAt || row.updated_at;
   return {
@@ -321,6 +439,8 @@ export const publicOfficeOutsideLedger = (row: RowLike) => {
     profit,
     vendorProfit: profit,
     vendor_profit: profit,
+    officeOutsideCompleteProfit: profit,
+    office_outside_complete_profit: profit,
     updatedAt,
     updated_at: updatedAt
   };

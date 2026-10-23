@@ -1729,6 +1729,7 @@ Generic `PATCH …/installation-status` with `installer_approved` alone must **n
 | `POST` | `/hr/sheet-sources/:id/sync` |
 | `POST` | `/hr/sheet-sources/sync-all` ← cron / HR |
 | `GET` | `/hr/sheet-sources/:id/leads` |
+| `POST` | `/hr/sheet-sources/:id/assign-created` leftover Meta CREATED → dealer pool |
 
 **Auth:** `hr`. For `sync-all` also allow `x-cron-secret: $CRON_SECRET`.
 
@@ -1872,6 +1873,8 @@ For existing `(sheet_source_id, external_id)`: **do not** clear CRM assignment/s
 |------|--------|
 | Emit `calling:uploads-updated` | → `stream:hr` + `stream:dealers` after sync (§AP) |
 | Cron 15 min | `POST /hr/sheet-sources/sync-all` + socket |
+
+**Follow-up (Oct 22 2026) — Meta CREATED:** `lead_status` stays CREATED; calling status is `queued`/`assigned`. `POST /hr/sheet-sources/:id/assign-created` round-robins leftover CREATED rows to the tab dealer pool. `/calling-queue/current` and `/next` echo `lead_status` separately and treat leftover `status=created` as open.
 
 ---
 
@@ -2812,6 +2815,12 @@ Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not
 **Follow-up (Oct 21 2026) — Send to Accounts (no new route):** persist `outsideVendorId` on PATCH/GET; `:id` is UUID PK or `OO-*` (do not 404 UUID-only ids); Send sets `sentToAccountsAt` and returns the row; empty vendor → `400 OO_VENDOR_REQUIRED`; missing id → `404 OO_404`; `GET ?status=sent` is `sentToAccountsAt IS NOT NULL`.
 
 **Follow-up (Oct 21 2026) — Revert / retrieve-from-accounts:** `POST /admin/office-outside/:id/retrieve-from-accounts` (admin or accounts JWT) sets `sent_to_accounts_at = NULL`, does not delete the row, echoes `sentToAccountsAt: null`. Idempotent 200 if already pending. Fallback `PATCH { sentToAccountsAt: null }`. After revert, `?status=sent` omits it; all / pending show Send again. Never `OO_VENDOR_REQUIRED` / `OO_ALREADY_SENT` on retrieve.
+
+**Follow-up (Oct 23 2026) — Amount / loan persist:** `loan_amount` / `cash_amount` on `office_outside_records` and ledger. `PATCH /admin/office-outside/:id` saves `subtotal` / `amount` / `loanAmount` / `cashAmount`. Ledger PATCH is partial (Save `{ proposal, loanAmount, cashAmount }` keeps PI/file/GST) and copies loan/cash onto the record. GET record + ledger echo both. Loan file with loan 0 uses the amount; a saved loan > 0 stays. Mount `/ledger` before `/:id`.
+
+**Follow-up (Oct 23 2026) — Accounts → Vendor Outside hop:** `sent_to_outside_at`. `POST …/send-to-accounts` sets accounts timestamp only. `POST …/send-to-outside` (admin or accounts JWT) sets outside timestamp and keeps `sent_to_accounts_at`. `POST …/retrieve-from-accounts` clears **both**. `PATCH { sentToOutsideAt: null }` clears only outside. GET `?status=sent` = accounts timestamp set; `?status=outside` = outside timestamp set; `?status=pending` = both null.
+
+**Follow-up (Oct 23 2026) — Vendor Outside bills:** `GET/PUT /admin/subvendors/:id/bills` and `GET /admin/subvendors/bills`. Full replace on Save payments (`date`, `basic`, `paymentMode`, `customerIds` OO-* or UUID, file data URL max 2.5 MB). Bills stay off leaser PUT. Loan/cash `0` is unset; a saved amount > 0 sticks. See `BACKEND_SUBVENDOR_BILLS.ts`.
 
 ---
 
