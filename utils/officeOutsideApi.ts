@@ -50,6 +50,49 @@ export const officeOutsideVendorProfit = (subtotal: unknown, costOfSite: unknown
 /** Vendor Outside complete profit = subtotal − (PI + file + GST + others). */
 export const officeOutsideCompleteProfit = officeOutsideVendorProfit;
 
+/**
+ * Vendor Outside dealer-leaser GST (SPA 9.8%). Ledger GST stays 8.9%.
+ * Bill ₹0 (no bills / all basics 0) → GST ₹0.
+ */
+export const OFFICE_OUTSIDE_LEASER_GST_RATE = 0.098;
+
+export const officeOutsideLeaserGst = (input: {
+  billSum?: unknown;
+  paidAmount?: unknown;
+}): number => {
+  const billSum = roundInr(input.billSum);
+  if (billSum <= 0) return 0;
+  const base = Math.max(0, roundInr(input.paidAmount) - billSum);
+  return roundInr(base * OFFICE_OUTSIDE_LEASER_GST_RATE);
+};
+
+/** Bill ₹0 → profit ₹0; else paid − bill − charges − GST (not below 0). */
+export const officeOutsideLeaserProfit = (input: {
+  paidAmount?: unknown;
+  billSum?: unknown;
+  charges?: unknown;
+  gst?: unknown;
+}): number => {
+  if (roundInr(input.billSum) <= 0) return 0;
+  const n =
+    roundInr(input.paidAmount) -
+    roundInr(input.billSum) -
+    roundInr(input.charges) -
+    roundInr(input.gst);
+  return n > 0 ? n : 0;
+};
+
+/** Bill ₹0 → remaining ₹0; else profit − leaser paid (not below 0). */
+export const officeOutsideLeaserRemaining = (input: {
+  profit?: unknown;
+  leaserPaid?: unknown;
+  billSum?: unknown;
+}): number => {
+  if (roundInr(input.billSum) <= 0) return 0;
+  const n = roundInr(input.profit) - roundInr(input.leaserPaid);
+  return n > 0 ? n : 0;
+};
+
 /** Last 10 digits. Empty / non-digits → ''. Unique index only applies when length is 10. */
 export const normalizeOfficeOutsideMobile = (raw: unknown): string =>
   String(raw ?? '').replace(/\D/g, '').slice(-10);

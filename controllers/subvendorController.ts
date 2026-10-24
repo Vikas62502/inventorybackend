@@ -31,10 +31,11 @@ import {
   publicSubvendor,
   SubvendorKindValue
 } from '../utils/subvendorApi';
+import { echoAccountsPaidAmount } from '../utils/quotationPaymentPhases';
 import {
-  officeOutsideCostOfSite,
-  officeOutsideGstCharges,
-  officeOutsideVendorProfit
+  officeOutsideLeaserGst,
+  officeOutsideLeaserProfit,
+  officeOutsideLeaserRemaining
 } from '../utils/officeOutsideApi';
 
 const fail = (res: Response, status: number, code: string, message: string): void => {
@@ -315,19 +316,50 @@ const resolveLeaserVendor = async (idOrDealerId: string): Promise<Subvendor | nu
   return Subvendor.findOne({ where: { kind: 'office_inside', dealerId: id } });
 };
 
-const officeOutsideProfitForVendor = async (vendorId: string): Promise<number> => {
-  const rows = await OfficeOutsideLedger.findAll({
+type OfficeOutsideLeaserTotals = {
+  billSum: number;
+  paidAmount: number;
+  charges: number;
+  gst: number;
+  profit: number;
+};
+
+const sumVendorBillBasic = async (vendorId: string): Promise<number> => {
+  const bills = await SubvendorBill.findAll({
     where: { vendorId },
-    include: [
-      { model: OfficeOutsideRecord, as: 'record', attributes: ['subtotal'], required: false }
-    ]
+    attributes: ['basicAmount']
   });
-  return rows.reduce((sum, row) => {
-    const plain = row.get({ plain: true }) as any;
-    const gst = officeOutsideGstCharges(plain.proposal, plain.pi);
-    const cost = officeOutsideCostOfSite(plain.pi, plain.fileCharges, gst, plain.others);
-    return sum + officeOutsideVendorProfit(plain.record?.subtotal, cost);
-  }, 0);
+  return bills.reduce((sum, row) => sum + roundInr(row.basicAmount), 0);
+};
+
+const officeOutsideLeaserTotalsForVendor = async (
+  vendorId: string
+): Promise<OfficeOutsideLeaserTotals> => {
+  const [billSum, records] = await Promise.all([
+    sumVendorBillBasic(vendorId),
+    OfficeOutsideRecord.findAll({
+      where: { vendorId },
+      attributes: ['installmentsJson'],
+      include: [
+        {
+          model: OfficeOutsideLedger,
+          as: 'ledger',
+          attributes: ['fileCharges', 'others'],
+          required: false
+        }
+      ]
+    })
+  ]);
+  let paidAmount = 0;
+  let charges = 0;
+  for (const rec of records) {
+    const plain = rec.get({ plain: true }) as any;
+    paidAmount += echoAccountsPaidAmount(plain.installmentsJson);
+    charges += roundInr(plain.ledger?.fileCharges) + roundInr(plain.ledger?.others);
+  }
+  const gst = officeOutsideLeaserGst({ billSum, paidAmount });
+  const profit = officeOutsideLeaserProfit({ paidAmount, billSum, charges, gst });
+  return { billSum, paidAmount, charges, gst, profit };
 };
 
 const sumLeaserAmounts = (rows: Array<{ amount: unknown }>): number =>
@@ -336,10 +368,13 @@ const sumLeaserAmounts = (rows: Array<{ amount: unknown }>): number =>
 const leaserVendorPayload = (
   vendor: Subvendor,
   payments: SubvendorLeaserPayment[],
-  outsideProfit?: number
+  outside?: OfficeOutsideLeaserTotals
 ) => {
   const plainVendor = publicSubvendor(vendor.get({ plain: true }));
   const currentBalance = sumLeaserAmounts(payments);
+  const storedRemaining = roundInr(plainVendor.leaserRemaining);
+  const echoRemaining =
+    vendor.kind === 'office_outside' && roundInr(outside?.billSum) <= 0 ? 0 : storedRemaining;
   const base = {
     vendorId: vendor.id,
     vendor_id: vendor.id,
@@ -352,16 +387,23 @@ const leaserVendorPayload = (
     leaser_paid: currentBalance,
     totalPayment: currentBalance,
     total_payment: currentBalance,
-    leaserRemaining: plainVendor.leaserRemaining,
-    leaser_remaining: plainVendor.leaserRemaining,
+    leaserRemaining: echoRemaining,
+    leaser_remaining: echoRemaining,
     fileCostPerKw: plainVendor.fileCostPerKw,
     file_cost_per_kw: plainVendor.fileCostPerKw,
     payments: payments.map((row) => publicLeaserPayment(row.get({ plain: true })))
   };
   if (vendor.kind !== 'office_outside') return base;
-  const profit = outsideProfit ?? 0;
+  const billSum = roundInr(outside?.billSum);
+  const gst = billSum <= 0 ? 0 : roundInr(outside?.gst);
+  const profit = billSum <= 0 ? 0 : roundInr(outside?.profit);
   return {
     ...base,
+    billSum,
+    bill_sum: billSum,
+    gst,
+    gstCharges: gst,
+    gst_charges: gst,
     profit,
     vendorProfit: profit,
     vendor_profit: profit
@@ -399,12 +441,14 @@ export const listLeaserPayments = async (req: Request, res: Response): Promise<v
     }
     const balances = await Promise.all(
       vendors.map(async (vendor) => {
-        const profit =
-          vendor.kind === 'office_outside' ? await officeOutsideProfitForVendor(vendor.id) : undefined;
+        const outside =
+          vendor.kind === 'office_outside'
+            ? await officeOutsideLeaserTotalsForVendor(vendor.id)
+            : undefined;
         const { payments: _omit, ...summary } = leaserVendorPayload(
           vendor,
           byVendor.get(vendor.id) || [],
-          profit
+          outside
         );
         return summary;
       })
@@ -434,9 +478,11 @@ export const getVendorLeaser = async (req: Request, res: Response): Promise<void
       where: { vendorId: vendor.id },
       order: LEASER_ORDER as any
     });
-    const profit =
-      vendor.kind === 'office_outside' ? await officeOutsideProfitForVendor(vendor.id) : undefined;
-    res.json({ success: true, data: leaserVendorPayload(vendor, payments, profit) });
+    const outside =
+      vendor.kind === 'office_outside'
+        ? await officeOutsideLeaserTotalsForVendor(vendor.id)
+        : undefined;
+    res.json({ success: true, data: leaserVendorPayload(vendor, payments, outside) });
   } catch (error) {
     logError('Get vendor leaser error', error, { id: req.params.id });
     internalError(res);
@@ -460,6 +506,17 @@ export const replaceVendorLeaser = async (req: Request, res: Response): Promise<
     const remainingRaw = body.leaserRemaining !== undefined ? body.leaserRemaining : body.leaser_remaining;
     const updatedBy = req.dealer?.id || req.user?.id || null;
     const leaserPaid = parsed.payments.reduce((total, p) => total + p.amount, 0);
+    let remainingPatch: number | undefined;
+    if (remainingRaw !== undefined) {
+      remainingPatch = roundInr(remainingRaw);
+    } else if (vendor.kind === 'office_outside') {
+      const totals = await officeOutsideLeaserTotalsForVendor(vendor.id);
+      remainingPatch = officeOutsideLeaserRemaining({
+        profit: totals.profit,
+        leaserPaid,
+        billSum: totals.billSum
+      });
+    }
 
     await Subvendor.sequelize!.transaction(async (transaction) => {
       await SubvendorLeaserPayment.destroy({ where: { vendorId: vendor.id }, transaction });
@@ -505,7 +562,7 @@ export const replaceVendorLeaser = async (req: Request, res: Response): Promise<
       await vendor.update(
         {
           leaserPaid,
-          ...(remainingRaw !== undefined ? { leaserRemaining: roundInr(remainingRaw) } : {})
+          ...(remainingPatch !== undefined ? { leaserRemaining: remainingPatch } : {})
         },
         { transaction }
       );
@@ -516,9 +573,11 @@ export const replaceVendorLeaser = async (req: Request, res: Response): Promise<
       where: { vendorId: vendor.id },
       order: LEASER_ORDER as any
     });
-    const profit =
-      vendor.kind === 'office_outside' ? await officeOutsideProfitForVendor(vendor.id) : undefined;
-    res.json({ success: true, data: leaserVendorPayload(vendor, payments, profit) });
+    const outside =
+      vendor.kind === 'office_outside'
+        ? await officeOutsideLeaserTotalsForVendor(vendor.id)
+        : undefined;
+    res.json({ success: true, data: leaserVendorPayload(vendor, payments, outside) });
   } catch (error) {
     logError('Replace vendor leaser error', error, { id: req.params.id });
     internalError(res);
@@ -530,13 +589,21 @@ const BILL_ORDER: [string, string][] = [
   ['createdAt', 'ASC']
 ];
 
-const billsPayload = (vendor: Subvendor, bills: SubvendorBill[]) => ({
-  vendorId: vendor.id,
-  vendor_id: vendor.id,
-  kind: vendor.kind,
-  bills: bills.map((row) => publicSubvendorBill(row.get({ plain: true }))),
-  items: bills.map((row) => publicSubvendorBill(row.get({ plain: true })))
-});
+const sumBillBasic = (bills: SubvendorBill[]): number =>
+  bills.reduce((sum, row) => sum + roundInr(row.basicAmount), 0);
+
+const billsPayload = (vendor: Subvendor, bills: SubvendorBill[]) => {
+  const billSum = sumBillBasic(bills);
+  return {
+    vendorId: vendor.id,
+    vendor_id: vendor.id,
+    kind: vendor.kind,
+    billSum,
+    bill_sum: billSum,
+    bills: bills.map((row) => publicSubvendorBill(row.get({ plain: true }))),
+    items: bills.map((row) => publicSubvendorBill(row.get({ plain: true })))
+  };
+};
 
 const mergeKeptBillFiles = (incoming: SubvendorBillInput[], existing: SubvendorBill[]) => {
   const byId = new Map(existing.map((row) => [row.id, row]));
@@ -574,9 +641,12 @@ export const listSubvendorBills = async (req: Request, res: Response): Promise<v
           order: [['vendorId', 'ASC'], ...BILL_ORDER] as any
         })
       : [];
+    const billSum = sumBillBasic(bills);
     res.json({
       success: true,
       data: {
+        billSum,
+        bill_sum: billSum,
         bills: bills.map((row) => publicSubvendorBill(row.get({ plain: true }))),
         items: bills.map((row) => publicSubvendorBill(row.get({ plain: true })))
       }

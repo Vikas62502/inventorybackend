@@ -70,8 +70,8 @@ const listResponse = {
  *   PUT /subvendors/:id/leaser              → replace ALL payments for that vendor (transaction)
  */
 const putBody = {
-  leaserRemaining: 30000, // optional (snake leaser_remaining ok); omitted keeps stored value.
-  //   Stored as sent (FE: Profit vendor − Total payment). Server never derives it (not from profit_ratio).
+  leaserRemaining: 30000, // optional (snake leaser_remaining ok). Persist as sent (SPA sends 0 when bill is 0).
+  //   Omitted + office_inside: keep stored. Omitted + office_outside: billSum<=0 → 0, else profit − leaser paid.
   payments: [
     // also accepted: { items }, { rows }, or a bare array
     {
@@ -93,6 +93,7 @@ const vendorResponse = {
   data: {
     vendorId: 'uuid', dealerId: 'dealer-id',
     currentBalance: 20000, leaserPaid: 20000, leaserRemaining: 30000, fileCostPerKw: 1000,
+    // office_outside also: billSum, gst, profit / vendorProfit (all 0 when billSum <= 0)
     // + snake_case twins
     payments: [
       {
@@ -127,8 +128,9 @@ const vendorResponse = {
  *     - PATCH /quotations/:id/payment-details { siteCost } → quotations.site_cost only (echoed on quotation + admin list / by-id)
  *     - PATCH /admin/subvendors/ledger/:quotationId { pi, others, fileCharges, gstCharges, proposal, costOfSite }
  *       → ledger only (echoed camel + snake on GET ledger)
- *     - Neither handler writes the other's column; leaser_remaining only changes when sent on the leaser PUT
- *       (never derived from profit_ratio).
+ *     - Neither handler writes the other's column. Office Inside: leaser_remaining only changes when sent
+ *       on the leaser PUT (never derived from profit_ratio). Office Outside: persist as sent; omitted →
+ *       billSum <= 0 → 0, else profit − leaser paid.
  *   Example: PI 153775, file 3000, GST 5004 → table siteCost 153775, vendor costOfSite 161779.
  *
  * -----------------------------------------------------------------------------
@@ -142,6 +144,52 @@ const vendorResponse = {
  *   Bills are a separate table — PUT leaser must not write /admin/subvendors/:id/bills.
  *   See BACKEND_SUBVENDOR_BILLS.ts.
  *   Vendor Office Paid = SUM(installment.paidAmount) on that dealer’s quotations (no new route).
- *   Vendor Outside Paid = SUM(OO installments.paidAmount); profit vendor = paid − bill − charges − GST (FE).
+ *   Vendor Outside Paid = SUM(OO installments.paidAmount); profit vendor = paid − bill − charges − GST.
+ *   Bill ₹0 (no bills / all basics 0) → GST ₹0, profit vendor ₹0, remaining ₹0.
+ *   PUT leaser persists leaserRemaining as sent (SPA sends 0 when bill is 0).
+ *   Omitted remaining on office_outside is recomputed with the helpers below.
+ *   Office Inside leaser is unchanged. Bills stay off this PUT.
  */
+
+/** Vendor Outside dealer-leaser GST (SPA 9.8%). Ledger GST stays 8.9%. */
+const OFFICE_OUTSIDE_LEASER_GST_RATE = 0.098;
+
+const officeOutsideLeaserGst = ({ billSum, paidAmount }) => {
+  const bill = Math.round(Number(billSum) || 0);
+  if (bill <= 0) return 0;
+  const base = Math.max(0, Math.round(Number(paidAmount) || 0) - bill);
+  return Math.round(base * OFFICE_OUTSIDE_LEASER_GST_RATE);
+};
+
+const officeOutsideLeaserProfit = ({ paidAmount, billSum, charges, gst }) => {
+  const bill = Math.round(Number(billSum) || 0);
+  if (bill <= 0) return 0;
+  const n =
+    Math.round(Number(paidAmount) || 0) -
+    bill -
+    Math.round(Number(charges) || 0) -
+    Math.round(Number(gst) || 0);
+  return n > 0 ? n : 0;
+};
+
+const officeOutsideLeaserRemaining = ({ profit, leaserPaid, billSum }) => {
+  const bill = Math.round(Number(billSum) || 0);
+  if (bill <= 0) return 0;
+  const n = Math.round(Number(profit) || 0) - Math.round(Number(leaserPaid) || 0);
+  return n > 0 ? n : 0;
+};
+
+/**
+ * PUT remaining:
+ *   sent → persist as sent (including 0). Do not overwrite with
+ *     (paid − bill − charges − GST) − leaser_paid when bill is still 0.
+ *   omitted + office_outside:
+ *     billSum = SUM(subvendor_bills.basic_amount)
+ *     billSum <= 0 → leaser_remaining = 0
+ *     else remaining = profit − leaser paid
+ *
+ * GET/PUT leaser for office_outside echoes billSum / gst / profit (0 when billSum <= 0).
+ * Example: paid ₹1,70,000, bill ₹0 → GST ₹0, profit ₹0, remaining ₹0.
+ */
+export {};
 

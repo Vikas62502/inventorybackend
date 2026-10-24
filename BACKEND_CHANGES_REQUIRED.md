@@ -2822,7 +2822,35 @@ Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not
 
 **Follow-up (Oct 23 2026) — Vendor Outside bills:** `GET/PUT /admin/subvendors/:id/bills` and `GET /admin/subvendors/bills`. Full replace on Save payments (`date`, `basic`, `paymentMode`, `customerIds` OO-* or UUID, file data URL max 2.5 MB). Bills stay off leaser PUT. Loan/cash `0` is unset; a saved amount > 0 sticks. See `BACKEND_SUBVENDOR_BILLS.ts`.
 
-**Follow-up (Oct 24 2026) — Paid amount (Accounts Paid, no new route):** Vendor Outside = `SUM(installments.paidAmount)` on the OO record (GET list/by-id must echo installments + scalar `paidAmount`; payment-details replace persists paid and sets ledger `received_amount`). Vendor Office = `SUM(installment.paidAmount)` on that dealer’s quotations. Do not mint a pay-full 1-installment row. Profit vendor on Outside is paid − bill − charges − GST (FE).
+**Follow-up (Oct 24 2026) — Paid amount (Accounts Paid, no new route):** Vendor Outside = `SUM(installments.paidAmount)` on the OO record (GET list/by-id must echo installments + scalar `paidAmount`; payment-details replace persists paid and sets ledger `received_amount`). Vendor Office = `SUM(installment.paidAmount)` on that dealer’s quotations. Do not mint a pay-full 1-installment row. Profit vendor on Outside is paid − bill − charges − GST.
+
+**Follow-up (Oct 24 2026) — Bill ₹0 zeros GST / profit / remaining (HANDOFF §83 / FE §66 / their §BT):** If bill is ₹0, GST, profit vendor, and remaining are all ₹0. PUT leaser persists `leaserRemaining` as sent. Omitted remaining on `office_outside`: `billSum <= 0` → 0, else profit − leaser paid. GET/PUT bills echo `billSum: 0` when empty; no GST/profit on that route. See **§CB**.
+
+---
+
+## §CB — Vendor Outside: bill ₹0 → GST 0, profit 0, remaining 0 — Oct 2026
+
+**Status: implemented** — HANDOFF **§83** · `BACKEND_SUBVENDOR_LEASER.ts` · `BACKEND_SUBVENDOR_BILLS.ts` · `BACKEND_OFFICE_OUTSIDE.ts`
+
+Account Management → Vendor Outside → Dealer leaser. Bill is `SUM(subvendor_bills.basic_amount)` for that vendor. No new HTTP route. Office Inside leaser is unchanged. Payments-first then Bills is UI only — do not reorder GET leaser / GET bills.
+
+| Route | Behaviour |
+|-------|-----------|
+| `PUT /admin/subvendors/:id/leaser` | Persist `leaserRemaining` as sent (SPA sends 0 when bill is 0). Do not overwrite with `(paid − bill − charges − GST) − leaser_paid` if bill is still 0 |
+| PUT remaining omitted + `office_outside` | `billSum = SUM(bills.basicAmount)`; `billSum <= 0` → `leaser_remaining = 0`; else remaining = profit − leaser paid |
+| `GET /admin/subvendors/:id/leaser` | Echo `billSum` / `gst` / `profit` (0 when `billSum <= 0`). Remaining echo 0 when bill is 0 |
+| `GET/PUT /admin/subvendors/:id/bills` | Echo `billSum: 0` when there are no bills. Do not compute GST / profit |
+
+Helpers (live in `utils/officeOutsideApi.ts`, copy-paste in `BACKEND_SUBVENDOR_LEASER.ts`): `officeOutsideLeaserGst`, `officeOutsideLeaserProfit`, `officeOutsideLeaserRemaining`.
+
+Example: paid ₹1,70,000, bill ₹0 → GST ₹0, profit ₹0, remaining ₹0.
+
+### Done when
+
+- [x] Bill ₹0 → GET leaser gst / profit / remaining all 0
+- [x] PUT remaining 0 persisted as sent
+- [x] GET/PUT bills echo `billSum: 0` when empty
+- [x] Office Inside leaser unchanged
 
 ---
 

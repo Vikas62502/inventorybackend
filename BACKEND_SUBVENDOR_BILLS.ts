@@ -11,8 +11,10 @@
  * On Save payments PUT /admin/subvendors/:id/bills (full replace).
  * Auth: admin JWT (same as other /admin/subvendors routes) → non-admin 403 AUTH_004.
  *
- * GST and profit vendor stay frontend: (subtotal − bill) × 9.8% and
- * paid − bill − charges − GST (Vendor Outside). Do not put bill rows on PUT /admin/subvendors/:id/leaser.
+ * GST and profit vendor stay off this route. Echo billSum = SUM(basicAmount);
+ * no bills / all basics 0 → billSum: 0. Do not compute GST / profit here.
+ * Vendor Outside leaser: bill ₹0 → GST / profit / remaining ₹0 (BACKEND_SUBVENDOR_LEASER.ts).
+ * Do not put bill rows on PUT /admin/subvendors/:id/leaser.
  * Paid amount is Accounts Paid (SUM of installment paidAmount) — not this table.
  *
  * Code: models/SubvendorBill.ts · utils/subvendorApi.ts (parseSubvendorBills,
@@ -70,6 +72,8 @@ const vendorResponse = {
   success: true,
   data: {
     vendorId: 'uuid',
+    billSum: 10000, // 0 when there are no bills / all basics 0. No gst / profit on this route.
+    bill_sum: 10000,
     bills: [
       {
         id: 'bill-1',
@@ -94,7 +98,7 @@ const vendorResponse = {
  * Errors: VAL_BILL (400, bills missing / bad date / file > 2.5 MB) · SUBVENDOR_404 · AUTH_004 · SYS_001.
  *
  * QA:
- *   1. New vendor → GET bills [].
+ *   1. New vendor → GET bills [], billSum: 0.
  *   2. PUT one bill with date, basic, paymentMode, OO-* customerIds, data-URL file
  *      → GET same row after refresh / other login.
  *   3. PUT [] → bills empty. Leaser PUT must not create/delete bills.

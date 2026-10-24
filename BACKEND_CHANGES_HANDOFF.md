@@ -119,6 +119,7 @@
 | 107 | High | OO Accounts → Vendor Outside hop (`sent_to_outside_at`) | **Done** | §80 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 108 | High | Vendor Outside bills persist (GET/PUT `/admin/subvendors/:id/bills`) | **Done** | §81 / REQUIRED §BX / `BACKEND_SUBVENDOR_BILLS.ts` |
 | 109 | High | Vendor Office / Outside Paid = SUM(installment paidAmount) | **Done** | §82 / REQUIRED §BX / `BACKEND_INSTALLMENT_REPLACE.ts` |
+| 110 | High | Vendor Outside bill ₹0 → GST / profit / remaining ₹0 | **Done** | §83 / REQUIRED §CB / `BACKEND_SUBVENDOR_LEASER.ts` |
 
 **Deploy before QA:**
 
@@ -3832,5 +3833,21 @@ SPA Send button is frontend-only. Same `POST /admin/office-outside/:id/send-to-a
 | Vendor Outside | GET `/admin/office-outside` (list + by id, `status=outside` / `sent`) echoes `installments` with `paidAmount` plus scalar `paidAmount` |
 | PATCH payment-details | Full replace of phases; persist each `paidAmount`; ledger `received_amount` = that sum. Do not mint a 1-installment pay-full row |
 | Vendor Office | GET `/admin/quotations` + by id: `paidAmount` = SUM of that quotation’s installment `paidAmount` |
-| Separate | Bills = `/admin/subvendors/:id/bills`. Leaser = `/admin/subvendors/:id/leaser`. Profit vendor (Outside) = paid − bill − charges − GST (FE) |
+| Separate | Bills = `/admin/subvendors/:id/bills`. Leaser = `/admin/subvendors/:id/leaser`. Profit vendor (Outside) = paid − bill − charges − GST |
+
+## 83. Vendor Outside bill ₹0 zeros GST / profit / remaining — Oct 24 2026
+
+**Status: implemented** — REQUIRED **§CB** (FE notes §66 / their §BT) · `BACKEND_SUBVENDOR_LEASER.ts` · `BACKEND_SUBVENDOR_BILLS.ts` · `BACKEND_OFFICE_OUTSIDE.ts`
+
+No new route. Payments-first then Bills is UI only — do not reorder GET leaser / GET bills. Office Inside leaser is unchanged.
+
+| Item | Detail |
+|------|--------|
+| Bill | `billSum` = `SUM(subvendor_bills.basic_amount)`. No bills / all basics 0 → `billSum: 0` |
+| PUT leaser | Persist `leaserRemaining` as sent (SPA sends 0 when bill is 0). Do not overwrite with `(paid − bill − charges − GST) − leaser_paid` while bill is still 0 |
+| Omitted remaining | `office_outside` only: `billSum <= 0` → `leaser_remaining = 0`; else remaining = profit − leaser paid |
+| GET leaser | Echo `billSum` / `gst` / `profit` (all 0 when `billSum <= 0`). Remaining echo 0 when bill is 0 |
+| GET/PUT bills | Echo `billSum` (0 when empty). Do not compute GST / profit on this route |
+| Helpers | `officeOutsideLeaserGst` / `officeOutsideLeaserProfit` / `officeOutsideLeaserRemaining` |
+| Example | Paid ₹1,70,000, bill ₹0 → GST ₹0, profit ₹0, remaining ₹0 |
 

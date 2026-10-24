@@ -369,6 +369,13 @@ const ledger = {
  *   received_amount to that sum. Do not auto-create a pay-full 1-installment row.
  *   Bills stay on GET/PUT /admin/subvendors/:id/bills.
  *   Leaser stays on PUT /admin/subvendors/:id/leaser.
- *   Profit vendor on Outside is paid − bill − charges − GST (frontend).
+ *   Profit vendor on Outside is paid − bill − charges − GST.
+ *   Bill ₹0 (no bills / all basics 0) → GST ₹0, profit ₹0, remaining ₹0.
+ *   PUT /admin/subvendors/:id/leaser persists leaserRemaining as sent (SPA sends 0).
+ *   Omitted remaining + office_outside: billSum <= 0 → 0, else profit − leaser paid.
+ *   GET/PUT /admin/subvendors/:id/bills echo billSum (0 when empty). No GST/profit on bills.
+ *   Helpers: officeOutsideLeaserGst / officeOutsideLeaserProfit / officeOutsideLeaserRemaining
+ *   in BACKEND_SUBVENDOR_LEASER.ts. Payments-first then Bills is UI only — do not reorder routes.
+ *   Office Inside leaser is unchanged.
  */
 export {};
