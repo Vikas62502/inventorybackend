@@ -56,6 +56,7 @@ export type PaymentPhaseRecord = {
   phaseName: string;
   amount: number;
   paidAmount: number;
+  paid_amount?: number;
   status: 'pending' | 'partial' | 'completed';
   dueDate?: string | null;
   due_date?: string | null;
@@ -89,6 +90,24 @@ export const shouldReplacePaymentPhases = (req: Request, hasPhasePayload: boolea
   return target.includes('/installments');
 };
 
+/** Accounts Paid = SUM(installment.paidAmount). Empty / missing phases → 0. */
+export const sumInstallmentPaidAmount = (phases: unknown): number => {
+  if (!Array.isArray(phases) || phases.length === 0) return 0;
+  return phases.reduce((sum: number, phase) => {
+    if (!phase || typeof phase !== 'object') return sum;
+    const row = phase as Record<string, unknown>;
+    const n = Math.round(Number(row.paidAmount ?? row.paid_amount ?? row.paidAmt ?? row.paid) || 0);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+};
+
+/** Prefer SUM of installment paidAmounts; fall back to stored paidAmount. */
+export const echoAccountsPaidAmount = (phases: unknown, stored?: unknown): number => {
+  if (Array.isArray(phases) && phases.length > 0) return sumInstallmentPaidAmount(phases);
+  const n = Math.round(Number(stored) || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
 export const serializePaymentPhaseRow = (row: {
   phaseNumber: number;
   phaseName?: string | null;
@@ -112,7 +131,8 @@ export const serializePaymentPhaseRow = (row: {
   phaseNumber: Number(row.phaseNumber),
   phaseName: String(row.phaseName || ''),
   amount: Number(row.amount || 0),
-  paidAmount: Number(row.paidAmount || 0),
+  paidAmount: Number(row.paidAmount ?? (row as { paid_amount?: number }).paid_amount ?? 0),
+  paid_amount: Number(row.paidAmount ?? (row as { paid_amount?: number }).paid_amount ?? 0),
   status: (['pending', 'partial', 'completed'].includes(String(row.status))
     ? row.status
     : 'pending') as PaymentPhaseRecord['status'],

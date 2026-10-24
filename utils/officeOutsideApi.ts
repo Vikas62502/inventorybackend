@@ -4,7 +4,11 @@ import {
   normalizePaymentModeInput,
   pickCollectInput
 } from './paymentMode';
-import { serializePaymentPhaseRow, type PaymentPhaseRecord } from './quotationPaymentPhases';
+import {
+  echoAccountsPaidAmount,
+  serializePaymentPhaseRow,
+  type PaymentPhaseRecord
+} from './quotationPaymentPhases';
 import { toDateOnly } from './dateOnly';
 
 export const OFFICE_OUTSIDE_FILE_TYPES = ['loan', 'cash', 'mix'] as const;
@@ -297,9 +301,17 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     ? installmentsRaw.map((phase) => {
         const serialized = serializePaymentPhaseRow(phase as any);
         const paymentDate = toDateOnly((phase as any)?.paymentDate ?? (phase as any)?.payment_date) ?? null;
-        return { ...serialized, paymentDate, payment_date: paymentDate };
+        const paidAmount = roundInr(serialized.paidAmount);
+        return {
+          ...serialized,
+          paidAmount,
+          paid_amount: paidAmount,
+          paymentDate,
+          payment_date: paymentDate
+        };
       })
     : [];
+  const paidAmount = echoAccountsPaidAmount(installments, row.paidAmount ?? row.paid_amount);
   const publicId = officeOutsidePublicId(id);
   const slipItems = Array.isArray(row.slipItems)
     ? row.slipItems
@@ -358,6 +370,8 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     payment_type: fileType,
     paymentStatus,
     payment_status: paymentStatus,
+    paidAmount,
+    paid_amount: paidAmount,
     paymentMode,
     payment_mode: paymentMode,
     installments,
@@ -426,6 +440,8 @@ export const publicOfficeOutsideLedger = (row: RowLike) => {
     cash_amount: cashAmount,
     receivedAmount,
     received_amount: receivedAmount,
+    paidAmount: receivedAmount,
+    paid_amount: receivedAmount,
     remaining,
     proposal,
     costOfSite,
@@ -460,17 +476,17 @@ export const normalizeOfficeOutsidePhases = (
   updatedBy: string | null
 ): PaymentPhaseRecord[] =>
   phases
-    .map((raw) => {
+    .map((raw, index) => {
       const phase = (raw || {}) as Record<string, unknown>;
       const amount = Number(phase.amount ?? 0);
-      const paidAmount = Number(
-        phase.paidAmount ?? phase.paid_amount ?? phase.paidAmt ?? phase.paid ?? 0
+      const paidAmount = roundInr(
+        phase.paidAmount ?? phase.paid_amount ?? phase.paidAmt ?? phase.paid
       );
       const paymentMode = normalizePaymentModeInput(phase.paymentMode ?? phase.payment_mode) ?? null;
-      const paid = Number.isFinite(paidAmount) ? paidAmount : 0;
-      const amt = Number.isFinite(amount) ? amount : 0;
+      const paid = paidAmount;
+      const amt = Number.isFinite(amount) ? Math.round(amount) : 0;
       return {
-        phaseNumber: Number(phase.phaseNumber ?? phase.phase_number) || 0,
+        phaseNumber: Number(phase.phaseNumber ?? phase.phase_number) || index + 1,
         phaseName: String(phase.phaseName ?? phase.phase_name ?? '').trim(),
         amount: amt,
         paidAmount: paid,

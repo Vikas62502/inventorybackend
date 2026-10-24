@@ -22,6 +22,7 @@ import {
   publicOfficeOutsideLedger,
   publicOfficeOutsideRecord
 } from '../utils/officeOutsideApi';
+import { echoAccountsPaidAmount } from '../utils/quotationPaymentPhases';
 
 const fail = (res: Response, status: number, code: string, message: string): void => {
   res.status(status).json({ success: false, error: { code, message } });
@@ -709,11 +710,18 @@ export const updateOfficeOutsidePaymentDetails = async (req: Request, res: Respo
     const values: Record<string, unknown> = { updatedBy: actor };
 
     if (Array.isArray(phasePayload)) {
+      // Full replace — including [] to clear. Do not mint a pay-full 1-installment row.
       const phases = normalizeOfficeOutsidePhases(phasePayload, actor);
       values.installmentsJson = phases;
       values.paymentStatus = paymentStatusFromPhases(phases);
       const modeFromPhase = phases.map((p) => p.paymentMode).find(Boolean);
       if (modeFromPhase) values.paymentMode = modeFromPhase;
+      const paidSum = echoAccountsPaidAmount(phases);
+      const ledger = await ensureLedger(row, actor);
+      await ledger.update({
+        receivedAmount: paidSum,
+        updatedBy: actor
+      } as any);
     }
 
     const paymentMode = normalizePaymentModeInput(body.paymentMode ?? body.payment_mode);
@@ -736,7 +744,9 @@ export const updateOfficeOutsidePaymentDetails = async (req: Request, res: Respo
         record,
         item: record,
         installments: record.installments,
-        paymentPhases: record.installments
+        paymentPhases: record.installments,
+        paidAmount: record.paidAmount,
+        paid_amount: record.paidAmount
       }
     });
   } catch (error) {

@@ -2822,6 +2822,8 @@ Echo `recordId` / `record_id` and compatibility `quotationId` (same UUID — not
 
 **Follow-up (Oct 23 2026) — Vendor Outside bills:** `GET/PUT /admin/subvendors/:id/bills` and `GET /admin/subvendors/bills`. Full replace on Save payments (`date`, `basic`, `paymentMode`, `customerIds` OO-* or UUID, file data URL max 2.5 MB). Bills stay off leaser PUT. Loan/cash `0` is unset; a saved amount > 0 sticks. See `BACKEND_SUBVENDOR_BILLS.ts`.
 
+**Follow-up (Oct 24 2026) — Paid amount (Accounts Paid, no new route):** Vendor Outside = `SUM(installments.paidAmount)` on the OO record (GET list/by-id must echo installments + scalar `paidAmount`; payment-details replace persists paid and sets ledger `received_amount`). Vendor Office = `SUM(installment.paidAmount)` on that dealer’s quotations. Do not mint a pay-full 1-installment row. Profit vendor on Outside is paid − bill − charges − GST (FE).
+
 ---
 
 ## File index (May–June 2026 handoff)

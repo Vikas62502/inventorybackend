@@ -12,7 +12,8 @@
  * Auth: admin JWT (same as other /admin/subvendors routes) → non-admin 403 AUTH_004.
  *
  * GST and profit vendor stay frontend: (subtotal − bill) × 9.8% and
- * loan − bill − charges − GST. Do not put bill rows on PUT /admin/subvendors/:id/leaser.
+ * paid − bill − charges − GST (Vendor Outside). Do not put bill rows on PUT /admin/subvendors/:id/leaser.
+ * Paid amount is Accounts Paid (SUM of installment paidAmount) — not this table.
  *
  * Code: models/SubvendorBill.ts · utils/subvendorApi.ts (parseSubvendorBills,
  *       publicSubvendorBill) · controllers/subvendorController.ts · routes/adminRoutes.ts

@@ -22,7 +22,7 @@ import {
 } from '../utils/moduleFieldPermissions';
 import { logError, logInfo } from '../utils/loggerHelper';
 import { normalizePaymentModeInput } from '../utils/paymentMode';
-import { collectApiFields, dueDateApiFields } from '../utils/quotationPaymentPhases';
+import { collectApiFields, dueDateApiFields, echoAccountsPaidAmount } from '../utils/quotationPaymentPhases';
 import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
@@ -641,6 +641,7 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         phaseName: phase.phaseName,
         amount: Number(phase.amount || 0),
         paidAmount: Number(phase.paidAmount || 0),
+        paid_amount: Number(phase.paidAmount || 0),
         status: phase.status,
         ...dueDateApiFields(phase.dueDate),
         paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
@@ -771,7 +772,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               mcoAt: (q as any).mcoAt
             }),
             paymentStatus: paymentStatusOut || null,
-            paidAmount: q.paidAmount !== undefined && q.paidAmount !== null ? Number(q.paidAmount) : null,
+            paidAmount: echoAccountsPaidAmount(phases, q.paidAmount),
+            paid_amount: echoAccountsPaidAmount(phases, q.paidAmount),
             remaining: remainingAmount,
             remainingAmount,
             remaining_amount: remainingAmount,
@@ -2062,6 +2064,7 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       phaseName: phase.phaseName,
       amount: Number(phase.amount || 0),
       paidAmount: Number(phase.paidAmount || 0),
+      paid_amount: Number(phase.paidAmount || 0),
       status: phase.status,
       ...dueDateApiFields(phase.dueDate),
       paymentDate: phase.paymentDate ? new Date(phase.paymentDate).toISOString() : null,
@@ -2156,7 +2159,8 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
           phases
         }),
         paymentStatus: paymentStatusOut || null,
-        paidAmount: quotation.paidAmount !== undefined && quotation.paidAmount !== null ? Number(quotation.paidAmount) : null,
+        paidAmount: echoAccountsPaidAmount(phases, quotation.paidAmount),
+        paid_amount: echoAccountsPaidAmount(phases, quotation.paidAmount),
         remaining: remainingAmount,
         remainingAmount,
         remaining_amount: remainingAmount,

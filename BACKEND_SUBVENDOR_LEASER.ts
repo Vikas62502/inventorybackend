@@ -141,5 +141,7 @@ const vendorResponse = {
  *   Dates: GET echoes date + payment_date as "YYYY-MM-DD" (not ISO datetime).
  *   Bills are a separate table — PUT leaser must not write /admin/subvendors/:id/bills.
  *   See BACKEND_SUBVENDOR_BILLS.ts.
+ *   Vendor Office Paid = SUM(installment.paidAmount) on that dealer’s quotations (no new route).
+ *   Vendor Outside Paid = SUM(OO installments.paidAmount); profit vendor = paid − bill − charges − GST (FE).
  */
 

@@ -118,6 +118,7 @@
 | 106 | High | OO amount / loanAmount persist on record + ledger | **Done** | §79 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 107 | High | OO Accounts → Vendor Outside hop (`sent_to_outside_at`) | **Done** | §80 / REQUIRED §BX / `BACKEND_OFFICE_OUTSIDE.ts` |
 | 108 | High | Vendor Outside bills persist (GET/PUT `/admin/subvendors/:id/bills`) | **Done** | §81 / REQUIRED §BX / `BACKEND_SUBVENDOR_BILLS.ts` |
+| 109 | High | Vendor Office / Outside Paid = SUM(installment paidAmount) | **Done** | §82 / REQUIRED §BX / `BACKEND_INSTALLMENT_REPLACE.ts` |
 
 **Deploy before QA:**
 
@@ -3820,4 +3821,16 @@ SPA Send button is frontend-only. Same `POST /admin/office-outside/:id/send-to-a
 | PUT | Full replace on Save payments. Same id without a new file keeps the previous file. File max 2.5 MB; body 5 MB |
 | Not leaser | PUT `/admin/subvendors/:id/leaser` does not write bills |
 | Loan/cash | `0` is unset on PATCH record; a saved amount > 0 sticks |
+
+## 82. Vendor Office / Vendor Outside Paid amount — Oct 24 2026
+
+**Status: implemented** — REQUIRED **§BX** · `BACKEND_INSTALLMENT_REPLACE.ts` · `BACKEND_OFFICE_OUTSIDE.ts`
+
+| Item | Detail |
+|------|--------|
+| No new route | Accounts Paid = SUM of installment `paidAmount` |
+| Vendor Outside | GET `/admin/office-outside` (list + by id, `status=outside` / `sent`) echoes `installments` with `paidAmount` plus scalar `paidAmount` |
+| PATCH payment-details | Full replace of phases; persist each `paidAmount`; ledger `received_amount` = that sum. Do not mint a 1-installment pay-full row |
+| Vendor Office | GET `/admin/quotations` + by id: `paidAmount` = SUM of that quotation’s installment `paidAmount` |
+| Separate | Bills = `/admin/subvendors/:id/bills`. Leaser = `/admin/subvendors/:id/leaser`. Profit vendor (Outside) = paid − bill − charges − GST (FE) |
 

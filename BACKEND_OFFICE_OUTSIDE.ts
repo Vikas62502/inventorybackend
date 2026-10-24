@@ -52,6 +52,9 @@
  *
  *   PATCH  /api/admin/office-outside/:id/payment-details
  *          Same installment body as quotations. Stored on installments_json — NOT quotations.
+ *          Full replace of phases (including []). Persist each paidAmount.
+ *          Sets ledger received_amount = SUM(paidAmount). Do not mint a pay-full 1-installment row.
+ *          GET list / by id (status=outside|sent) must echo installments with paidAmount plus scalar paidAmount.
  *
  *   GET    /api/admin/office-outside/ledger
  *   GET/PATCH /api/admin/office-outside/ledger/:id
@@ -271,6 +274,7 @@ const record = {
   paymentStatus: 'pending',
   paymentMode: 'cash',
   installments: [],
+  paidAmount: 0,
   status: 'sent_to_accounts',
   sent: true,
   outside: false,
@@ -354,5 +358,17 @@ const ledger = {
  *   - Ignore PATCH loanAmount on the record (Vendor Outside then stays ₹0)
  *   - Put bill rows on PUT /admin/subvendors/:id/leaser (bills are a separate table)
  *   - Leave sent_to_accounts_at or sent_to_outside_at set after a 200 retrieve
+ */
+/**
+ * CHANGELOG Oct 24 2026 — Paid amount (Accounts Paid). No new route.
+ *   Vendor Outside: SUM(installments.paidAmount) on the Office Outside record.
+ *   Vendor Office: SUM(installment.paidAmount) on that dealer’s quotations.
+ *   GET /admin/office-outside (list + by id, including status=outside / sent) echoes
+ *   installments with paidAmount plus scalar paidAmount / paid_amount.
+ *   PATCH …/payment-details replaces phases, persists each paidAmount, sets ledger
+ *   received_amount to that sum. Do not auto-create a pay-full 1-installment row.
+ *   Bills stay on GET/PUT /admin/subvendors/:id/bills.
+ *   Leaser stays on PUT /admin/subvendors/:id/leaser.
+ *   Profit vendor on Outside is paid − bill − charges − GST (frontend).
  */
 export {};

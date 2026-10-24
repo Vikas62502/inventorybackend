@@ -69,5 +69,13 @@ COMMIT;
 // 2. phases: [] → GET returns 0 rows
 // 3. Hard refresh — count unchanged
 // 4. PATCH /installation-release with only installationReadyForInstaller — installments unchanged
+//
+// --- Paid amount (Oct 24 2026) — no new route ---
+// Accounts Paid = SUM(installment.paidAmount).
+// Vendor Office: GET quotations / GET /admin/quotations echo paidAmount from that sum
+//   (do not prefer a stale quotations.paidAmount of 0 when phases exist).
+// Vendor Outside: GET /admin/office-outside echoes installments + scalar paidAmount;
+//   PATCH /admin/office-outside/:id/payment-details replaces phases and sets
+//   ledger received_amount to the same sum. Do not mint a pay-full 1-installment row.
 
 export {};
