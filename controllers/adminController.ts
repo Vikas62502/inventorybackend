@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit, QuotationDocument } from '../models/index-quotation';
+import { Quotation, QuotationPaymentPhase, QuotationInstallationDoc, QuotationProduct, CustomPanel, Dealer, Customer, Visitor, Visit, QuotationDocument, Subvendor, SubvendorLedger } from '../models/index-quotation';
 import { Op, fn, col, literal, Sequelize } from 'sequelize';
 import {
   canAccessSection,
@@ -112,6 +112,7 @@ import {
   parseInrAmount,
   serializeSideRemainingApiFields
 } from '../utils/cashLoanAmounts';
+import { resolveApproveProposalAmount } from '../utils/approveProposal';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
 import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
 import { resolveQuotationDocumentUrls } from './quotationController';
@@ -907,6 +908,9 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       loan_amount?: number | string;
       cashAmount?: number | string;
       cash_amount?: number | string;
+      proposal?: number | string;
+      proposalAmount?: number | string;
+      proposal_amount?: number | string;
       bankName?: string;
       bankIfsc?: string;
       bank_ifsc?: string;
@@ -984,6 +988,22 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       updateData.loanAmount = amountResult.loanAmount;
       updateData.cashAmount = amountResult.cashAmount;
 
+      const proposalResult = resolveApproveProposalAmount({
+        paymentType: paymentTypeResolved,
+        proposalRaw: body.proposal ?? body.proposalAmount ?? body.proposal_amount,
+        quotationSubtotal: pickQuotationSubtotalForPayments(
+          quotation.get({ plain: true }) as unknown as Record<string, unknown>
+        )
+      });
+      if (!proposalResult.ok) {
+        res.status(400).json({
+          success: false,
+          error: { code: proposalResult.code, message: proposalResult.message }
+        });
+        return;
+      }
+      updateData.proposal = proposalResult.proposal;
+
       if (paymentTypeResolved === 'loan' || paymentTypeResolved === 'mix') {
         const bankName = typeof body.bankName === 'string' ? body.bankName.trim() : '';
         const ifsc = normalizeIfscValue(body.bankIfsc ?? body.bank_ifsc);
@@ -1029,6 +1049,7 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       updateData.paymentType = null;
       updateData.loanAmount = null;
       updateData.cashAmount = null;
+      updateData.proposal = null;
       updateData.subsidyChequeDetails = null;
       updateData.subsidyCheques = [];
       updateData.remainingAmount = null;
@@ -1040,6 +1061,33 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
         await persistQuotationSystemKw(quotationId, quotation.systemType);
       } catch (persistErr) {
         logError('Persist system_kw on approve failed (non-fatal)', persistErr, { quotationId });
+      }
+      try {
+        const ledgerPatch: Record<string, unknown> = {
+          proposal: updateData.proposal,
+          updatedBy: req.dealer?.id || req.user?.id || null
+        };
+        if (updateData.loanAmount != null) ledgerPatch.loanAmount = updateData.loanAmount;
+        const defaults: Record<string, unknown> = {
+          quotationId: quotation.id,
+          ...ledgerPatch
+        };
+        if (quotation.dealerId) {
+          const insideVendor = await Subvendor.findOne({
+            where: { kind: 'office_inside', dealerId: quotation.dealerId },
+            attributes: ['id']
+          });
+          if (insideVendor) defaults.vendorId = insideVendor.id;
+        }
+        const [row] = await SubvendorLedger.findOrCreate({
+          where: { quotationId: quotation.id },
+          defaults: defaults as any
+        });
+        await row.update(ledgerPatch as any);
+      } catch (ledgerErr) {
+        logError('Upsert subvendor ledger proposal on approve failed (non-fatal)', ledgerErr, {
+          quotationId
+        });
       }
     }
     await quotation.reload();

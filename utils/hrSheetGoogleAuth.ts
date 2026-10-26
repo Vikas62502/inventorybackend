@@ -2,7 +2,29 @@ import fs from 'fs';
 import path from 'path';
 import { google, sheets_v4 } from 'googleapis';
 
-export const DEFAULT_SPREADSHEET_ID = '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0';
+/** Live Social Media spreadsheet (Jaipur / Ajmer). Old id 18zqPIpa… is disabled. */
+export const DEFAULT_SPREADSHEET_ID = '1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk';
+
+/** Discover / sync only these tab titles (exact, or first word Jaipur/Ajmer). */
+export const SOCIAL_SHEET_ALLOWED_TABS = ['Jaipur', 'Ajmer'] as const;
+
+export const isAllowedSocialSheetTab = (title: unknown): boolean => {
+  const key = String(title || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (!key) return false;
+  return (
+    key === 'jaipur' ||
+    key === 'ajmer' ||
+    key.startsWith('jaipur ') ||
+    key.startsWith('ajmer ')
+  );
+};
+
+export const filterAllowedSocialSheetTabs = (titles: unknown[]): string[] =>
+  titles.map((t) => String(t || '').trim()).filter((t) => t && isAllowedSocialSheetTab(t));
 
 /** Local/server key file (gitignored). Prefer env override. */
 export const DEFAULT_GOOGLE_SHEETS_CREDENTIALS_PATH = path.join(

@@ -16,6 +16,18 @@ const textOrNull = (value: unknown): string | null => {
   return s ? s : null;
 };
 
+/**
+ * Sheet 1st/2nd Call columns are plain status_text only
+ * ("Call Unanswered", "Interested") — never a tagged call_remark.
+ */
+export const plainSheetCallStatusText = (value: unknown): string | null => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const tagged = raw.match(/^\[([^\]]+)\]\s*([^|]*?)\s*(?:\|\s*(.*))?$/);
+  const status = tagged ? String(tagged[2] || '').trim() : raw;
+  return status || null;
+};
+
 const statusKey = (value: unknown): string =>
   String(value ?? '')
     .trim()
@@ -174,8 +186,8 @@ export const resolveCallingSheetDecisionFields = (input: {
   if (!finalDecision) return null;
 
   const secondCallResponse =
-    textOrNull(body.secondCallResponse ?? body.second_call_response) ||
-    textOrNull(input.callRemark);
+    plainSheetCallStatusText(body.secondCallResponse ?? body.second_call_response) ||
+    plainSheetCallStatusText(input.statusLabel);
 
   const finalDecisionReason =
     textOrNull(body.finalDecisionReason ?? body.final_decision_reason) ||

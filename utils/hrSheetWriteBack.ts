@@ -1,9 +1,11 @@
 import { Op, Sequelize } from 'sequelize';
 import CallingLead from '../models/CallingLead';
 import CallingLeadSheetSource from '../models/CallingLeadSheetSource';
+import CallingActionHistory from '../models/CallingActionHistory';
 import DealerLeadAssignment from '../models/DealerLeadAssignment';
 import { Dealer } from '../models/index-quotation';
-import { getSheetsClient } from './hrSheetGoogleAuth';
+import { getSheetsClient, resolveSpreadsheetId } from './hrSheetGoogleAuth';
+import { plainSheetCallStatusText } from './callingSheetDecision';
 import { logError } from './loggerHelper';
 
 const normalizeHeader = (h: unknown): string =>
@@ -277,8 +279,14 @@ export const writeBackHrLeadToSheet = async (
     { col: colLeadStatus, value: sheetLeadStatus },
     { col: colRemarks, value: lead.remarks || '' },
     { col: colRemarks2, value: lead.remarks2 || lead.remarks_2 || '' },
-    { col: colFirst, value: lead.firstCallResponse || lead.first_call_response || '' },
-    { col: colSecond, value: lead.secondCallResponse || lead.second_call_response || '' },
+    {
+      col: colFirst,
+      value: plainSheetCallStatusText(lead.firstCallResponse || lead.first_call_response) || ''
+    },
+    {
+      col: colSecond,
+      value: plainSheetCallStatusText(lead.secondCallResponse || lead.second_call_response) || ''
+    },
     { col: colFinal, value: lead.finalDecision || lead.final_decision || '' },
     {
       col: colReason,
@@ -373,26 +381,23 @@ export const writeBackHrLeadToSheetById = async (
     sheetLeadStatus,
     assignedPersonName: assignedDealerName || lead.assignedPersonName
   };
+  const firstPlain = plainSheetCallStatusText(lead.firstCallResponse);
+  const secondPlain = plainSheetCallStatusText(lead.secondCallResponse);
+  if (firstPlain && firstPlain !== lead.firstCallResponse) patch.firstCallResponse = firstPlain;
+  if (secondPlain && secondPlain !== lead.secondCallResponse) patch.secondCallResponse = secondPlain;
 
-  // Prefer fields already persisted by calling PATCH (§BV). Only fill gaps.
-  if (callRemark) {
-    patch.remarks = callRemark;
-    if (!lead.secondCallResponse) {
-      if (!lead.firstCallResponse) {
-        patch.firstCallResponse = callRemark;
-      } else if (callRemark !== lead.firstCallResponse) {
-        patch.secondCallResponse = callRemark;
-      }
-    }
-  }
-
+  // Call columns are DB status_text only — never tagged call_remark.
   if (!lead.finalDecision) {
     if (act === 'called') patch.finalDecision = 'Interested';
     else if (act === 'not_interested') patch.finalDecision = 'Not Interested';
     else if (act === 'rescheduled' || act === 'follow_up') patch.finalDecision = 'Pending';
   }
-  if (!lead.finalDecisionReason && callRemark && (lead.finalDecision || patch.finalDecision)) {
-    patch.finalDecisionReason = callRemark;
+  const freeRemark = (() => {
+    const tagged = callRemark.match(/\|(.*)$/);
+    return tagged ? tagged[1].trim() : '';
+  })();
+  if (!lead.finalDecisionReason && freeRemark && (lead.finalDecision || patch.finalDecision)) {
+    patch.finalDecisionReason = freeRemark;
   }
 
   await lead.update(patch as any);
@@ -455,4 +460,145 @@ export const scheduleHrLeadSheetWriteBackForBatch = async (
   } catch (error) {
     logError('scheduleHrLeadSheetWriteBackForBatch failed (non-fatal)', error, { batchId: id });
   }
+};
+
+const DEALER_LIVE_MS = 24 * 60 * 60 * 1000;
+
+const poolDealerIds = (source: CallingLeadSheetSource): string[] =>
+  (Array.isArray(source.dealerIds) ? source.dealerIds : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => id && !isPoolDealerId(id));
+
+export const disableSheetSourcesOnOtherSpreadsheets = async (
+  spreadsheetId = resolveSpreadsheetId()
+): Promise<number> => {
+  const [count] = await CallingLeadSheetSource.update(
+    { enabled: false },
+    { where: { spreadsheetId: { [Op.ne]: spreadsheetId } } }
+  );
+  return Number(count) || 0;
+};
+
+const liveDealerIds = async (dealerIds: string[], since: Date): Promise<Set<string>> => {
+  if (!dealerIds.length) return new Set();
+  const [assignments, history] = await Promise.all([
+    DealerLeadAssignment.findAll({
+      where: { dealerId: { [Op.in]: dealerIds }, actionAt: { [Op.gte]: since } },
+      attributes: ['dealerId']
+    }),
+    CallingActionHistory.findAll({
+      where: { dealerId: { [Op.in]: dealerIds }, actionAt: { [Op.gte]: since } },
+      attributes: ['dealerId']
+    })
+  ]);
+  return new Set(
+    [...assignments, ...history].map((row) => String(row.dealerId || '')).filter(Boolean)
+  );
+};
+
+const pickRandomId = (ids: string[]): string | null => {
+  if (!ids.length) return null;
+  return ids[Math.floor(Math.random() * ids.length)] || null;
+};
+
+/** Assigned, no action, dealer not live in 24h → random live dealer in the same tab pool. */
+export const staleReassignInactiveSheetLeads = async (
+  spreadsheetId = resolveSpreadsheetId()
+): Promise<{ reassigned: number }> => {
+  const since = new Date(Date.now() - DEALER_LIVE_MS);
+  const sources = await CallingLeadSheetSource.findAll({
+    where: { spreadsheetId, enabled: true }
+  });
+  let reassigned = 0;
+  for (const source of sources) {
+    let pool = poolDealerIds(source);
+    if (!pool.length) {
+      const siblings = await CallingLeadSheetSource.findAll({
+        where: { spreadsheetId, enabled: true, id: { [Op.ne]: source.id } }
+      });
+      for (const sibling of siblings) {
+        const ids = poolDealerIds(sibling);
+        if (ids.length) {
+          pool = ids;
+          break;
+        }
+      }
+    }
+    if (pool.length < 2) continue;
+    const live = await liveDealerIds(pool, since);
+    if (!live.size) continue;
+
+    const leads = await CallingLead.findAll({
+      where: { sheetSourceId: source.id },
+      attributes: ['id']
+    });
+    if (!leads.length) continue;
+    const assignments = await DealerLeadAssignment.findAll({
+      where: {
+        leadId: { [Op.in]: leads.map((row) => row.id) },
+        status: { [Op.in]: ['assigned', 'queued'] },
+        [Op.or]: [{ action: null }, { action: '' }]
+      }
+    });
+    const liveList = [...live];
+    for (const assignment of assignments) {
+      const current = String(assignment.dealerId || '');
+      if (isPoolDealerId(current) || live.has(current)) continue;
+      const candidates = liveList.filter((id) => id !== current);
+      const next = pickRandomId(candidates.length ? candidates : liveList);
+      if (!next || next === current) continue;
+      await assignment.update({
+        dealerId: next,
+        status: 'assigned',
+        assignedAt: new Date(),
+        action: null,
+        callRemark: null,
+        actionAt: null,
+        nextFollowUpAt: null
+      });
+      scheduleHrLeadSheetWriteBack(assignment.leadId);
+      reassigned += 1;
+    }
+  }
+  return { reassigned };
+};
+
+/** Cron / HR: DB → sheet for enabled Jaipur/Ajmer sources + stale reassign. */
+export const runHrSheetSourcesWriteBackAll = async (opts?: {
+  spreadsheetId?: string | null;
+}): Promise<{
+  spreadsheetId: string;
+  reassigned: number;
+  written: number;
+  skipped: number;
+  failed: number;
+}> => {
+  const spreadsheetId = resolveSpreadsheetId(opts?.spreadsheetId);
+  await disableSheetSourcesOnOtherSpreadsheets(spreadsheetId);
+  const { reassigned } = await staleReassignInactiveSheetLeads(spreadsheetId);
+  const sources = await CallingLeadSheetSource.findAll({
+    where: { spreadsheetId, enabled: true },
+    attributes: ['id']
+  });
+  const sourceIds = sources.map((row) => row.id);
+  const leads = sourceIds.length
+    ? await CallingLead.findAll({
+        where: { sheetSourceId: { [Op.in]: sourceIds } },
+        attributes: ['id']
+      })
+    : [];
+  let written = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const lead of leads) {
+    try {
+      const result = await writeBackHrLeadToSheetById(lead.id);
+      if (result.ok) written += 1;
+      else skipped += 1;
+    } catch (error) {
+      failed += 1;
+      logError('write-back-all lead failed (non-fatal)', error, { leadId: lead.id });
+    }
+  }
+  return { spreadsheetId, reassigned, written, skipped, failed };
 };

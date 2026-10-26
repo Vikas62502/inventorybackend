@@ -20,6 +20,7 @@ import {
   patchHrSheetSource,
   postHrSheetSourceSync,
   postHrSheetSourcesSyncAll,
+  postHrSheetSourcesWriteBackAll,
   postHrSheetSourceAssignCreated,
   getHrSheetSourceLeads
 } from '../controllers/hrSheetSourceController';
@@ -63,6 +64,7 @@ const authenticateHrOrCron = (req: Request, res: Response, next: NextFunction): 
  * so cron can call with x-cron-secret only (no JWT).
  */
 router.post('/sheet-sources/sync-all', authenticateHrOrCron, postHrSheetSourcesSyncAll);
+router.post('/sheet-sources/write-back-all', authenticateHrOrCron, postHrSheetSourcesWriteBackAll);
 
 router.use(authenticate);
 

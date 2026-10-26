@@ -1,6 +1,18 @@
 import sequelize from './database';
 import logger from './logger';
 
+/** Accounts Proposal on admin approve. */
+const ensureQuotationProposalColumn = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS proposal NUMERIC(14,2);'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure quotations.proposal column', { message });
+  }
+};
+
 /** Idempotent: Payment Management → Admin Installation release flags. */
 const ensureInstallationReleaseColumns = async (): Promise<void> => {
   try {
@@ -468,6 +480,23 @@ const ensureOfficeOutsideTables = async (): Promise<void> => {
   }
 };
 
+const JAIPUR_AJMER_SPREADSHEET_ID = '1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk';
+
+/** Oct 26 2026 — disable sources on the old Social Media spreadsheet. */
+const ensureOldSheetSourcesDisabled = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      `UPDATE calling_lead_sheet_sources
+       SET enabled = false, "updatedAt" = NOW()
+       WHERE "spreadsheetId" <> :spreadsheetId`,
+      { replacements: { spreadsheetId: JAIPUR_AJMER_SPREADSHEET_ID } }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not disable old Google Sheet sources', { message });
+  }
+};
+
 /** One-shot: Meta CREATED must not live on dealer_lead_assignments.status. */
 const ensureCreatedCallingAssignmentRemap = async (): Promise<void> => {
   try {
@@ -499,6 +528,7 @@ const ensureCreatedCallingAssignmentRemap = async (): Promise<void> => {
 export const sequelizeBootstrap = (async (): Promise<void> => {
   try {
     await sequelize.authenticate();
+    await ensureQuotationProposalColumn();
     await ensureInstallationReleaseColumns();
     await ensureProductUnitColumn();
     await ensureInstallationScheduledAtColumn();
@@ -513,6 +543,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureCallingActionSourceColumns();
     await ensureCallingLeadFormColumns();
     await ensureCreatedCallingAssignmentRemap();
+    await ensureOldSheetSourcesDisabled();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

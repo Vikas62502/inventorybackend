@@ -14,7 +14,15 @@ import {
   GoogleSheetsNotConfiguredError,
   resolveSpreadsheetId
 } from '../utils/hrSheetSourceSync';
-import { googleSheetsErrorResponse, isGoogleSheetsCredentialsError } from '../utils/hrSheetGoogleAuth';
+import {
+  filterAllowedSocialSheetTabs,
+  googleSheetsErrorResponse,
+  isGoogleSheetsCredentialsError
+} from '../utils/hrSheetGoogleAuth';
+import {
+  disableSheetSourcesOnOtherSpreadsheets,
+  runHrSheetSourcesWriteBackAll
+} from '../utils/hrSheetWriteBack';
 import { mapSheetSourceForApi, mapSocialLeadForApi } from '../utils/hrSheetSourceApi';
 import {
   assignCreatedSheetSourceLeads,
@@ -85,11 +93,12 @@ export const discoverHrSheetTabs = async (req: Request, res: Response): Promise<
 
     const sheets = getSheetsClient();
     const meta = await sheets.spreadsheets.get({ spreadsheetId });
-    const tabs = (meta.data.sheets || [])
-      .map((s) => s.properties?.title)
-      .filter((title): title is string => Boolean(title));
+    const tabs = filterAllowedSocialSheetTabs(
+      (meta.data.sheets || []).map((s) => s.properties?.title)
+    );
+    await disableSheetSourcesOnOtherSpreadsheets(spreadsheetId);
 
-    // Upsert live tabs, then delete DB rows for renamed/removed Google tabs (UI must match 1:1).
+    // Upsert Jaipur / Ajmer only, then delete DB rows for other tabs on this spreadsheet.
     const live: CallingLeadSheetSource[] = [];
     for (const tab of tabs) {
       const [row] = await CallingLeadSheetSource.findOrCreate({
@@ -315,9 +324,10 @@ export const runHrSheetSourcesSyncAll = async (opts?: {
   try {
     const sheets = getSheetsClient();
     const meta = await sheets.spreadsheets.get({ spreadsheetId });
-    const liveTabs = (meta.data.sheets || [])
-      .map((s) => s.properties?.title)
-      .filter((title): title is string => Boolean(title));
+    const liveTabs = filterAllowedSocialSheetTabs(
+      (meta.data.sheets || []).map((s) => s.properties?.title)
+    );
+    await disableSheetSourcesOnOtherSpreadsheets(spreadsheetId);
     if (liveTabs.length) {
       await CallingLeadSheetSource.destroy({
         where: {
@@ -405,8 +415,31 @@ export const runHrSheetSourcesSyncAll = async (opts?: {
 };
 
 /**
+ * POST /hr/sheet-sources/write-back-all
+ * Cron / HR: DB → sheet + stale reassign. Every 2 hours (x-cron-secret).
+ */
+export const postHrSheetSourcesWriteBackAll = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const data = await runHrSheetSourcesWriteBackAll({
+      spreadsheetId: (body.spreadsheetId ?? body.spreadsheet_id) as string | undefined
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    const mapped = googleSheetsErrorResponse(error, 'Write-back-all failed');
+    if (!(error instanceof GoogleSheetsNotConfiguredError)) {
+      logError('postHrSheetSourcesWriteBackAll error', error, { code: mapped.code });
+    }
+    res.status(mapped.status).json({
+      success: false,
+      error: { code: mapped.code, message: mapped.message }
+    });
+  }
+};
+
+/**
  * POST /hr/sheet-sources/sync-all
- * Cron / HR: sync every enabled sheet source for the spreadsheet.
+ * Cron / HR: sync every enabled sheet source for the spreadsheet (every 10 min).
  * Auth: HR JWT (via route middleware) OR x-cron-secret === CRON_SECRET.
  */
 export const postHrSheetSourcesSyncAll = async (req: Request, res: Response): Promise<void> => {

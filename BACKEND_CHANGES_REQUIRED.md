@@ -2854,6 +2854,66 @@ Example: paid ₹1,70,000, bill ₹0 → GST ₹0, profit ₹0, remaining ₹0.
 
 ---
 
+## §CC — Jaipur / Ajmer sheet + 10-min pull + 2-hour write-back — Oct 26 2026
+
+**Status: implemented** — HANDOFF **§84** (FE notes §67 / their §BU) · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `BACKEND_ADMIN_QUOTATION_STATUS.ts`
+
+`GOOGLE_SHEETS_SPREADSHEET_ID=1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk`. Share that sheet with the service account as Editor.
+
+| Item | Behaviour |
+|------|-----------|
+| Discover | Upsert only tabs named **Jaipur** and **Ajmer**. Disable sources where spreadsheet id ≠ this one |
+| Pull | Every **10 min** `POST /api/hr/sheet-sources/sync-all` (`x-cron-secret`) |
+| Write-back | Every **2 hours** `POST /api/hr/sheet-sources/write-back-all` — Assigned Dealer, status, Remarks, 1st/2nd Call, Final Decision, Address. Immediate after assign / call / revert |
+| Call columns | `first_call_response` / `second_call_response` = plain `status_text` (`Call Unanswered`, `Interested`). Never `[call_connectivity] Call Unanswered` |
+| CREATED | Still import and assign to that tab's dealer pool. Assignment Status is not left blank |
+| Stale reassign | Assigned, no action, dealer not live in 24h → random other dealer in the same tab pool who was live in 24h |
+
+SQL (one-shot, also on boot):
+
+```sql
+UPDATE calling_lead_sheet_sources
+SET enabled = false, "updatedAt" = NOW()
+WHERE "spreadsheetId" <> '1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk';
+```
+
+### Done when
+
+- [x] Discover returns Jaipur / Ajmer only
+- [x] Old spreadsheet sources disabled
+- [x] Sync-all every 10 min; write-back-all every 2 hours
+- [x] Sheet 1st/2nd Call is plain status_text
+- [x] CREATED rows still import and assign
+
+---
+
+## §CD — Accounts Proposal on admin approve — Oct 26 2026
+
+**Status: implemented** — HANDOFF **§85** (FE notes §68 / their §BV) · `BACKEND_APPROVE_PROPOSAL.ts` · `BACKEND_ADMIN_QUOTATION_STATUS.ts`
+
+No new HTTP path. Column: `quotations.proposal NUMERIC(14,2)`. `subvendor_ledger.proposal` already exists.
+
+`PATCH /admin/quotations/:quotationId/status`
+
+| Payment type | Persist |
+|--------------|---------|
+| Loan / Cash + loan | `body.proposal` (or `proposalAmount`) required, INR > 0. Else 400 `VAL_PROPOSAL` |
+| Cash | `quotations.proposal` = quotation subtotal. Body may omit proposal |
+| Reject | `quotations.proposal = null`. Do not delete the ledger row |
+
+Then upsert ledger: set only `proposal` (and loan if saved). Do not wipe PI / GST / others. If the ledger upsert fails, still return 200 for the approve.
+
+Echo `proposal` on PATCH, GET list (`status=approved`), and GET detail.
+
+### Done when
+
+- [x] Loan/mix without proposal → 400 `VAL_PROPOSAL`
+- [x] Cash approve stores subtotal as proposal
+- [x] Ledger proposal upsert is partial and non-fatal
+- [x] GET list/detail echo `proposal`
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |

@@ -120,6 +120,8 @@
 | 108 | High | Vendor Outside bills persist (GET/PUT `/admin/subvendors/:id/bills`) | **Done** | §81 / REQUIRED §BX / `BACKEND_SUBVENDOR_BILLS.ts` |
 | 109 | High | Vendor Office / Outside Paid = SUM(installment paidAmount) | **Done** | §82 / REQUIRED §BX / `BACKEND_INSTALLMENT_REPLACE.ts` |
 | 110 | High | Vendor Outside bill ₹0 → GST / profit / remaining ₹0 | **Done** | §83 / REQUIRED §CB / `BACKEND_SUBVENDOR_LEASER.ts` |
+| 111 | High | Jaipur/Ajmer sheet + 10-min pull + 2-hour write-back (plain status_text) | **Done** | §84 / REQUIRED §CC / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
+| 112 | High | Accounts Proposal persisted on admin approve | **Done** | §85 / REQUIRED §CD / `BACKEND_APPROVE_PROPOSAL.ts` |
 
 **Deploy before QA:**
 
@@ -3023,7 +3025,7 @@ Meter Pending queue = `pending_metering` / `metering_in_progress` only — **not
 
 | Item | Detail |
 |------|--------|
-| Spreadsheet | `18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0` |
+| Spreadsheet | `1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk` (Jaipur / Ajmer). Old `18zqPIpa…` disabled |
 | Env | `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`, `CRON_SECRET` |
 | DB | `calling_lead_sheet_sources`; extend `calling_lead_upload_batches`, `calling_leads` |
 | Routes | `GET /hr/sheet-sources`, `POST discover`, `PATCH :id`, `POST :id/sync`, `POST sync-all`, `GET :id/leads` |
@@ -3031,11 +3033,11 @@ Meter Pending queue = `pending_metering` / `metering_in_progress` only — **not
 | Sync mapper (P0) | Meta: `phone_number`→`mobile` (last 10), `id`→`external_id`, `full_name`→`name`, `lead_status`→`lead_status`; optional `platform`/`campaign_name`/`ad_name`/`created_time`; ignore `ad_id`/`adset_*`/`campaign_id`/`form_id`/`is_organic` (raw OK) |
 | Assign | `dealer_ids` + `active_cap` on source — **not** sheet columns |
 | Lead API echo | `mobile`, `name`, `leadStatus`, `finalDecision`, `remarks`, `platform`, `campaignName`, `adName`, `assignedDealerId`, `assignedDealerName`, `externalId` |
-| Auto-sync | Cron **30 min** → `POST /hr/sheet-sources/sync-all` + `calling:uploads-updated` (§AZ) |
+| Auto-sync | Cron **10 min** → `POST /hr/sheet-sources/sync-all` + `calling:uploads-updated` |
 | Socket (P0) | After assign: `io.to("stream:hr").to("stream:dealers").emit("calling:uploads-updated", { reason: sheet_sync \| sheet_auto_sync, spreadsheetId, sourceId?, syncedAt })` + optional `backend:mutation` → `stream:backend`. See REQUIRED **§AP**. |
-| Write-back (P0) | After assign + calling → `writeBackHrLeadToSheet`: Assigned Dealer, Assignment Status (truncated OK), Remarks, call responses, Final Decision, **Address** (create col if missing). See REQUIRED **§AQ**. |
+| Write-back (P0) | Immediate after assign / call / revert; cron **2 hours** → `POST /hr/sheet-sources/write-back-all` + stale reassign. Call columns = plain `status_text` only. See REQUIRED **§CC**. |
 
-**Live tabs (current sheet):** `Jaipur Leads`, `Ajmer Leads`, `Crompton Leads` (+ `Ajmer Solar Lead Form New` when present)
+**Live tabs:** `Jaipur`, `Ajmer` only. Discover does not upsert other tabs. See **§84**.
 
 **Code:** `controllers/hrSheetSourceController.ts`, `utils/hrSheetSourceSync.ts`, `utils/hrSheetWriteBack.ts`, `utils/hrSheetGoogleAuth.ts`, `utils/hrSheetSourceApi.ts`, `utils/realtime.ts` (`emitSheetSyncUploadsUpdated`), `routes/hrLeadRoutes.ts`
 
@@ -3850,4 +3852,34 @@ No new route. Payments-first then Bills is UI only — do not reorder GET leaser
 | GET/PUT bills | Echo `billSum` (0 when empty). Do not compute GST / profit on this route |
 | Helpers | `officeOutsideLeaserGst` / `officeOutsideLeaserProfit` / `officeOutsideLeaserRemaining` |
 | Example | Paid ₹1,70,000, bill ₹0 → GST ₹0, profit ₹0, remaining ₹0 |
+
+## 84. Jaipur / Ajmer sheet + 10-min pull + 2-hour write-back — Oct 26 2026
+
+**Status: implemented** — REQUIRED **§CC** (FE notes §67 / their §BU) · `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` · `BACKEND_ADMIN_QUOTATION_STATUS.ts`
+
+| Item | Detail |
+|------|--------|
+| Spreadsheet | `GOOGLE_SHEETS_SPREADSHEET_ID=1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk` — share with the service account as Editor |
+| Discover | Upsert only tabs named Jaipur and Ajmer. Disable sources on any other spreadsheet id |
+| Pull | Every **10 min** `POST /hr/sheet-sources/sync-all` (`x-cron-secret`) |
+| Write-back | Every **2 hours** `POST /hr/sheet-sources/write-back-all` — Assigned Dealer, status, Remarks, 1st/2nd Call, Final Decision, Address. Immediate after assign / call / revert |
+| Call columns | `first_call_response` / `second_call_response` = DB `status_text` (`Call Unanswered`, `Interested`). Never `[call_connectivity] …` |
+| CREATED | Still import and assign to that tab's dealer pool (Assignment Status not left blank) |
+| Stale reassign | Assigned, no action, dealer not live in 24h → random other dealer in the same tab pool who was live in 24h |
+
+Code: `utils/hrSheetGoogleAuth.ts`, `utils/sheetAutoSyncCron.ts`, `utils/sheetWriteBackCron.ts`, `utils/hrSheetWriteBack.ts`, `utils/callingSheetDecision.ts`, `controllers/hrSheetSourceController.ts`, `controllers/callingLeadController.ts`, `routes/hrLeadRoutes.ts`.
+
+## 85. Accounts Proposal on admin approve — Oct 26 2026
+
+**Status: implemented** — REQUIRED **§CD** (FE notes §68 / their §BV) · `BACKEND_APPROVE_PROPOSAL.ts`
+
+No new route. `PATCH /admin/quotations/:quotationId/status`.
+
+| Payment type | Persist |
+|--------------|---------|
+| Loan / Cash + loan | `body.proposal` (or `proposalAmount`) required, INR > 0. Else 400 `VAL_PROPOSAL` |
+| Cash | `quotations.proposal` = quotation subtotal. Body may omit proposal |
+| Reject | `quotations.proposal = null`. Do not delete the ledger row |
+
+Then upsert `subvendor_ledger` for that quotation: set only `proposal` (and loan if saved). Do not wipe PI / GST / others. Ledger failure is non-fatal (approve still 200). Echo `proposal` on PATCH, GET list (`status=approved`), and GET detail.
 

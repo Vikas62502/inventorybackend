@@ -1,6 +1,6 @@
 # Google Sheets — Social Media Leads (HR Panel)
 
-**Spreadsheet:** `https://docs.google.com/spreadsheets/d/18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0`
+**Spreadsheet:** `https://docs.google.com/spreadsheets/d/1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk`
 
 **Reference implementation:** `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts`  
 **Frontend:** `lib/google-sheets-social-leads.ts`, `components/hr-social-media-sheets-panel.tsx`, HR → **Social Media** tab
@@ -22,7 +22,7 @@
 
 | Feature | Detail |
 |---------|--------|
-| Sheet tabs | **Live sheet only** — currently `Jaipur Leads`, `Ajmer Leads`, `Crompton Leads`, `Ajmer Solar Lead Form New` → HR sub-tabs when enabled |
+| Sheet tabs | **Jaipur** and **Ajmer** only |
 | Discover | Upsert live tabs + **delete** DB rows for tabs removed/renamed in Google Sheets (UI must match sheet 1:1) |
 | Toggle | When **ON**, dealer checkbox pool appears (same as CSV Assignment) |
 | Sync | Pulls new rows from Google Sheet → database → round-robin assign (`active_cap`, default 1/dealer) |
@@ -147,13 +147,14 @@ Do **not** rewrite Meta columns. Match by `external_id` or `sheet_row_index`. Ad
 
 ---
 
-## Auto-sync every 15 minutes (P0) + socket for UI
+## Auto-sync every 10 minutes (P0) + 2-hour write-back + socket for UI
 
 Google Sheets **cannot push** into our app. A WebSocket alone cannot replace polling the sheet.
 
 | Layer | Role |
 |-------|------|
-| **Backend cron (every 15 min)** | Pulls enabled tabs via `POST /hr/sheet-sources/sync-all` |
+| **Backend cron (every 10 min)** | Pulls enabled tabs via `POST /hr/sheet-sources/sync-all` |
+| **Write-back (every 2 hours)** | `POST /hr/sheet-sources/write-back-all` + stale reassign |
 | **Socket `calling:uploads-updated`** | After cron/manual sync → rooms `stream:hr` + `stream:dealers` (`sheet_sync` / `sheet_auto_sync`) |
 | **Manual Sync now** | Immediate pull when HR needs it now |
 | **SPA 15‑min soft refresh** | Fallback if socket was missed |
@@ -165,7 +166,7 @@ Google Sheets **cannot push** into our app. A WebSocket alone cannot replace pol
 
 ```env
 CRON_SECRET=long-random-string
-GOOGLE_SHEETS_SPREADSHEET_ID=18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0
+GOOGLE_SHEETS_SPREADSHEET_ID=1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk
 ```
 
 ---
@@ -180,7 +181,7 @@ GOOGLE_SHEETS_SPREADSHEET_ID=18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0
   "sources": [
     {
       "id": "uuid",
-      "spreadsheetId": "18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0",
+      "spreadsheetId": "1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk",
       "sheetTabName": "Ajmer_Leads",
       "displayName": "Ajmer Leads",
       "enabled": true,
@@ -205,7 +206,7 @@ GOOGLE_SHEETS_SPREADSHEET_ID=18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0
   "success": true,
   "tabs": ["Jaipur Leads", "Ajmer Leads", "Crompton Leads", "Ajmer Solar Lead Form New"],
   "data": {
-    "spreadsheetId": "18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0",
+    "spreadsheetId": "1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk",
     "tabs": ["Jaipur Leads", "Ajmer Leads", "Crompton Leads", "Ajmer Solar Lead Form New"]
   }
 }
@@ -265,7 +266,7 @@ Reuse existing allocator from `BACKEND_ASSIGN_UNASSIGNED.ts`:
 ## Environment variables (backend)
 
 ```env
-GOOGLE_SHEETS_SPREADSHEET_ID=18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0
+GOOGLE_SHEETS_SPREADSHEET_ID=1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk
 GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
 # OR
 GOOGLE_APPLICATION_CREDENTIALS=/secure/path/service-account.json

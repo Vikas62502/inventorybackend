@@ -5,9 +5,9 @@
  * =============================================================================
  *
  * Spreadsheet (production):
- *   https://docs.google.com/spreadsheets/d/18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0
+ *   https://docs.google.com/spreadsheets/d/1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk
  *
- * Each tab (e.g. Ajmer_Leads, Jaipur_Leads) becomes an HR panel sub-tab when enabled.
+ * Discover upserts only tabs named Jaipur and Ajmer. Share with the service account as Editor.
  * Sync reads new rows, stores in DB, runs same round-robin allocator as CSV upload.
  *
  * Frontend:
@@ -41,7 +41,13 @@
 import { google } from "googleapis"
 import { Op } from "sequelize"
 
-const DEFAULT_SPREADSHEET_ID = "18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0"
+const DEFAULT_SPREADSHEET_ID = "1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk"
+const SOCIAL_SHEET_ALLOWED_TABS = ["Jaipur", "Ajmer"]
+
+const isAllowedSocialSheetTab = (title) => {
+  const key = String(title || "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ")
+  return key === "jaipur" || key === "ajmer" || key.startsWith("jaipur ") || key.startsWith("ajmer ")
+}
 
 // -----------------------------------------------------------------------------
 // DB tables (suggested)
@@ -290,8 +296,9 @@ function getSheetsClient() {
  * DB → Sheet write-back (P0 / REQUIRED §AQ + §BV) — utils/hrSheetWriteBack.ts
  *
  * After assign + calling CRM updates, call scheduleHrLeadSheetWriteBack(leadId).
- * Calling PATCH Connected / Move persists final_decision + second_call_response first (§BV),
- * then write-back pushes Final Decision / 2nd Call Response to the sheet (immediate; cron ≤1h fallback).
+ * Calling PATCH persists first_call_response / second_call_response as plain status_text
+ * ("Call Unanswered" / "Interested") — never a tagged call_remark.
+ * Write-back is immediate after assign / call / revert; cron every 2 hours is the fallback.
  * Scope: https://www.googleapis.com/auth/spreadsheets (Editor on spreadsheet).
  *
  * Writes (create header if missing; match truncated headers e.g. Assignment Stat):
@@ -581,7 +588,9 @@ export async function discoverHrSheetTabs(req, res) {
   const spreadsheetId = req.body?.spreadsheetId || req.body?.spreadsheet_id || DEFAULT_SPREADSHEET_ID
   const sheets = getSheetsClient()
   const meta = await sheets.spreadsheets.get({ spreadsheetId })
-  const tabs = (meta.data.sheets || []).map((s) => s.properties?.title).filter(Boolean)
+  const tabs = (meta.data.sheets || [])
+    .map((s) => s.properties?.title)
+    .filter((title) => title && isAllowedSocialSheetTab(title))
 
   // 1) Upsert live tabs so GET /sheet-sources returns real ids (not local-* placeholders).
   const live = []
@@ -666,7 +675,7 @@ export async function postHrSheetSourceSync(req, res) {
 /**
  * POST /api/hr/sheet-sources/sync-all
  * Cron / ops: sync every **enabled** sheet source for the default spreadsheet.
- * Recommended schedule: every **30 minutes** (§AZ).
+ * Recommended schedule: every **10 minutes**.
  * Emits `calling:uploads-updated` once at the end (reason: sheet_auto_sync).
  *
  * Auth: HR JWT, or header `x-cron-secret` matching CRON_SECRET env.
@@ -751,15 +760,17 @@ export async function getHrSheetSourceLeads(req, res) {
 router.get("/hr/sheet-sources", authHr, listHrSheetSources)
 router.post("/hr/sheet-sources/discover", authHr, discoverHrSheetTabs)
 router.post("/hr/sheet-sources/sync-all", authHrOrCron, postHrSheetSourcesSyncAll) // BEFORE :id routes
+router.post("/hr/sheet-sources/write-back-all", authHrOrCron, postHrSheetSourcesWriteBackAll)
 router.patch("/hr/sheet-sources/:id", authHr, patchHrSheetSource)
 router.post("/hr/sheet-sources/:id/sync", authHr, postHrSheetSourceSync)
 router.post("/hr/sheet-sources/:id/assign-created", authHr, postHrSheetSourceAssignCreated)
 router.get("/hr/sheet-sources/:id/leads", authHr, getHrSheetSourceLeads)
 
-Cron (required for auto-sync — Google Sheets cannot push via socket):
-  every 30 min  POST /hr/sheet-sources/sync-all  (header x-cron-secret)
-  In-process: utils/sheetAutoSyncCron.ts (SHEET_AUTO_SYNC_CRON / INTERVAL_MS)
-  After each run emit calling:uploads-updated so HR/dealer UIs refresh.
+Cron (x-cron-secret):
+  every 10 min   POST /hr/sheet-sources/sync-all         sheet → DB → Current Lead
+  every 2 hours  POST /hr/sheet-sources/write-back-all   DB → sheet + stale reassign
+  In-process: utils/sheetAutoSyncCron.ts + utils/sheetWriteBackCron.ts
+  After sync emit calling:uploads-updated so HR/dealer UIs refresh.
 */
 
 // -----------------------------------------------------------------------------
@@ -767,17 +778,44 @@ Cron (required for auto-sync — Google Sheets cannot push via socket):
 // -----------------------------------------------------------------------------
 /*
 1. Share spreadsheet with service account email (Editor).
-2. POST discover → tabs include Ajmer_Leads.
+2. POST discover → tabs are Jaipur and Ajmer only.
 3. PATCH source enabled=true, dealerIds=[…].
 4. POST sync → imported N rows; hr_leads created; assigned via active_cap.
 5. HR Social Media tab shows coloured status badges.
 6. Dealer Calling Data queue receives assigned leads.
 7. Re-sync skips duplicate mobiles.
 8. Upload with assignmentMode=round_robin_all → queuedAtUpload 0.
-9. Sheet lead_status=CREATED assigned to dealer → /current returns status=assigned
-   (not CREATED) and lead_status=CREATED. Dealer Calling Data shows Start Call.
-10. Enable Chairbord - Ajme Leads, save dealer pool, Sync or POST assign-created.
+9. CREATED rows still import and assign to that tab's dealer pool (or another
+   enabled tab's pool) and appear in Current Lead. Sheet Assignment Status is
+   not left blank (e.g. 14 sheet rows → 14 assigned).
+10. Enable Jaipur / Ajmer, save dealer pool, Sync or POST assign-created.
 */
+
+/**
+ * CHANGELOG Oct 26 2026 — Jaipur / Ajmer sheet + 10-min pull + 2-hour write-back  ← APPLY THIS
+ *   1. Default spreadsheet is the new id (not 18zqPIpa…). Discover upserts only
+ *      tabs named Jaipur and Ajmer. Disable/delete sources on the old spreadsheet.
+ *   2. Sheet → DB: POST /hr/sheet-sources/sync-all every **10 minutes**.
+ *   3. DB → sheet: POST /hr/sheet-sources/write-back-all every **2 hours**
+ *      (Assigned Dealer, status, Remarks, 1st/2nd Call, Final Decision, Address)
+ *      + stale reassign. Still write back immediately after assign / call / revert.
+ *   4. Call columns are DB status_text only ("Call Unanswered"), never
+ *      "[call_connectivity] Call Unanswered".
+ *   5. Stale reassign: assigned, no action, dealer not live in 24h → random other
+ *      dealer in the same tab pool who was live in 24h.
+ *   SQL:
+ *     UPDATE calling_lead_sheet_sources
+ *     SET enabled = false, "updatedAt" = NOW()
+ *     WHERE "spreadsheetId" <> '1XOBfLVkqJ6NHe8s1t-FAZXhwWUFwGfp3WwSYdHBriqk';
+ *
+ * CHANGELOG Oct 26 2026 — sheet write-back uses plain status_text  ← APPLY THIS
+ *   first_call_response / second_call_response = parsed.status ("Call Unanswered")
+ *   NEVER store or send call_remark tagged string ("[call_connectivity] …") to the sheet.
+ *
+ * CHANGELOG Oct 26 2026 — sheet 2nd call is status_text, not tagged callRemark
+ *   applyConnectedOutcomePatch: second_call_response = statusText
+ *   ("Interested"), never "[customer_intent] Interested | …".
+ */
 
 /**
  * CHANGELOG Oct 22 2026 — Meta CREATED is not calling status

@@ -8,6 +8,7 @@ import logger from './config/logger';
 import { sequelizeBootstrap } from './config/sequelizeBootstrap';
 import { attachRealtimeServer, emitRealtime, realtimeEvents } from './utils/realtime';
 import { startSheetAutoSyncCron } from './utils/sheetAutoSyncCron';
+import { startSheetWriteBackCron } from './utils/sheetWriteBackCron';
 
 dotenv.config();
 
@@ -246,8 +247,9 @@ void sequelizeBootstrap.then(() => {
       swaggerUrl: `http://localhost:${listenPort}/api-docs`,
       websocketPath: `http://localhost:${listenPort}/socket.io`
     });
-    // §AZ — HR Social Media auto-sync every 30 min (pull sheet + calling:uploads-updated)
+    // HR Social Media: sheet → DB every 10 min; DB → sheet + stale reassign every 2 hours
     startSheetAutoSyncCron();
+    startSheetWriteBackCron();
   });
 });
 

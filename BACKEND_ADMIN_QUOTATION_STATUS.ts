@@ -13,8 +13,10 @@
  *
  *   PATCH /admin/quotations/:quotationId/status
  *   Body when approving:
- *     { status: "approved", paymentType, paymentMode, bankName?, bankIfsc?, subsidyChequeDetails? }
+ *     { status: "approved", paymentType, paymentMode, proposal?, proposalAmount?, bankName?, bankIfsc?, subsidyChequeDetails? }
  *   - paymentType and paymentMode are the same value: "loan" | "cash" | "mix" (UI label for mix: "Cash + loan")
+ *   - Proposal (BACKEND_APPROVE_PROPOSAL.ts): loan/mix require body.proposal (INR > 0) else 400 VAL_PROPOSAL;
+ *     cash → quotations.proposal = subtotal. Echo on PATCH + GET list/detail. Upsert ledger proposal only (non-fatal).
  *   - For mix: also persist loanAmount + cashAmount (must sum to quotation subtotal) — see BACKEND_CASH_LOAN_AMOUNTS.md
  *   - For loan: persist loanAmount; clear cashAmount
  *   - For cash: clear loanAmount / cashAmount
@@ -89,6 +91,25 @@
 
 const PAYMENT_TYPES = ["loan", "cash", "mix"]
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/
+
+/** Loan / mix: required INR > 0. Missing / 0 / invalid → null. */
+export function parseApproveProposalAmount(raw) {
+  if (raw === undefined || raw === null || raw === "") return null
+  const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[₹,\s]/g, ""))
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.round(n)
+}
+
+/** Partial ledger upsert: proposal (+ loanAmount if saved). Never reset PI / GST / others. */
+async function upsertSubvendorLedgerProposal(quotationId, { proposal, loanAmount }) {
+  const patch = { proposal }
+  if (loanAmount != null) patch.loanAmount = loanAmount
+  const [row] = await SubvendorLedger.findOrCreate({
+    where: { quotationId },
+    defaults: { quotationId, ...patch },
+  })
+  await row.update(patch)
+}
 
 function normalizePaymentType(raw) {
   if (typeof raw !== "string") return null
@@ -301,6 +322,21 @@ export async function patchAdminQuotationStatus(req, res) {
       // Keep file-login type in sync so list UIs that still read filePaymentType stay correct.
       updates.filePaymentType = paymentType
 
+      // Accounts Proposal — BACKEND_APPROVE_PROPOSAL.ts
+      if (paymentType === "cash") {
+        updates.proposal = quotationSubtotal
+      } else {
+        const proposal = parseApproveProposalAmount(body.proposal ?? body.proposalAmount ?? body.proposal_amount)
+        if (proposal == null) {
+          res.status(400).json({
+            success: false,
+            error: { code: "VAL_PROPOSAL", message: "proposal required for loan/mix approval (INR > 0)" },
+          })
+          return
+        }
+        updates.proposal = proposal
+      }
+
       if (paymentType === "loan" || paymentType === "mix") {
         const bankName = typeof body.bankName === "string" ? body.bankName.trim() : ""
         const ifsc = normalizeIfsc(body.bankIfsc ?? body.bank_ifsc)
@@ -343,10 +379,22 @@ export async function patchAdminQuotationStatus(req, res) {
       updates.paymentType = null
       updates.loanAmount = null
       updates.cashAmount = null
+      updates.proposal = null
       updates.subsidyChequeDetails = null
     }
 
     await quotation.update(updates)
+    if (statusRaw === "approved") {
+      try {
+        // Upsert ledger proposal only — do not wipe PI / GST / others. Failure is non-fatal.
+        await upsertSubvendorLedgerProposal(quotationId, {
+          proposal: updates.proposal,
+          loanAmount: updates.loanAmount,
+        })
+      } catch (e) {
+        console.error("ledger proposal upsert failed (approve still 200)", e)
+      }
+    }
     await quotation.reload()
 
     res.json({
@@ -358,6 +406,7 @@ export async function patchAdminQuotationStatus(req, res) {
         paymentType: quotation.paymentType ?? quotation.paymentMode,
         loanAmount: quotation.loanAmount ?? quotation.loan_amount ?? null,
         cashAmount: quotation.cashAmount ?? quotation.cash_amount ?? null,
+        proposal: quotation.proposal ?? quotation.proposalAmount ?? null,
         bankName: quotation.bankName,
         bankIfsc: quotation.bankIfsc,
         subsidyChequeDetails: quotation.subsidyChequeDetails ?? quotation.subsidy_cheque_details ?? null,
@@ -1630,6 +1679,14 @@ export async function patchDealerCallingQueueAction(req, res, db) {
 
       // Maintain legacy combined string if you have the column.
       updates.call_remark = `[${normalizedCategory}] ${parsed.status}${parsed.remark ? ` | ${parsed.remark}` : ""}`
+
+      // Sheet 1st/2nd Call = plain status_text only ("Call Unanswered").
+      // NEVER store tagged call_remark ("[call_connectivity] Call Unanswered") on those columns.
+      if (normalizedCategory === "call_connectivity" || !updates.first_call_response) {
+        updates.first_call_response = parsed.status
+      } else {
+        updates.second_call_response = parsed.status
+      }
     }
 
     // Persist:
@@ -1837,7 +1894,8 @@ export async function patchDealerCallingQueueAction(req, res, db) {
  * Connected -> Interested:
  * - statusCategory: customer_intent (or schedule when moved to visit/sales step)
  * - action: called
- * - persists finalDecision=Interested + secondCallResponse (§BV) → sheet write-back
+ * - persists finalDecision=Interested + secondCallResponse = status_text ("Interested")
+ *   never "[customer_intent] Interested | …" → sheet write-back
  *
  * Connected -> Not Interested:
  * - statusCategory: competition
@@ -2148,4 +2206,16 @@ export async function postAdminFinalConfirmationDocuments(req: any, res: any) {
  *     upload.fields(FINAL_CONFIRMATION_UPLOAD_FIELDS.map((name) => ({ name, maxCount: 1 }))),
  *     postAdminFinalConfirmationDocuments,
  *   )
+ *
+ * CHANGELOG Oct 26 2026 — Proposal amount on approve  ← APPLY THIS
+ *   Dedicated copy-paste: BACKEND_APPROVE_PROPOSAL.ts
+ *   Loan / Cash + loan: body.proposal (or proposalAmount) required, INR > 0.
+ *
+ * CHANGELOG Oct 26 2026 — sheet write-back uses plain status_text  ← APPLY THIS
+ *   first_call_response / second_call_response = parsed.status ("Call Unanswered")
+ *   NEVER store or send call_remark tagged string ("[call_connectivity] …") to the sheet.
+ *
+ * CHANGELOG Oct 26 2026 — sheet 2nd call is status_text, not tagged callRemark
+ *   applyConnectedOutcomePatch: second_call_response = statusText
+ *   ("Interested"), never "[customer_intent] Interested | …".
  */

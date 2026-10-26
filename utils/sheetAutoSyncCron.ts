@@ -1,12 +1,12 @@
 import { logError, logInfo } from './loggerHelper';
 import { GoogleSheetsNotConfiguredError, googleSheetsErrorResponse } from './hrSheetGoogleAuth';
 
-const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
+const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
 
 /**
- * §AZ — in-process cron: every 30 minutes pull Google Sheet → sync-all + socket.
+ * In-process cron: every 10 minutes pull Google Sheet → sync-all + socket.
  * Disable with SHEET_AUTO_SYNC_CRON=false. Override interval via SHEET_AUTO_SYNC_INTERVAL_MS.
- * Ops may still schedule external cron every 30 min:
+ * Ops may still schedule external cron every 10 min:
  *   curl -X POST …/hr/sheet-sources/sync-all -H "x-cron-secret: $CRON_SECRET"
  */
 export const startSheetAutoSyncCron = (): void => {

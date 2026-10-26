@@ -55,7 +55,7 @@ const outcomes = {
  *   On Connected outcomes (and Move → Connected), PATCH also persists on calling_leads:
  *     finalDecision / final_decision     → Interested | Not Interested | Pending
  *     finalDecisionReason / final_decision_reason → free remark (transfer message)
- *     secondCallResponse / second_call_response → full tagged callRemark
+ *     secondCallResponse / second_call_response → plain status_text ("Interested"), never tagged callRemark
  *   SPA may send finalDecision / secondCallResponse (camel + snake); else derived from status_text / action.
  *   Not Connected (statusCategory = call_connectivity) → omit Final Decision.
  *   After PATCH, if lead.sheetSourceId set → scheduleHrLeadSheetWriteBack(leadId) (immediate; cron ≤1h fallback).
@@ -66,5 +66,5 @@ const outcomes = {
  *   1. Not Connected → Move → Decision Pending (+ date) → lead on Connected + Scheduled + Dialled, not on Not Connected.
  *   2. Scheduled (not yet due) → Interested → 200; lead leaves Scheduled, stays on Connected + Dialled.
  *   3. Decision Pending with future nextFollowUpAt still listed on Dialled + Connected.
- *   4. Sheet lead + Interested → DB final_decision=Interested, 2nd Call Response = tagged remark; sheet Final Decision updates.
+ *   4. Sheet lead + Interested → DB final_decision=Interested, 2nd Call Response = "Interested"; sheet Final Decision updates.
  */

@@ -35,7 +35,10 @@ import {
   resolveCallingActionSource,
   loadUploadBatchMapByIds
 } from '../utils/callingQueueSocialFields';
-import { resolveCallingSheetDecisionFields } from '../utils/callingSheetDecision';
+import {
+  plainSheetCallStatusText,
+  resolveCallingSheetDecisionFields
+} from '../utils/callingSheetDecision';
 import { buildLeadFormApiFields } from '../utils/callingLeadFormFields';
 import {
   echoCallingQueueStatus,
@@ -4861,15 +4864,31 @@ export const updateDealerCallingQueueAction = async (req: Request, res: Response
       };
 
       const persistSheetDecisionOnLead = async () => {
-        if (!sheetDecisionFields) return;
-        await CallingLead.update(
-          {
-            finalDecision: sheetDecisionFields.finalDecision,
-            finalDecisionReason: sheetDecisionFields.finalDecisionReason,
-            secondCallResponse: sheetDecisionFields.secondCallResponse
-          },
-          { where: { id: assignment.leadId }, transaction }
-        );
+        const statusText = plainSheetCallStatusText(effectiveStatusLabel);
+        const patch: Record<string, unknown> = {};
+        if (sheetDecisionFields) {
+          patch.finalDecision = sheetDecisionFields.finalDecision;
+          patch.finalDecisionReason = sheetDecisionFields.finalDecisionReason;
+          const second =
+            plainSheetCallStatusText(sheetDecisionFields.secondCallResponse) || statusText;
+          if (second) patch.secondCallResponse = second;
+        } else if (statusText) {
+          const leadRow = await CallingLead.findByPk(assignment.leadId, {
+            attributes: ['id', 'firstCallResponse'],
+            transaction
+          });
+          const category = String(effectiveStatusCategory || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\s-]+/g, '_');
+          if (category === 'call_connectivity' || !leadRow?.firstCallResponse) {
+            patch.firstCallResponse = statusText;
+          } else {
+            patch.secondCallResponse = statusText;
+          }
+        }
+        if (!Object.keys(patch).length) return;
+        await CallingLead.update(patch, { where: { id: assignment.leadId }, transaction });
       };
 
       // --- Completed assignment: history-only edit (no assignment transition guard) ---
