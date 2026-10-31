@@ -15,8 +15,10 @@
  *   Body when approving:
  *     { status: "approved", paymentType, paymentMode, proposal?, proposalAmount?, bankName?, bankIfsc?, subsidyChequeDetails? }
  *   - paymentType and paymentMode are the same value: "loan" | "cash" | "mix" (UI label for mix: "Cash + loan")
- *   - Proposal (BACKEND_APPROVE_PROPOSAL.ts): loan/mix require body.proposal (INR > 0) else 400 VAL_PROPOSAL;
- *     cash → quotations.proposal = subtotal. Echo on PATCH + GET list/detail. Upsert ledger proposal only (non-fatal).
+ *   - Proposal (BACKEND_APPROVE_PROPOSAL.ts / BACKEND_APPROVE_PROPOSAL_FIX.ts): loan/mix require
+ *     body.proposal | proposalAmount | proposal_amount (number or numeric string, INR > 0)
+ *     else 400 VAL_PROPOSAL. Schema/pick() must keep those keys. Cash → quotations.proposal = subtotal.
+ *     Echo on PATCH + GET list/detail. Upsert ledger proposal only (non-fatal).
  *   - For mix: also persist loanAmount + cashAmount (must sum to quotation subtotal) — see BACKEND_CASH_LOAN_AMOUNTS.md
  *   - For loan: persist loanAmount; clear cashAmount
  *   - For cash: clear loanAmount / cashAmount
@@ -322,11 +324,13 @@ export async function patchAdminQuotationStatus(req, res) {
       // Keep file-login type in sync so list UIs that still read filePaymentType stay correct.
       updates.filePaymentType = paymentType
 
-      // Accounts Proposal — BACKEND_APPROVE_PROPOSAL.ts
+      // Accounts Proposal — BACKEND_APPROVE_PROPOSAL.ts / BACKEND_APPROVE_PROPOSAL_FIX.ts
       if (paymentType === "cash") {
         updates.proposal = quotationSubtotal
       } else {
-        const proposal = parseApproveProposalAmount(body.proposal ?? body.proposalAmount ?? body.proposal_amount)
+        const proposal = parseApproveProposalAmount(
+          body.proposal ?? body.proposalAmount ?? body.proposal_amount
+        )
         if (proposal == null) {
           res.status(400).json({
             success: false,

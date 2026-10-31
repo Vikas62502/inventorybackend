@@ -90,7 +90,8 @@ SubvendorBill.init(
     tableName: 'subvendor_bills',
     underscored: true,
     timestamps: true,
-    freezeTableName: true
+    freezeTableName: true,
+    indexes: [{ name: 'subvendor_bills_vendor_idx', fields: ['vendor_id', 'sort_order'] }]
   }
 );
 

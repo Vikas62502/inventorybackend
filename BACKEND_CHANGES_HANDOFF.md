@@ -122,6 +122,8 @@
 | 110 | High | Vendor Outside bill ₹0 → GST / profit / remaining ₹0 | **Done** | §83 / REQUIRED §CB / `BACKEND_SUBVENDOR_LEASER.ts` |
 | 111 | High | Jaipur/Ajmer sheet + 10-min pull + 2-hour write-back (plain status_text) | **Done** | §84 / REQUIRED §CC / `BACKEND_GOOGLE_SHEETS_SOCIAL_LEADS.ts` |
 | 112 | High | Accounts Proposal persisted on admin approve | **Done** | §85 / REQUIRED §CD / `BACKEND_APPROVE_PROPOSAL.ts` |
+| 113 | High | Bank fees persist on payment-details (DB not localStorage) | **Done** | §86 / REQUIRED §CE / FE §70 / §BX / `BACKEND_BANK_FEES.ts` |
+| 114 | High | Approve 400 even when Proposal amount is filled | **Done** | §87 / REQUIRED §CF / FE §71 / §BY / `BACKEND_APPROVE_PROPOSAL_FIX.ts` |
 
 **Deploy before QA:**
 
@@ -148,6 +150,7 @@ yarn migrate
 | `20260831160000-add-office-location-and-module-field-permissions.js` | `officeLocation` + `moduleFieldPermissions` on users; quotation office scope (§39 / §AL) |
 | `20260916120000-add-settlement-remarks-to-quotations.js` | Settlement columns + `finalSettlementRemarks` (§BB / §49) |
 | `20260916140000-heal-settled-remaining-zero.js` | Heal applied=true rows → `remainingAmount=0` + `paymentStatus=completed` |
+| `20261031150000-add-bank-fees-to-quotations-and-office-outside.js` | `quotations.bank_fees` + `office_outside_records.bank_fees` (§86 / FE §70) |
 
 After migrate, optional backfill: `npx ts-node scripts/backfill-system-kw.ts`
 
@@ -3882,4 +3885,32 @@ No new route. `PATCH /admin/quotations/:quotationId/status`.
 | Reject | `quotations.proposal = null`. Do not delete the ledger row |
 
 Then upsert `subvendor_ledger` for that quotation: set only `proposal` (and loan if saved). Do not wipe PI / GST / others. Ledger failure is non-fatal (approve still 200). Echo `proposal` on PATCH, GET list (`status=approved`), and GET detail.
+
+## 86. Bank fees (loan / cash+loan; DB not localStorage) — Oct 30 2026
+
+**Status: implemented** — REQUIRED **§CE** (FE notes §70 / their §BX) · `BACKEND_BANK_FEES.ts`
+
+No new route. `yarn migrate` (or bootstrap `ADD COLUMN IF NOT EXISTS`).
+
+`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS bank_fees NUMERIC(14,2) DEFAULT 0;`
+`ALTER TABLE office_outside_records ADD COLUMN IF NOT EXISTS bank_fees NUMERIC(14,2) NOT NULL DEFAULT 0;`
+
+`PATCH /quotations/:id/payment-details` and `PATCH /admin/office-outside/:id/payment-details` persist `bankFees` / `bank_fees`. Echo on GET. Cash `paymentType` / `fileType` stores `0`.
+
+- `paid` = `SUM(installment.paidAmount)` — never add fees
+- `remaining` = subtotal − discount − bankFees − paid (quotations remaining uses amountAfterSubsidy as the base)
+- `completed` when remaining ≤ 0
+- Do not 400 `VAL_012` / `VAL_013` when paid + fees == subtotal
+- Do not treat fees as Final Settlement `d`
+- Do not use localStorage
+
+## 87. Approve 400 even when Proposal amount is filled — Oct 30 2026
+
+**Status: implemented** — REQUIRED **§CF** (FE notes §71 / their §BY) · `BACKEND_APPROVE_PROPOSAL_FIX.ts`
+
+Live bug: Admin Approve (Loan) with Proposal amount ₹1,60,000 still returned `VAL_PROPOSAL` because Zod `pick()` stripped `proposal` / `proposalAmount` / `proposal_amount`.
+
+`PATCH /admin/quotations/:id/status` reads any of those keys as a number or numeric string (`₹` / commas OK). Do not reject with `typeof !== "number"`. Schema is `.passthrough()` so the keys are not stripped.
+
+Loan / mix 400 only when none of them is INR > 0. Cash still stores subtotal. Persist and echo `quotations.proposal`. Upsert ledger proposal only.
 

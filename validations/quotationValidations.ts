@@ -510,8 +510,12 @@ export const updatePaymentDetailsSchema = z
     siteCost: z.union([z.number(), z.string()]).optional(),
     site_cost: z.union([z.number(), z.string()]).optional(),
     costOfSite: z.union([z.number(), z.string()]).optional(),
-    cost_of_site: z.union([z.number(), z.string()]).optional()
+    cost_of_site: z.union([z.number(), z.string()]).optional(),
+    /** Bank fees — number or numeric string (₹ / commas OK). Do not Number() here. */
+    bankFees: z.union([z.number(), z.string()]).optional().nullable(),
+    bank_fees: z.union([z.number(), z.string()]).optional().nullable()
   })
+  .passthrough()
   .refine(
     (data) => {
       const hasPhases =
@@ -535,12 +539,14 @@ export const updatePaymentDetailsSchema = z
         data.site_cost !== undefined ||
         data.costOfSite !== undefined ||
         data.cost_of_site !== undefined;
+      const hasBankFees = data.bankFees !== undefined || data.bank_fees !== undefined;
       const hasOther =
         data.paymentType !== undefined ||
         data.paymentMode !== undefined ||
         data.subsidyCheques !== undefined ||
         data.subsidy_cheques !== undefined ||
-        hasSiteCost;
+        hasSiteCost ||
+        hasBankFees;
       return hasPhases || isStatusOnly || hasOther;
     },
     {

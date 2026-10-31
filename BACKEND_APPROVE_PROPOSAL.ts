@@ -65,4 +65,9 @@ export { PAYMENT_TYPES };
  * CHANGELOG Oct 26 2026 — Proposal amount on approve  ← APPLY THIS
  *   Dedicated copy-paste: BACKEND_APPROVE_PROPOSAL.ts
  *   Loan / Cash + loan: body.proposal (or proposalAmount) required, INR > 0.
+ *
+ * CHANGELOG Oct 30 2026 — filled proposal still 400 VAL_PROPOSAL
+ *   Dedicated copy-paste: BACKEND_APPROVE_PROPOSAL_FIX.ts
+ *   Keep proposal / proposalAmount / proposal_amount on the Zod/Joi schema
+ *   (passthrough). Parse number or numeric string. Do not typeof !== "number".
  */

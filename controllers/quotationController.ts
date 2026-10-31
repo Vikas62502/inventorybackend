@@ -19,6 +19,7 @@ import {
   generatePublicUrl,
   isPresignedS3GetUrl,
   persistableMediaReference,
+  resolveBrowsableMediaUrlMap,
   resolveBrowsableMediaUrls,
   uploadFileToS3FromBuffer
 } from '../utils/s3Service';
@@ -37,6 +38,12 @@ import {
   pickQuotationSubtotalForPayments,
   parseSiteCostFromBody
 } from '../utils/cashLoanAmounts';
+import {
+  parseBankFeesAmount,
+  pickBankFeesRaw,
+  readBankFeesFromRow,
+  resolvePersistedBankFees
+} from '../utils/bankFees';
 import {
   quotationAmountApiFields,
   quotationPaymentApiFields,
@@ -79,7 +86,9 @@ import {
 } from '../utils/installationDocumentsApi';
 import {
   buildMeterDocumentApiFields,
+  buildMeterDocumentApiFieldsFromResolved,
   getLatestMeterDocMeta,
+  METER_DOC_PRESIGN_TTL_SECONDS,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import { meteringWorkflowApiFields } from '../utils/meteringWorkflowApi';
@@ -519,20 +528,21 @@ const sumPhasePaidAmounts = (phases: PaymentPhaseRecord[]): number =>
   phases.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
 
 /**
- * Remaining = amountAfterSubsidy − discountAmount − total paid.
- * Final Settlement writes off unpaid balance via discountAmount so remaining reaches 0.
- * Prefer amountAfterSubsidy (subtotal − subsidies), not raw subtotal.
+ * Remaining = amountAfterSubsidy − discountAmount − bankFees − total paid.
+ * Bank fees are never added to paid. Prefer amountAfterSubsidy, not raw subtotal.
  */
 const remainingPaymentAgainstSubtotal = (
   amountAfterSubsidyOrSubtotal: number | null | undefined,
   totalPaid: number,
-  discountAmount: number | null | undefined = 0
+  discountAmount: number | null | undefined = 0,
+  bankFees: number | null | undefined = 0
 ): number => {
   const base = Number(amountAfterSubsidyOrSubtotal) || 0;
   const discount = Math.max(0, Number(discountAmount) || 0);
+  const fees = Math.max(0, Number(bankFees) || 0);
   const paid = Number(totalPaid);
   const safePaid = isNaN(paid) ? 0 : paid;
-  return Math.max(0, base - discount - safePaid);
+  return Math.max(0, base - discount - fees - safePaid);
 };
 
 /** Optional server guard: Final Settlement only for cash / mix (Cash + loan), not loan-only. */
@@ -572,7 +582,8 @@ const reconcilePaymentRemainingStatus = (
   totalPaid: number,
   discountAmount: number,
   finalSettlementApplied?: boolean,
-  finalSettlementAmount?: number | null
+  finalSettlementAmount?: number | null,
+  bankFees?: number | null
 ): { remaining: number; paymentStatus: 'pending' | 'partial' | 'completed' } => {
   const settlementAmountNum = Number(finalSettlementAmount);
   const settled =
@@ -581,10 +592,12 @@ const reconcilePaymentRemainingStatus = (
   if (settled) {
     return { remaining: 0, paymentStatus: 'completed' };
   }
+  const fees = Math.max(0, Number(bankFees) || 0);
   const remaining = remainingPaymentAgainstSubtotal(
     amountAfterSubsidy,
     totalPaid,
-    discountAmount
+    discountAmount,
+    fees
   );
   const paid = Number(totalPaid) || 0;
   if (remaining > 0.01) {
@@ -592,6 +605,9 @@ const reconcilePaymentRemainingStatus = (
       remaining,
       paymentStatus: paid <= 0.01 ? 'pending' : 'partial'
     };
+  }
+  if (paid > 0.01 || fees > 0.01) {
+    return { remaining: 0, paymentStatus: 'completed' };
   }
   if (storedStatus === 'completed') {
     return { remaining: 0, paymentStatus: 'completed' };
@@ -1767,9 +1783,7 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         include: listIncludes,
         limit,
         offset,
-        order: listOrder,
-        distinct: true,
-        subQuery: false
+        order: listOrder
       });
     } else {
       quotations = await Quotation.findAndCountAll({
@@ -1777,14 +1791,19 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         include: listIncludes,
         limit,
         offset,
-        order: listOrder,
-        distinct: true,
-        subQuery: false
+        order: listOrder
       });
     }
 
     const quotationIds = quotations.rows.map((q: any) => String(q.id));
-    const phaseMap = await fetchPaymentPhasesByQuotationIds(quotationIds);
+    const [phaseMap, documentUrlByValue, meterUrlMap] = await Promise.all([
+      fetchPaymentPhasesByQuotationIds(quotationIds),
+      prefetchQuotationDocumentSignedUrls(quotations.rows.map((q: any) => (q as any).documents)),
+      resolveBrowsableMediaUrlMap(
+        quotations.rows.map((q: any) => (q as any).meterDocumentImageUrl),
+        METER_DOC_PRESIGN_TTL_SECONDS
+      )
+    ]);
 
     const formattedQuotations = await Promise.all(quotations.rows.map(async q => {
       const customer = (q as any).customer;
@@ -1792,7 +1811,9 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       const dealer = (q as any).dealer;
       const documents = (q as any).documents;
       const phaseRows = phaseMap.get(String(q.id)) || ((q as any).paymentPhases || []);
-      const resolvedDocuments = await resolveQuotationDocumentUrls(documents);
+      const resolvedDocuments = await resolveQuotationDocumentUrls(documents, {
+        urlByValue: documentUrlByValue
+      });
       
       // Calculate pricing if products exist
       const pricing = products 
@@ -1810,7 +1831,8 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
           !!(q as any).finalSettlementApplied,
           (q as any).finalSettlementAmount != null
             ? Number((q as any).finalSettlementAmount)
-            : null
+            : null,
+          readBankFeesFromRow(q as any)
         );
       const qAny = q as any;
       const row =
@@ -1844,8 +1866,14 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         installationPhotoUrls: [] as string[],
         siteCompletionImages: [] as any[]
       };
-      const meterRef = (q as any).meterDocumentImageUrl || null;
-      const meterDocumentFields = await buildMeterDocumentApiFields(meterRef);
+      const meterRef =
+        typeof (q as any).meterDocumentImageUrl === 'string' && (q as any).meterDocumentImageUrl.trim()
+          ? String((q as any).meterDocumentImageUrl).trim()
+          : (q as any).meterDocumentImageUrl || null;
+      const meterDocumentFields = buildMeterDocumentApiFieldsFromResolved(
+        meterRef,
+        typeof meterRef === 'string' ? meterUrlMap.get(meterRef) ?? null : null
+      );
 
       const productListFields = quotationProductEnrichmentFields(
         products,
@@ -2385,7 +2413,8 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
         !!(quotation as any).finalSettlementApplied,
         (quotation as any).finalSettlementAmount != null
           ? Number((quotation as any).finalSettlementAmount)
-          : null
+          : null,
+        readBankFeesFromRow(quotation as any)
       );
     const rowById = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
     const resolvedDocsAny = (resolvedDocuments || {}) as any;
@@ -2772,7 +2801,8 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
         remainingAmount: remainingPaymentAgainstSubtotal(
           amountAfterSubsidy,
           Number(quotation.paidAmount || 0),
-          computedDiscountAmount
+          computedDiscountAmount,
+          readBankFeesFromRow(quotation as any)
         ),
         validUntil: computeQuotationValidUntil(new Date())
       });
@@ -3172,7 +3202,8 @@ export const revertQuotationSystem = async (req: Request, res: Response): Promis
     const computedRemaining = remainingPaymentAgainstSubtotal(
       newAmountAfterSubsidy,
       paidForRemaining,
-      newDiscountAmount
+      newDiscountAmount,
+      readBankFeesFromRow(quotation as any)
     );
 
     await quotation.update({
@@ -3705,7 +3736,8 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
       : remainingPaymentAgainstSubtotal(
           amountAfterSubsidy,
           paidForRemaining,
-          effectiveDiscountAmount
+          effectiveDiscountAmount,
+          readBankFeesFromRow(quotation as any)
         );
     const normalizedPaymentStatus = looksLikeSettlementPricing
       ? 'completed'
@@ -3929,6 +3961,24 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     const siteCostParsed = parseSiteCostFromBody(body);
     const siteCostFields =
       siteCostParsed !== undefined ? { siteCost: siteCostParsed } : {};
+    const paymentTypeForFees =
+      paymentType ||
+      normalizePaymentType((quotation as any).paymentType) ||
+      normalizePaymentType((quotation as any).paymentMode);
+    const requestedBankFees = parseBankFeesAmount(pickBankFeesRaw(body));
+    const bodyHasBankFees = body.bankFees !== undefined || body.bank_fees !== undefined;
+    const bankFeesFields =
+      bodyHasBankFees || paymentTypeForFees === 'cash'
+        ? {
+            bankFees: resolvePersistedBankFees({
+              paymentType: paymentTypeForFees,
+              requested: requestedBankFees,
+              existing: (quotation as any).bankFees
+            })
+          }
+        : {};
+    const feesForRemaining =
+      bankFeesFields.bankFees ?? readBankFeesFromRow(quotation as any, paymentTypeForFees);
     const settlementRemarksParsed = parseOptionalFinalSettlementRemarks(body);
     const settlementFields = {
       ...(finalSettlementAmount !== undefined
@@ -3998,7 +4048,10 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         paymentStatusFromBody ?? quotation.paymentStatus,
         amGross || paymentCap,
         totalPaidAmount,
-        discountAmt
+        discountAmt,
+        undefined,
+        undefined,
+        feesForRemaining
       );
       const settlingNow = settlingRequest;
       // Final settlement with phases: never VAL_013 — flag + remaining 0 must persist (§BB).
@@ -4062,6 +4115,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
           remainingAmount: remainingStored,
           ...settlementDiscountPatch,
           ...siteCostFields,
+          ...bankFeesFields,
           ...(settlingNow ? {} : settlementFields),
           ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
           paymentPlanUpdatedBy: actorId,
@@ -4097,6 +4151,7 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
           paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
           ...settlementPatch,
           ...siteCostFields,
+          ...bankFeesFields,
           ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
           paymentPlanUpdatedBy: actorId,
           paymentPlanUpdatedAt: new Date()
@@ -4111,7 +4166,10 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         paymentStatusFromBody ?? quotation.paymentStatus,
         amountAfterSubsidyCap,
         paidAmt,
-        discountAmt
+        discountAmt,
+        undefined,
+        undefined,
+        feesForRemaining
       );
 
       // Guard: don't fake completion when an unpaid gap exists and no settlement flag was sent.
@@ -4152,10 +4210,13 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
         omitInstallationFieldsFromPaymentPatch({
           paymentMode: paymentMode !== undefined ? paymentMode : quotation.paymentMode,
           paymentType: paymentType !== undefined ? paymentType : (quotation as any).paymentType,
-          ...(paymentStatusFromBody !== undefined || bodyRemaining !== undefined
+          ...(paymentStatusFromBody !== undefined ||
+          bodyRemaining !== undefined ||
+          bankFeesFields.bankFees !== undefined
             ? { paymentStatus: resolvedPaymentStatus, remainingAmount: remainingStored }
             : {}),
           ...siteCostFields,
+          ...bankFeesFields,
           ...settlementFields,
           ...(subsidyCheques !== undefined ? { subsidyCheques } : {}),
           paymentPlanUpdatedBy: actorId,
@@ -4179,7 +4240,8 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       totalPaidSaved,
       discountAmtOut,
       !!qAny.finalSettlementApplied,
-      qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null
+      qAny.finalSettlementAmount != null ? Number(qAny.finalSettlementAmount) : null,
+      readBankFeesFromRow(quotation as any)
     );
     const subsidyChequesOut = Array.isArray(qAny.subsidyCheques) ? qAny.subsidyCheques : [];
     const rowPlain = quotation.get({ plain: true }) as unknown as Record<string, unknown>;
@@ -4515,10 +4577,12 @@ export const revertQuotationFinalSettlement = async (req: Request, res: Response
 
     newDiscountAmount = Math.max(0, Math.min(newDiscountAmount, amountAfterSubsidy));
     const finalAmount = Math.max(0, amountAfterSubsidy - newDiscountAmount);
+    const bankFeesAmt = readBankFeesFromRow(quotation as any);
     const remainingAmount = remainingPaymentAgainstSubtotal(
       amountAfterSubsidy,
       paid,
-      newDiscountAmount
+      newDiscountAmount,
+      bankFeesAmt
     );
 
     const epsilon = 0.01;
@@ -4527,7 +4591,7 @@ export const revertQuotationFinalSettlement = async (req: Request, res: Response
         ? paid > epsilon
           ? 'partial'
           : 'pending'
-        : paid > epsilon || newDiscountAmount > epsilon
+        : paid > epsilon || newDiscountAmount > epsilon || bankFeesAmt > epsilon
           ? 'completed'
           : 'pending';
 
@@ -5003,35 +5067,50 @@ const ensureQuotationDocumentUploadFieldIsValid = (
     : { valid: false, message: 'Only image or PDF uploads are allowed' };
 };
 
+const prefetchQuotationDocumentSignedUrls = async (
+  documentsList: unknown[]
+): Promise<Map<string, string | null>> => {
+  const values: string[] = [];
+  for (const documents of documentsList) {
+    if (!documents || typeof documents !== 'object') continue;
+    const json =
+      typeof (documents as { toJSON?: () => Record<string, unknown> }).toJSON === 'function'
+        ? (documents as { toJSON: () => Record<string, unknown> }).toJSON()
+        : (documents as Record<string, unknown>);
+    for (const field of QUOTATION_DOCUMENT_MEDIA_FIELDS) {
+      const value = json[field];
+      if (typeof value === 'string' && value.trim()) values.push(value.trim());
+    }
+  }
+  const unique = [...new Set(values)];
+  const map = new Map<string, string | null>();
+  await Promise.all(
+    unique.map(async (value) => {
+      map.set(value, await resolveDocumentImageUrl(value));
+    })
+  );
+  return map;
+};
+
 export const resolveQuotationDocumentUrls = async (
   documents: any,
-  options?: { sign?: boolean }
+  options?: { sign?: boolean; urlByValue?: Map<string, string | null> }
 ) => {
   const json = documents
     ? (typeof documents.toJSON === 'function' ? documents.toJSON() : { ...documents })
     : buildEmptyResolvedQuotationDocuments();
-  const mediaFields = [
-    'aadharFront',
-    'aadharBack',
-    'panImage',
-    'electricityBillImage',
-    'bankPassbookImage',
-    'geotagRoofPhoto',
-    'customerWithHousePhoto',
-    'propertyDocumentPdf',
-    'compliantAadharFront',
-    'compliantAadharBack',
-    'compliantPanImage',
-    'compliantBankPassbookImage',
-    'customerFinalBillFile',
-    'panelWarrantyFile',
-    'inverterWarrantyFile',
-    'workCompletionWarrantyFile'
-  ];
+  const mediaFields = QUOTATION_DOCUMENT_MEDIA_FIELDS;
 
   if (options?.sign !== false) {
+    const urlByValue = options?.urlByValue;
     await Promise.all(
       mediaFields.map(async (field) => {
+        const raw = json[field];
+        const trimmed = typeof raw === 'string' ? raw.trim() : '';
+        if (urlByValue && trimmed && urlByValue.has(trimmed)) {
+          json[field] = urlByValue.get(trimmed) ?? raw;
+          return;
+        }
         json[field] = await resolveDocumentImageUrl(json[field]);
       })
     );

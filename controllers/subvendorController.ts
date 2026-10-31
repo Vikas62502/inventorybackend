@@ -324,22 +324,44 @@ type OfficeOutsideLeaserTotals = {
   profit: number;
 };
 
-const sumVendorBillBasic = async (vendorId: string): Promise<number> => {
-  const bills = await SubvendorBill.findAll({
-    where: { vendorId },
-    attributes: ['basicAmount']
-  });
-  return bills.reduce((sum, row) => sum + roundInr(row.basicAmount), 0);
+const emptyOfficeOutsideLeaserTotals = (): OfficeOutsideLeaserTotals => {
+  const billSum = 0;
+  const paidAmount = 0;
+  const charges = 0;
+  const gst = officeOutsideLeaserGst({ billSum, paidAmount });
+  const profit = officeOutsideLeaserProfit({ paidAmount, billSum, charges, gst });
+  return { billSum, paidAmount, charges, gst, profit };
 };
 
-const officeOutsideLeaserTotalsForVendor = async (
-  vendorId: string
-): Promise<OfficeOutsideLeaserTotals> => {
-  const [billSum, records] = await Promise.all([
-    sumVendorBillBasic(vendorId),
+const finishOfficeOutsideLeaserTotals = (
+  billSum: number,
+  paidAmount: number,
+  charges: number
+): OfficeOutsideLeaserTotals => {
+  const gst = officeOutsideLeaserGst({ billSum, paidAmount });
+  const profit = officeOutsideLeaserProfit({ paidAmount, billSum, charges, gst });
+  return { billSum, paidAmount, charges, gst, profit };
+};
+
+const officeOutsideLeaserTotalsForVendors = async (
+  vendorIds: string[]
+): Promise<Map<string, OfficeOutsideLeaserTotals>> => {
+  const uniqueIds = [...new Set(vendorIds.filter(Boolean))];
+  const totals = new Map<string, OfficeOutsideLeaserTotals>();
+  for (const id of uniqueIds) totals.set(id, emptyOfficeOutsideLeaserTotals());
+  if (!uniqueIds.length) return totals;
+
+  const acc = new Map<string, { billSum: number; paidAmount: number; charges: number }>();
+  for (const id of uniqueIds) acc.set(id, { billSum: 0, paidAmount: 0, charges: 0 });
+
+  const [bills, records] = await Promise.all([
+    SubvendorBill.findAll({
+      where: { vendorId: { [Op.in]: uniqueIds } },
+      attributes: ['vendorId', 'basicAmount']
+    }),
     OfficeOutsideRecord.findAll({
-      where: { vendorId },
-      attributes: ['installmentsJson'],
+      where: { vendorId: { [Op.in]: uniqueIds } },
+      attributes: ['vendorId', 'installmentsJson'],
       include: [
         {
           model: OfficeOutsideLedger,
@@ -350,16 +372,30 @@ const officeOutsideLeaserTotalsForVendor = async (
       ]
     })
   ]);
-  let paidAmount = 0;
-  let charges = 0;
+
+  for (const bill of bills) {
+    const row = acc.get(bill.vendorId);
+    if (row) row.billSum += roundInr(bill.basicAmount);
+  }
   for (const rec of records) {
     const plain = rec.get({ plain: true }) as any;
-    paidAmount += echoAccountsPaidAmount(plain.installmentsJson);
-    charges += roundInr(plain.ledger?.fileCharges) + roundInr(plain.ledger?.others);
+    const vendorId = String(plain.vendorId || rec.vendorId || '');
+    const row = acc.get(vendorId);
+    if (!row) continue;
+    row.paidAmount += echoAccountsPaidAmount(plain.installmentsJson);
+    row.charges += roundInr(plain.ledger?.fileCharges) + roundInr(plain.ledger?.others);
   }
-  const gst = officeOutsideLeaserGst({ billSum, paidAmount });
-  const profit = officeOutsideLeaserProfit({ paidAmount, billSum, charges, gst });
-  return { billSum, paidAmount, charges, gst, profit };
+  for (const [id, row] of acc) {
+    totals.set(id, finishOfficeOutsideLeaserTotals(row.billSum, row.paidAmount, row.charges));
+  }
+  return totals;
+};
+
+const officeOutsideLeaserTotalsForVendor = async (
+  vendorId: string
+): Promise<OfficeOutsideLeaserTotals> => {
+  const map = await officeOutsideLeaserTotalsForVendors([vendorId]);
+  return map.get(vendorId) || emptyOfficeOutsideLeaserTotals();
 };
 
 const sumLeaserAmounts = (rows: Array<{ amount: unknown }>): number =>
@@ -439,20 +475,20 @@ export const listLeaserPayments = async (req: Request, res: Response): Promise<v
       list.push(row);
       byVendor.set(row.vendorId, list);
     }
-    const balances = await Promise.all(
-      vendors.map(async (vendor) => {
-        const outside =
-          vendor.kind === 'office_outside'
-            ? await officeOutsideLeaserTotalsForVendor(vendor.id)
-            : undefined;
-        const { payments: _omit, ...summary } = leaserVendorPayload(
-          vendor,
-          byVendor.get(vendor.id) || [],
-          outside
-        );
-        return summary;
-      })
-    );
+    const outsideVendorIds = vendors
+      .filter((vendor) => vendor.kind === 'office_outside')
+      .map((vendor) => vendor.id);
+    const outsideTotals = await officeOutsideLeaserTotalsForVendors(outsideVendorIds);
+    const balances = vendors.map((vendor) => {
+      const outside =
+        vendor.kind === 'office_outside' ? outsideTotals.get(vendor.id) : undefined;
+      const { payments: _omit, ...summary } = leaserVendorPayload(
+        vendor,
+        byVendor.get(vendor.id) || [],
+        outside
+      );
+      return summary;
+    });
     res.json({
       success: true,
       data: {

@@ -14,12 +14,17 @@ export const updateStatusSchema = z
     loan_amount: z.union([z.number(), z.string()]).optional(),
     cashAmount: z.union([z.number(), z.string()]).optional(),
     cash_amount: z.union([z.number(), z.string()]).optional(),
+    // Keep as number | string — do not Number() here (commas / ₹ must survive to parseApproveProposalAmount).
+    proposal: z.union([z.number(), z.string()]).optional(),
+    proposalAmount: z.union([z.number(), z.string()]).optional(),
+    proposal_amount: z.union([z.number(), z.string()]).optional(),
     bankName: z.string().optional(),
     bankIfsc: z.string().optional(),
     bank_ifsc: z.string().optional(),
     subsidyChequeDetails: z.string().optional(),
     subsidy_cheque_details: z.string().optional()
   })
+  .passthrough()
   .refine(
     (data) => {
       if (data.status !== 'approved') return true;

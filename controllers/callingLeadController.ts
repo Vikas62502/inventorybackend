@@ -522,8 +522,21 @@ const hrUploadCountsToApi = (counts: HrUploadLeadCounts) => ({
   }
 });
 
+export const fetchHrUploadBatchCountsMany = async (
+  batches: Array<{ id: string; rowCount: number }>
+): Promise<Map<string, HrUploadLeadCounts>> => {
+  if (!batches.length) return new Map();
+  const map = await buildHrUploadCountsForBatches(batches);
+  for (const batch of batches) {
+    if (!map.has(batch.id)) {
+      map.set(batch.id, emptyHrUploadLeadCounts(batch.rowCount));
+    }
+  }
+  return map;
+};
+
 export const fetchHrUploadBatchCounts = async (batchId: string, uploadedRowCount = 0) => {
-  const map = await buildHrUploadCountsForBatches([{ id: batchId, rowCount: uploadedRowCount }]);
+  const map = await fetchHrUploadBatchCountsMany([{ id: batchId, rowCount: uploadedRowCount }]);
   return map.get(batchId) || emptyHrUploadLeadCounts(uploadedRowCount);
 };
 
@@ -1022,17 +1035,22 @@ export const assignCreatedSheetSourceLeads = async ({
       transaction,
       lock: transaction.LOCK.UPDATE
     });
+    const leadIds = leads.map((lead) => lead.id);
+    const assignmentRows = leadIds.length
+      ? await DealerLeadAssignment.findAll({
+          where: { leadId: { [Op.in]: leadIds } },
+          transaction,
+          lock: transaction.LOCK.UPDATE
+        })
+      : [];
+    const assignmentByLeadId = new Map(assignmentRows.map((row) => [row.leadId, row]));
 
     let moved = 0;
     let cursor = 0;
     for (const lead of leads) {
       if (!isCreatedOrBlankFinalSheetLead(lead)) continue;
 
-      const assignment = await DealerLeadAssignment.findOne({
-        where: { leadId: lead.id },
-        transaction,
-        lock: transaction.LOCK.UPDATE
-      });
+      const assignment = assignmentByLeadId.get(lead.id) || null;
 
       if (assignment && hasCallingAssignee(assignment.dealerId)) {
         const st = String(assignment.status || '').toLowerCase();
@@ -1080,23 +1098,14 @@ export const assignCreatedSheetSourceLeads = async ({
       }
       moved += 1;
     }
-    return moved;
+    const batchIds = [
+      ...new Set(leads.map((row) => row.batchId).filter(Boolean) as string[])
+    ];
+    return { moved, batchIds };
   });
 
-  const batchIds = [
-    ...new Set(
-      (
-        await CallingLead.findAll({
-          where: { sheetSourceId },
-          attributes: ['batchId']
-        })
-      )
-        .map((row) => row.batchId)
-        .filter(Boolean) as string[]
-    )
-  ];
-  for (const batchId of batchIds) scheduleSheetWriteBackForBatch(batchId);
-  return { assigned };
+  for (const batchId of assigned.batchIds) scheduleSheetWriteBackForBatch(batchId);
+  return { assigned: assigned.moved };
 };
 
 /**
@@ -4251,29 +4260,32 @@ const buildDealerQueueSnapshot = async (
   let scheduledLeads: any[] = [];
   let recentActions: any[] = [];
 
-  try {
-    queue = await buildCallableQueue(dealerId, 500, allocate);
-  } catch (error) {
-    logError('buildCallableQueue failed (non-fatal)', error, { dealerId });
-    queue = [];
-  }
+  const [queueResult, countsResult, scheduledResult, recentResult] = await Promise.allSettled([
+    buildCallableQueue(dealerId, 500, allocate),
+    buildDealerQueueCounts(dealerId),
+    buildScheduledLeads(dealerId),
+    buildRecentActions(dealerId, recentActionsLimit)
+  ]);
 
-  try {
-    counts = await buildDealerQueueCounts(dealerId);
-  } catch (error) {
-    logError('buildDealerQueueCounts failed (non-fatal)', error, { dealerId });
+  if (queueResult.status === 'fulfilled') {
+    queue = queueResult.value;
+  } else {
+    logError('buildCallableQueue failed (non-fatal)', queueResult.reason, { dealerId });
   }
-
-  try {
-    scheduledLeads = await buildScheduledLeads(dealerId);
-  } catch (error) {
-    logError('buildScheduledLeads failed (non-fatal)', error, { dealerId });
+  if (countsResult.status === 'fulfilled') {
+    counts = countsResult.value;
+  } else {
+    logError('buildDealerQueueCounts failed (non-fatal)', countsResult.reason, { dealerId });
   }
-
-  try {
-    recentActions = await buildRecentActions(dealerId, recentActionsLimit);
-  } catch (error) {
-    logError('buildRecentActions failed (non-fatal)', error, { dealerId });
+  if (scheduledResult.status === 'fulfilled') {
+    scheduledLeads = scheduledResult.value;
+  } else {
+    logError('buildScheduledLeads failed (non-fatal)', scheduledResult.reason, { dealerId });
+  }
+  if (recentResult.status === 'fulfilled') {
+    recentActions = recentResult.value;
+  } else {
+    logError('buildRecentActions failed (non-fatal)', recentResult.reason, { dealerId });
   }
 
   const { lead, currentLead, nextLead } = resolveDealerQueueHead(queue);

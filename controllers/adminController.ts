@@ -47,8 +47,10 @@ import {
 } from '../utils/installationDocumentsApi';
 import {
   buildMeterDocumentApiFields,
+  buildMeterDocumentApiFieldsFromResolved,
   buildMeterInstallationPendingPhotoApiFields,
   getLatestMeterDocMeta,
+  METER_DOC_PRESIGN_TTL_SECONDS,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 
@@ -112,9 +114,14 @@ import {
   parseInrAmount,
   serializeSideRemainingApiFields
 } from '../utils/cashLoanAmounts';
-import { resolveApproveProposalAmount } from '../utils/approveProposal';
+import { pickApproveProposalRaw, resolveApproveProposalAmount } from '../utils/approveProposal';
+import { readBankFeesFromRow } from '../utils/bankFees';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
-import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
+import {
+  buildFinalConfirmationApiFields,
+  buildFinalConfirmationApiFieldsMany
+} from '../utils/finalConfirmationDocuments';
+import { resolveBrowsableMediaUrlMap } from '../utils/s3Service';
 import { resolveQuotationDocumentUrls } from './quotationController';
 
 const sumPhasePaidAmounts = (phases: { paidAmount?: number }[]): number =>
@@ -220,19 +227,21 @@ const canSubmitBankProcess = (req: Request): boolean =>
 /** Frontend always sends these on Admin Metering handoff (lib/api.ts → sendQuotationToMetering). */
 
 /**
- * Remaining = amountAfterSubsidy − discountAmount − total paid.
- * Final Settlement writes off unpaid balance via discountAmount so remaining reaches 0.
+ * Remaining = amountAfterSubsidy − discountAmount − bankFees − total paid.
+ * Bank fees are never added to paid. Completed when remaining ≤ 0.
  */
 const remainingAgainstSubtotal = (
   amountAfterSubsidyOrSubtotal: number | null | undefined,
   totalPaid: number,
-  discountAmount: number | null | undefined = 0
+  discountAmount: number | null | undefined = 0,
+  bankFees: number | null | undefined = 0
 ): number => {
   const base = Number(amountAfterSubsidyOrSubtotal) || 0;
   const discount = Math.max(0, Number(discountAmount) || 0);
+  const fees = Math.max(0, Number(bankFees) || 0);
   const paid = Number(totalPaid);
   const safePaid = isNaN(paid) ? 0 : paid;
-  return Math.max(0, base - discount - safePaid);
+  return Math.max(0, base - discount - fees - safePaid);
 };
 
 const resolveAmountAfterSubsidyForRemaining = (q: {
@@ -570,15 +579,8 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
           model: QuotationProduct,
           as: 'products',
           required: false
-        },
-        {
-          model: CustomPanel,
-          as: 'customPanels',
-          required: false
         }
       ],
-      distinct: true,
-      subQuery: false,
       limit,
       offset,
       order: wantsReleasedInstallerList
@@ -586,39 +588,36 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         : [['createdAt', 'DESC']]
     });
     const quotationIds = quotations.rows.map((q: any) => String(q.id));
-    const phaseRows = quotationIds.length
-      ? await QuotationPaymentPhase.findAll({
-          where: { quotationId: { [Op.in]: quotationIds } },
-          order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
-        })
-      : [];
-    // §7.4 / §7.5 — skip heavy media + visit fan-out on list critical path unless opted in.
-    const installationDocMap = includeMedia
-      ? await batchLoadInstallationDocsByQuotationId(quotationIds)
-      : new Map<string, any[]>();
-    // §M — Final confirmation preview URLs on admin list (lightweight: only 4 slots).
-    const quotationDocRows = quotationIds.length
-      ? await QuotationDocument.findAll({
-          where: { quotationId: { [Op.in]: quotationIds } },
-          attributes: [
-            'quotationId',
-            'customerFinalBillFile',
-            'panelWarrantyFile',
-            'inverterWarrantyFile',
-            'workCompletionWarrantyFile'
-          ]
-        })
-      : [];
-    const finalConfirmationByQuotationId = new Map<string, Record<string, string | null>>();
-    await Promise.all(
-      (quotationDocRows as any[]).map(async (doc) => {
-        const fields = await buildFinalConfirmationApiFields(doc);
-        finalConfirmationByQuotationId.set(String(doc.quotationId), fields);
-      })
-    );
-    const visitRows =
+    const [
+      phaseRows,
+      installationDocMap,
+      quotationDocRows,
+      visitRows,
+      customPanelRows
+    ] = await Promise.all([
+      quotationIds.length
+        ? QuotationPaymentPhase.findAll({
+            where: { quotationId: { [Op.in]: quotationIds } },
+            order: [['quotationId', 'ASC'], ['phaseNumber', 'ASC']]
+          })
+        : Promise.resolve([]),
+      includeMedia
+        ? batchLoadInstallationDocsByQuotationId(quotationIds)
+        : Promise.resolve(new Map<string, any[]>()),
+      quotationIds.length
+        ? QuotationDocument.findAll({
+            where: { quotationId: { [Op.in]: quotationIds } },
+            attributes: [
+              'quotationId',
+              'customerFinalBillFile',
+              'panelWarrantyFile',
+              'inverterWarrantyFile',
+              'workCompletionWarrantyFile'
+            ]
+          })
+        : Promise.resolve([]),
       includeMedia && quotationIds.length
-        ? await Visit.findAll({
+        ? Visit.findAll({
             where: { quotationId: { [Op.in]: quotationIds } },
             attributes: ['quotationId', 'location', 'visitDate', 'visitTime'],
             order: [
@@ -626,7 +625,22 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
               ['visitTime', 'ASC']
             ]
           })
-        : [];
+        : Promise.resolve([]),
+      quotationIds.length
+        ? CustomPanel.findAll({
+            where: { quotationId: { [Op.in]: quotationIds } }
+          })
+        : Promise.resolve([])
+    ]);
+    const customPanelsByQuotationId = new Map<string, any[]>();
+    for (const panel of customPanelRows as any[]) {
+      const qid = String(panel.quotationId);
+      if (!customPanelsByQuotationId.has(qid)) customPanelsByQuotationId.set(qid, []);
+      customPanelsByQuotationId.get(qid)!.push(panel);
+    }
+    const finalConfirmationByQuotationId = await buildFinalConfirmationApiFieldsMany(
+      quotationDocRows as any[]
+    );
     const visitLocationByQuotationId = buildPrimaryVisitLocationByQuotationId(
       visitRows.map((v) =>
         typeof (v as any).toJSON === 'function' ? (v as any).toJSON() : v
@@ -653,6 +667,29 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
       });
     }
 
+    const meterRefByQuotationId = new Map<string, { ref: string | null; name: string | null }>();
+    for (const q of quotations.rows) {
+      const rawInstallationDocs = includeMedia
+        ? installationDocMap.get(String((q as any).id)) || []
+        : [];
+      const latestMeterDoc = includeMedia
+        ? getLatestMeterDocMeta(rawInstallationDocs)
+        : { name: null as string | null, storedRef: null as string | null };
+      const storedRef =
+        resolveMeterStoredRef(
+          (q as any).meterDocumentImageUrl,
+          includeMedia ? rawInstallationDocs : []
+        ) || ((q as any).meterDocumentImageUrl as string | null) || null;
+      meterRefByQuotationId.set(String((q as any).id), {
+        ref: typeof storedRef === 'string' && storedRef.trim() ? storedRef.trim() : null,
+        name: latestMeterDoc.name
+      });
+    }
+    const meterUrlMap = await resolveBrowsableMediaUrlMap(
+      [...meterRefByQuotationId.values()].map((entry) => entry.ref),
+      METER_DOC_PRESIGN_TTL_SECONDS
+    );
+
     res.json({
       success: true,
       data: {
@@ -665,15 +702,21 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
           });
           const totalPaidForRemaining = sumPhasePaidAmounts(phases);
           const discountAmt = Number((q as any).discountAmount || 0);
+          const bankFeesAmt = readBankFeesFromRow(q as any);
           let remainingAmount = remainingAgainstSubtotal(
             amountAfterSubsidyNum,
             totalPaidForRemaining,
-            discountAmt
+            discountAmt,
+            bankFeesAmt
           );
           let paymentStatusOut = q.paymentStatus;
           if (remainingAmount > 0.01) {
             paymentStatusOut = totalPaidForRemaining <= 0.01 ? 'pending' : 'partial';
-          } else if (q.paymentStatus === 'completed') {
+          } else if (
+            q.paymentStatus === 'completed' ||
+            totalPaidForRemaining > 0.01 ||
+            bankFeesAmt > 0.01
+          ) {
             remainingAmount = 0;
             paymentStatusOut = 'completed';
           } else {
@@ -695,20 +738,19 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
                 siteCompletionImages: [] as any[],
                 installationFieldUrls: {}
               };
-          const latestMeterDoc = includeMedia
-            ? getLatestMeterDocMeta(rawInstallationDocs)
-            : { name: null as string | null, storedRef: null as string | null };
+          const meterMeta = meterRefByQuotationId.get(String(q.id)) || {
+            ref: null as string | null,
+            name: null as string | null
+          };
           // §AF — always echo browsable meter document URLs on admin list (not gated on includeMedia).
-          const meterDocumentFields = await buildMeterDocumentApiFields(
-            resolveMeterStoredRef(
-              (q as any).meterDocumentImageUrl,
-              includeMedia ? rawInstallationDocs : []
-            ) || ((q as any).meterDocumentImageUrl as string | null),
-            latestMeterDoc.name
+          const meterDocumentFields = buildMeterDocumentApiFieldsFromResolved(
+            meterMeta.ref,
+            meterMeta.ref ? meterUrlMap.get(meterMeta.ref) ?? null : null,
+            meterMeta.name
           );
           const productListFields = quotationProductEnrichmentFields(
             qAny.products,
-            qAny.customPanels,
+            customPanelsByQuotationId.get(String(q.id)) || [],
             q.systemType,
             (q as any).systemKw ?? row.system_kw
           );
@@ -990,7 +1032,7 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
 
       const proposalResult = resolveApproveProposalAmount({
         paymentType: paymentTypeResolved,
-        proposalRaw: body.proposal ?? body.proposalAmount ?? body.proposal_amount,
+        proposalRaw: pickApproveProposalRaw(body as unknown as Record<string, unknown>),
         quotationSubtotal: pickQuotationSubtotalForPayments(
           quotation.get({ plain: true }) as unknown as Record<string, unknown>
         )
@@ -2127,15 +2169,21 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
     });
     const totalPaidForRemaining = sumPhasePaidAmounts(phases);
     const discountAmt = Number((quotation as any).discountAmount || 0);
+    const bankFeesAmt = readBankFeesFromRow(quotationAny);
     let remainingAmount = remainingAgainstSubtotal(
       amountAfterSubsidyNum,
       totalPaidForRemaining,
-      discountAmt
+      discountAmt,
+      bankFeesAmt
     );
     let paymentStatusOut = quotationAny.paymentStatus;
     if (remainingAmount > 0.01) {
       paymentStatusOut = totalPaidForRemaining <= 0.01 ? 'pending' : 'partial';
-    } else if (quotationAny.paymentStatus === 'completed') {
+    } else if (
+      quotationAny.paymentStatus === 'completed' ||
+      totalPaidForRemaining > 0.01 ||
+      bankFeesAmt > 0.01
+    ) {
       remainingAmount = 0;
       paymentStatusOut = 'completed';
     } else {

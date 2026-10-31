@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Op } from 'sequelize';
+import { Op, fn, col } from 'sequelize';
 import { v4 as uuidv4 } from 'uuid';
 import CallingLeadSheetSource from '../models/CallingLeadSheetSource';
 import CallingLeadUploadBatch from '../models/CallingLeadUploadBatch';
@@ -26,9 +26,10 @@ import {
 import { mapSheetSourceForApi, mapSocialLeadForApi } from '../utils/hrSheetSourceApi';
 import {
   assignCreatedSheetSourceLeads,
-  fetchHrUploadBatchCounts,
+  fetchHrUploadBatchCountsMany,
   isValidHrCallingAssigneeDealerId,
-  resolveAssignedByUserId
+  resolveAssignedByUserId,
+  type HrUploadLeadCounts
 } from './callingLeadController';
 import { sequelize, User } from '../models';
 import { emitSheetSyncUploadsUpdated } from '../utils/realtime';
@@ -38,22 +39,70 @@ const parsePositiveInt = (value: unknown, fallback: number): number => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 };
 
-const sheetSourceCounts = async (source: CallingLeadSheetSource) => {
-  if (source.uploadId) {
-    const batch = await CallingLeadUploadBatch.findByPk(source.uploadId, {
-      attributes: ['rowCount']
-    });
-    return fetchHrUploadBatchCounts(source.uploadId, batch?.rowCount || 0);
+const emptySheetLeadCounts = (leadCount = 0): HrUploadLeadCounts => ({
+  rowCount: leadCount,
+  leadCount,
+  skippedDuplicate: 0,
+  assignedCount: 0,
+  unassignedCount: leadCount,
+  completedCount: 0
+});
+
+const sheetSourceCountsBySource = async (
+  sources: CallingLeadSheetSource[]
+): Promise<Map<string, HrUploadLeadCounts>> => {
+  const countsBySource = new Map<string, HrUploadLeadCounts>();
+  if (!sources.length) return countsBySource;
+
+  const uploadIds = [
+    ...new Set(sources.map((row) => row.uploadId).filter((id): id is string => Boolean(id)))
+  ];
+  const sourceIdsWithoutUpload = sources.filter((row) => !row.uploadId).map((row) => row.id);
+
+  const [countsByBatch, groupedLeadCounts] = await Promise.all([
+    (async () => {
+      if (!uploadIds.length) return new Map<string, HrUploadLeadCounts>();
+      const batches = await CallingLeadUploadBatch.findAll({
+        where: { id: { [Op.in]: uploadIds } },
+        attributes: ['id', 'rowCount']
+      });
+      const rowCountByBatch = new Map(
+        batches.map((batch) => [String(batch.id), batch.rowCount || 0])
+      );
+      return fetchHrUploadBatchCountsMany(
+        uploadIds.map((id) => ({ id, rowCount: rowCountByBatch.get(id) || 0 }))
+      );
+    })(),
+    sourceIdsWithoutUpload.length
+      ? (CallingLead.findAll({
+          attributes: ['sheetSourceId', [fn('COUNT', col('CallingLead.id')), 'leadCount']],
+          where: { sheetSourceId: { [Op.in]: sourceIdsWithoutUpload } },
+          group: ['sheetSourceId'],
+          raw: true
+        }) as unknown as Promise<Array<{ sheetSourceId: string; leadCount: string | number }>>)
+      : Promise.resolve([] as Array<{ sheetSourceId: string; leadCount: string | number }>)
+  ]);
+  const leadCountBySource = new Map<string, number>();
+  for (const row of groupedLeadCounts) {
+    leadCountBySource.set(String(row.sheetSourceId), Number(row.leadCount) || 0);
   }
-  const leadCount = await CallingLead.count({ where: { sheetSourceId: source.id } });
-  return {
-    rowCount: leadCount,
-    leadCount,
-    skippedDuplicate: 0,
-    assignedCount: 0,
-    unassignedCount: leadCount,
-    completedCount: 0
-  };
+
+  for (const source of sources) {
+    if (source.uploadId) {
+      countsBySource.set(
+        source.id,
+        countsByBatch.get(String(source.uploadId)) || emptySheetLeadCounts(0)
+      );
+    } else {
+      countsBySource.set(source.id, emptySheetLeadCounts(leadCountBySource.get(source.id) || 0));
+    }
+  }
+  return countsBySource;
+};
+
+const sheetSourceCounts = async (source: CallingLeadSheetSource) => {
+  const map = await sheetSourceCountsBySource([source]);
+  return map.get(source.id) || emptySheetLeadCounts(0);
 };
 
 export const listHrSheetSources = async (req: Request, res: Response): Promise<void> => {
@@ -66,11 +115,10 @@ export const listHrSheetSources = async (req: Request, res: Response): Promise<v
       where: { spreadsheetId },
       order: [['sheetTabName', 'ASC']]
     });
-    const sources = [];
-    for (const row of rows) {
-      const counts = await sheetSourceCounts(row);
-      sources.push(mapSheetSourceForApi(row, counts));
-    }
+    const countsBySource = await sheetSourceCountsBySource(rows);
+    const sources = rows.map((row) =>
+      mapSheetSourceForApi(row, countsBySource.get(row.id) || emptySheetLeadCounts(0))
+    );
     res.json({
       success: true,
       data: { spreadsheetId, sources },
@@ -123,11 +171,10 @@ export const discoverHrSheetTabs = async (req: Request, res: Response): Promise<
     }
     const deleted = await CallingLeadSheetSource.destroy({ where: staleWhere });
 
-    const sources = [];
-    for (const row of live) {
-      const counts = await sheetSourceCounts(row);
-      sources.push(mapSheetSourceForApi(row, counts));
-    }
+    const countsBySource = await sheetSourceCountsBySource(live);
+    const sources = live.map((row) =>
+      mapSheetSourceForApi(row, countsBySource.get(row.id) || emptySheetLeadCounts(0))
+    );
 
     res.json({
       success: true,

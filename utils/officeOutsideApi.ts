@@ -10,6 +10,7 @@ import {
   type PaymentPhaseRecord
 } from './quotationPaymentPhases';
 import { toDateOnly } from './dateOnly';
+import { readBankFeesFromRow } from './bankFees';
 
 export const OFFICE_OUTSIDE_FILE_TYPES = ['loan', 'cash', 'mix'] as const;
 export type OfficeOutsideFileTypeValue = (typeof OFFICE_OUTSIDE_FILE_TYPES)[number];
@@ -355,6 +356,16 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
       })
     : [];
   const paidAmount = echoAccountsPaidAmount(installments, row.paidAmount ?? row.paid_amount);
+  const bankFees = readBankFeesFromRow(row, fileType);
+  const remaining = Math.max(0, subtotal - bankFees - paidAmount);
+  const paymentStatusOut =
+    remaining <= 0.01 && (paidAmount > 0.01 || bankFees > 0.01)
+      ? 'completed'
+      : remaining > 0.01
+        ? paidAmount <= 0.01
+          ? 'pending'
+          : 'partial'
+        : paymentStatus;
   const publicId = officeOutsidePublicId(id);
   const slipItems = Array.isArray(row.slipItems)
     ? row.slipItems
@@ -411,10 +422,15 @@ export const publicOfficeOutsideRecord = (row: RowLike) => {
     file_type: fileType,
     paymentType: fileType,
     payment_type: fileType,
-    paymentStatus,
-    payment_status: paymentStatus,
+    paymentStatus: paymentStatusOut,
+    payment_status: paymentStatusOut,
     paidAmount,
     paid_amount: paidAmount,
+    bankFees,
+    bank_fees: bankFees,
+    remaining,
+    remainingAmount: remaining,
+    remaining_amount: remaining,
     paymentMode,
     payment_mode: paymentMode,
     installments,

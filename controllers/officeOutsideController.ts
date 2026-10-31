@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Op, Sequelize, UniqueConstraintError, WhereOptions } from 'sequelize';
+import { Op, QueryTypes, Sequelize, UniqueConstraintError, WhereOptions } from 'sequelize';
 import {
   OfficeOutsideLedger,
   OfficeOutsideRecord,
@@ -23,6 +23,12 @@ import {
   publicOfficeOutsideRecord
 } from '../utils/officeOutsideApi';
 import { echoAccountsPaidAmount } from '../utils/quotationPaymentPhases';
+import {
+  parseBankFeesAmount,
+  pickBankFeesRaw,
+  readBankFeesFromRow,
+  resolvePersistedBankFees
+} from '../utils/bankFees';
 
 const fail = (res: Response, status: number, code: string, message: string): void => {
   res.status(status).json({ success: false, error: { code, message } });
@@ -256,18 +262,35 @@ export const listOfficeOutside = async (req: Request, res: Response): Promise<vo
       });
     }
 
-    const rows = await OfficeOutsideRecord.findAll({
-      where: and.length ? { [Op.and]: and } : {},
-      include: recordInclude,
-      order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
-    });
-    const records = rows.map(recordPayload);
-    const [all, pending, sent, outside] = await Promise.all([
-      OfficeOutsideRecord.count(),
-      OfficeOutsideRecord.count({ where: pendingListWhere() }),
-      OfficeOutsideRecord.count({ where: sentListWhere() }),
-      OfficeOutsideRecord.count({ where: outsideListWhere() })
+    const [rows, countRows] = await Promise.all([
+      OfficeOutsideRecord.findAll({
+        where: and.length ? { [Op.and]: and } : {},
+        include: recordInclude,
+        order: [['updatedAt', 'DESC'], ['createdAt', 'DESC']]
+      }),
+      OfficeOutsideRecord.sequelize!.query<{
+        total_count: string | number;
+        pending: string | number;
+        sent: string | number;
+        outside: string | number;
+      }>(
+        `
+        SELECT
+          COUNT(*)::int AS total_count,
+          COALESCE(SUM(CASE WHEN sent_to_accounts_at IS NULL AND sent_to_outside_at IS NULL THEN 1 ELSE 0 END), 0)::int AS pending,
+          COALESCE(SUM(CASE WHEN sent_to_accounts_at IS NOT NULL THEN 1 ELSE 0 END), 0)::int AS sent,
+          COALESCE(SUM(CASE WHEN sent_to_outside_at IS NOT NULL THEN 1 ELSE 0 END), 0)::int AS outside
+        FROM office_outside_records
+        `,
+        { type: QueryTypes.SELECT }
+      )
     ]);
+    const records = rows.map(recordPayload);
+    const countRow = countRows[0] || { total_count: 0, pending: 0, sent: 0, outside: 0 };
+    const all = Number(countRow.total_count) || 0;
+    const pending = Number(countRow.pending) || 0;
+    const sent = Number(countRow.sent) || 0;
+    const outside = Number(countRow.outside) || 0;
     res.status(200).json({
       success: true,
       data: {
@@ -735,6 +758,32 @@ export const updateOfficeOutsidePaymentDetails = async (req: Request, res: Respo
     const fileTypePatch = parseOfficeOutsideRecordPatch(body);
     if (fileTypePatch.fileType) values.fileType = fileTypePatch.fileType;
 
+    const fileTypeForFees = (values.fileType as string | undefined) || row.fileType;
+    const requestedBankFees = parseBankFeesAmount(pickBankFeesRaw(body));
+    const bodyHasBankFees = body.bankFees !== undefined || body.bank_fees !== undefined;
+    if (bodyHasBankFees || fileTypeForFees === 'cash') {
+      values.bankFees = resolvePersistedBankFees({
+        paymentType: fileTypeForFees,
+        requested: requestedBankFees,
+        existing: (row as any).bankFees
+      });
+    }
+
+    const phasesForRemaining = Array.isArray(values.installmentsJson)
+      ? (values.installmentsJson as any[])
+      : Array.isArray(row.installmentsJson)
+        ? (row.installmentsJson as any[])
+        : [];
+    const paidSum = echoAccountsPaidAmount(phasesForRemaining, (row as any).paidAmount);
+    const feesForRemaining =
+      (values.bankFees as number | undefined) ?? readBankFeesFromRow(row as any, fileTypeForFees);
+    const remaining = Math.max(0, roundInr(row.subtotal) - feesForRemaining - paidSum);
+    if (remaining <= 0.01 && (paidSum > 0.01 || feesForRemaining > 0.01)) {
+      values.paymentStatus = 'completed';
+    } else if (remaining > 0.01) {
+      values.paymentStatus = paidSum <= 0.01 ? 'pending' : 'partial';
+    }
+
     await row.update(values as any);
     await row.reload({ include: recordInclude });
     const record = recordPayload(row);
@@ -746,7 +795,12 @@ export const updateOfficeOutsidePaymentDetails = async (req: Request, res: Respo
         installments: record.installments,
         paymentPhases: record.installments,
         paidAmount: record.paidAmount,
-        paid_amount: record.paidAmount
+        paid_amount: record.paidAmount,
+        bankFees: record.bankFees,
+        bank_fees: record.bankFees,
+        remaining: record.remaining,
+        remainingAmount: record.remaining,
+        paymentStatus: record.paymentStatus
       }
     });
   } catch (error) {

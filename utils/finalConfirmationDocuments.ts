@@ -1,4 +1,4 @@
-import { resolveBrowsableMediaUrl } from './s3Service';
+import { resolveBrowsableMediaUrlMap } from './s3Service';
 
 /** Final confirmation multipart keys (§M / HANDOFF §20). */
 export const FINAL_CONFIRMATION_DOCUMENT_FIELDS = [
@@ -39,21 +39,26 @@ const plainDocuments = (
   return documents;
 };
 
-/**
- * Resolve the four final-confirmation slots to browsable URLs + name aliases
- * for POST response and GET list/detail / Baldev queue (§M preview).
- */
-export const buildFinalConfirmationApiFields = async (
-  documents: Record<string, unknown> | null | undefined
-): Promise<Record<string, string | null>> => {
-  const src = plainDocuments(documents);
-  const out: Record<string, string | null> = {};
+const collectFinalConfirmationRawUrls = (src: Record<string, unknown>): string[] => {
+  const urls: string[] = [];
+  for (const field of FINAL_CONFIRMATION_DOCUMENT_FIELDS) {
+    const raw = src[field];
+    if (typeof raw === 'string' && raw.trim()) urls.push(raw.trim());
+  }
+  return urls;
+};
 
+const applyFinalConfirmationApiFields = (
+  src: Record<string, unknown>,
+  urlMap: Map<string, string | null>
+): Record<string, string | null> => {
+  const out: Record<string, string | null> = {};
   for (const field of FINAL_CONFIRMATION_DOCUMENT_FIELDS) {
     const raw = src[field];
     let url: string | null = null;
     if (typeof raw === 'string' && raw.trim()) {
-      url = (await resolveBrowsableMediaUrl(raw.trim())) || raw.trim();
+      const trimmed = raw.trim();
+      url = urlMap.get(trimmed) || trimmed;
     }
     const name = fileNameFromUrl(url);
     const snake = toSnakeCase(field);
@@ -64,6 +69,36 @@ export const buildFinalConfirmationApiFields = async (
     out[`${snake}_url`] = url;
     out[`${snake}_name`] = name;
   }
+  return out;
+};
 
+/**
+ * Resolve the four final-confirmation slots to browsable URLs + name aliases
+ * for POST response and GET list/detail / Baldev queue (§M preview).
+ */
+export const buildFinalConfirmationApiFields = async (
+  documents: Record<string, unknown> | null | undefined
+): Promise<Record<string, string | null>> => {
+  const src = plainDocuments(documents);
+  const urlMap = await resolveBrowsableMediaUrlMap(collectFinalConfirmationRawUrls(src));
+  return applyFinalConfirmationApiFields(src, urlMap);
+};
+
+/** Same fields as `buildFinalConfirmationApiFields`, one unique-presign pass for a list. */
+export const buildFinalConfirmationApiFieldsMany = async (
+  documentsRows: Array<{ quotationId?: unknown } & Record<string, unknown>>
+): Promise<Map<string, Record<string, string | null>>> => {
+  const plains = documentsRows.map((row) => ({
+    id: String(row.quotationId ?? ''),
+    src: plainDocuments(row)
+  }));
+  const urlMap = await resolveBrowsableMediaUrlMap(
+    plains.flatMap(({ src }) => collectFinalConfirmationRawUrls(src))
+  );
+  const out = new Map<string, Record<string, string | null>>();
+  for (const { id, src } of plains) {
+    if (!id) continue;
+    out.set(id, applyFinalConfirmationApiFields(src, urlMap));
+  }
   return out;
 };

@@ -2,6 +2,7 @@ import { readSubsidyChequesFromRow } from './subsidyChequesNormalize';
 import { quotationProductPdfDisplayApiFields, quotationProductInaApiFields } from './quotationProductPdfDisplay';
 import { computeSystemKwFromProducts, formatSystemSizeKw } from './quotationSystemKw';
 import { serializeSiteCostFields } from './cashLoanAmounts';
+import { serializeBankFeesFields } from './bankFees';
 import { serializeProposalApiFields } from './approveProposal';
 import { quotationOfficeLocationApiFields } from './moduleFieldPermissions';
 import { parseBankDocumentNames } from './meteringWorkflowApi';
@@ -470,6 +471,7 @@ export function quotationPaymentApiFields(q: Record<string, unknown>) {
     cash_amount: Number.isFinite(cashAmount as number) ? cashAmount : null,
     ...serializeProposalApiFields(q),
     ...serializeSiteCostFields(q),
+    ...serializeBankFeesFields(q),
     bankName,
     bank_name: bankName,
     bankIfsc,

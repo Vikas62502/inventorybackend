@@ -2914,6 +2914,49 @@ Echo `proposal` on PATCH, GET list (`status=approved`), and GET detail.
 
 ---
 
+## §CE — Bank fees (loan / cash+loan; DB not localStorage) — Oct 30 2026
+
+**Status: implemented** — HANDOFF **§86** (FE notes §70 / their §BX) · `BACKEND_BANK_FEES.ts`
+
+No new HTTP path. Columns: `quotations.bank_fees`, `office_outside_records.bank_fees`.
+
+`PATCH /quotations/:id/payment-details` and `PATCH /admin/office-outside/:id/payment-details` persist `bankFees` / `bank_fees`. Echo on GET. Cash = 0.
+
+| Rule | Persist |
+|------|---------|
+| paid | `SUM(installment.paidAmount)` — never add fees |
+| remaining | subtotal − discount − bankFees − paid |
+| completed | remaining ≤ 0 |
+| VAL_012 / VAL_013 | Do not 400 when paid + fees == subtotal |
+| Final Settlement | Do not treat fees as write-off `d` |
+
+### Done when
+
+- [x] `bank_fees` column on quotations + office-outside
+- [x] PATCH payment-details persists and GET echoes `bankFees`
+- [x] Cash stores 0
+- [x] Remaining subtracts fees; paid + fees == subtotal completes without 400
+
+---
+
+## §CF — Approve 400 even when Proposal amount is filled — Oct 30 2026
+
+**Status: implemented** — HANDOFF **§87** (FE notes §71 / their §BY) · `BACKEND_APPROVE_PROPOSAL_FIX.ts`
+
+Live `PATCH /admin/quotations/:id/status` returned `VAL_PROPOSAL` (“proposal required for loan/mix approval (INR > 0)”) while the dialog already had ₹1,60,000. Zod/Joi `pick()` stripped `proposal` / `proposalAmount` / `proposal_amount`.
+
+Must read any of those keys as a number or numeric string. Do not reject with `typeof !== "number"`. Add the keys to the schema / `pick()` (and `.passthrough()`) so they are not stripped.
+
+Loan / mix 400 only when none of them is INR > 0. Cash still stores subtotal. Persist and echo `quotations.proposal`. Upsert ledger proposal only.
+
+### Done when
+
+- [x] Filled `proposal` / `proposalAmount` / `"1,60,000"` survives validate()
+- [x] Loan/mix with INR > 0 no longer 400s `VAL_PROPOSAL`
+- [x] Cash approve still stores subtotal
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
@@ -2922,4 +2965,6 @@ Echo `proposal` on PATCH, GET list (`status=approved`), and GET detail.
 | `BACKEND_CHANGES_REQUIRED.md` | §X PDF, §Y priority, **§L.1** send to metering, **§M** final confirmation, §M.0 install, §N/**§6** meter serials, §Z, **§E** calling queue |
 | `BACKEND_CHANGES_METER_SERIAL_OPTIONAL.md` | Meter create/edit/add-stock; `requiresSerialNumbers()` |
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | HR upload reference, `patchDealerCallingQueueAction` |
+| `BACKEND_APPROVE_PROPOSAL_FIX.ts` | Approve 400 when proposal is filled (§CF / FE §71) |
+| `BACKEND_BANK_FEES.ts` | Bank fees on payment-details (§CE / FE §70) |
 | `controllers/callingLeadController.ts` | Calling queue implementation |

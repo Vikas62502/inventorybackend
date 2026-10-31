@@ -1,6 +1,10 @@
-import { resolveBrowsableMediaUrl, persistableMediaReference } from './s3Service';
+import {
+  persistableMediaReference,
+  resolveBrowsableMediaUrl,
+  resolveBrowsableMediaUrlMap
+} from './s3Service';
 
-const METER_DOC_PRESIGN_TTL_SECONDS = Math.max(
+export const METER_DOC_PRESIGN_TTL_SECONDS = Math.max(
   3600,
   Number(process.env.AWS_S3_SIGNED_URL_TTL_SECONDS || 604800)
 );
@@ -30,18 +34,14 @@ export const meterDocumentNameFromStored = (
   return base || null;
 };
 
-/** Presigned/public browsable meter document URLs for API responses (§J / §AF / §6.4.C.8). */
-export const buildMeterDocumentApiFields = async (
+export const buildMeterDocumentApiFieldsFromResolved = (
   storedRef: string | null | undefined,
+  browsable: string | null,
   fallbackName?: string | null
-): Promise<MeterDocumentApiFields> => {
+): MeterDocumentApiFields => {
   const ref = typeof storedRef === 'string' && storedRef.trim() ? storedRef.trim() : null;
   const key = ref ? persistableMediaReference(ref) : null;
-  const browsable = ref
-    ? await resolveBrowsableMediaUrl(ref, METER_DOC_PRESIGN_TTL_SECONDS)
-    : null;
   const name = meterDocumentNameFromStored(ref, fallbackName);
-
   return {
     meterDocumentImageUrl: browsable,
     meterDocumentUrl: browsable,
@@ -54,6 +54,18 @@ export const buildMeterDocumentApiFields = async (
     meterDocumentName: name,
     meter_document_name: name
   };
+};
+
+/** Presigned/public browsable meter document URLs for API responses (§J / §AF / §6.4.C.8). */
+export const buildMeterDocumentApiFields = async (
+  storedRef: string | null | undefined,
+  fallbackName?: string | null
+): Promise<MeterDocumentApiFields> => {
+  const ref = typeof storedRef === 'string' && storedRef.trim() ? storedRef.trim() : null;
+  const browsable = ref
+    ? await resolveBrowsableMediaUrl(ref, METER_DOC_PRESIGN_TTL_SECONDS)
+    : null;
+  return buildMeterDocumentApiFieldsFromResolved(ref, browsable, fallbackName);
 };
 
 export const getLatestMeterDocMeta = (
@@ -168,9 +180,12 @@ export const buildMcoDocApiFields = async (
   const presign = async (ref: string | null): Promise<string | null> =>
     ref ? await resolveBrowsableMediaUrl(ref, METER_DOC_PRESIGN_TTL_SECONDS) : null;
 
-  const workCompleteReportImageUrl = await presign(meta.workCompleteReportImageUrl);
-  const meterInstalledPhotoUrl = await presign(meta.meterInstalledPhotoUrl);
-  const completeDcrReportImageUrl = await presign(meta.completeDcrReportImageUrl);
+  const [workCompleteReportImageUrl, meterInstalledPhotoUrl, completeDcrReportImageUrl] =
+    await Promise.all([
+      presign(meta.workCompleteReportImageUrl),
+      presign(meta.meterInstalledPhotoUrl),
+      presign(meta.completeDcrReportImageUrl)
+    ]);
 
   return {
     workCompleteReportImageUrl,
@@ -219,12 +234,12 @@ export const buildMeterInstallationPendingPhotoApiFields = async (q: {
       ? q.plantLivePhotoUrl.trim()
       : null;
 
-  const meterUrl = meterRef
-    ? await resolveBrowsableMediaUrl(meterRef, METER_DOC_PRESIGN_TTL_SECONDS)
-    : null;
-  const plantUrl = plantRef
-    ? await resolveBrowsableMediaUrl(plantRef, METER_DOC_PRESIGN_TTL_SECONDS)
-    : null;
+  const urlMap = await resolveBrowsableMediaUrlMap(
+    [meterRef, plantRef],
+    METER_DOC_PRESIGN_TTL_SECONDS
+  );
+  const meterUrl = meterRef ? urlMap.get(meterRef) ?? null : null;
+  const plantUrl = plantRef ? urlMap.get(plantRef) ?? null : null;
 
   const meterName =
     (typeof q.meterInstallationPhotoName === 'string' && q.meterInstallationPhotoName.trim()) ||

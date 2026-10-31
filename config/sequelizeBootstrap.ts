@@ -13,6 +13,21 @@ const ensureQuotationProposalColumn = async (): Promise<void> => {
   }
 };
 
+/** Bank fees on loan / cash+loan. Cash stores 0. */
+const ensureBankFeesColumns = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS bank_fees NUMERIC(14,2) DEFAULT 0;'
+    );
+    await sequelize.query(
+      'ALTER TABLE office_outside_records ADD COLUMN IF NOT EXISTS bank_fees NUMERIC(14,2) NOT NULL DEFAULT 0;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure bank_fees columns', { message });
+  }
+};
+
 /** Idempotent: Payment Management → Admin Installation release flags. */
 const ensureInstallationReleaseColumns = async (): Promise<void> => {
   try {
@@ -529,6 +544,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
   try {
     await sequelize.authenticate();
     await ensureQuotationProposalColumn();
+    await ensureBankFeesColumns();
     await ensureInstallationReleaseColumns();
     await ensureProductUnitColumn();
     await ensureInstallationScheduledAtColumn();

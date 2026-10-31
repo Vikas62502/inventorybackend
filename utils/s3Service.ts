@@ -490,6 +490,24 @@ export async function resolveBrowsableMediaUrls(
   return resolved.filter((u): u is string => !!u);
 }
 
+/** Deduped presign map keyed by trimmed original value. Same URLs as `resolveBrowsableMediaUrl`. */
+export async function resolveBrowsableMediaUrlMap(
+  values: Iterable<unknown>,
+  expiresIn?: number
+): Promise<Map<string, string | null>> {
+  const unique = new Set<string>();
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) unique.add(value.trim());
+  }
+  const map = new Map<string, string | null>();
+  await Promise.all(
+    [...unique].map(async (value) => {
+      map.set(value, await resolveBrowsableMediaUrl(value, expiresIn));
+    })
+  );
+  return map;
+}
+
 export function extractS3Key(urlOrPath: string): string | null {
   const trimmed = String(urlOrPath || '').trim();
   if (!trimmed) return null;

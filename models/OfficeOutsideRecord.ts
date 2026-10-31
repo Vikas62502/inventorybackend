@@ -16,6 +16,7 @@ interface OfficeOutsideRecordAttributes {
   subtotal: number;
   loanAmount: number;
   cashAmount: number;
+  bankFees: number;
   fileType: OfficeOutsideFileType | null;
   status: OfficeOutsideStatus;
   paymentStatus: OfficeOutsidePaymentStatus;
@@ -45,6 +46,7 @@ interface OfficeOutsideRecordCreationAttributes
     | 'subtotal'
     | 'loanAmount'
     | 'cashAmount'
+    | 'bankFees'
     | 'fileType'
     | 'status'
     | 'paymentStatus'
@@ -75,6 +77,7 @@ class OfficeOutsideRecord
   public subtotal!: number;
   public loanAmount!: number;
   public cashAmount!: number;
+  public bankFees!: number;
   public fileType!: OfficeOutsideFileType | null;
   public status!: OfficeOutsideStatus;
   public paymentStatus!: OfficeOutsidePaymentStatus;
@@ -133,6 +136,12 @@ OfficeOutsideRecord.init(
       defaultValue: 0,
       field: 'cash_amount'
     },
+    bankFees: {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: false,
+      defaultValue: 0,
+      field: 'bank_fees'
+    },
     fileType: {
       type: DataTypes.STRING(16),
       allowNull: true,
@@ -185,7 +194,10 @@ OfficeOutsideRecord.init(
         unique: true,
         fields: ['customer_mobile'],
         where: sequelize.literal('length(customer_mobile) = 10')
-      }
+      },
+      { name: 'office_outside_records_vendor_idx', fields: ['vendor_id'] },
+      { name: 'office_outside_records_sent_accounts_idx', fields: ['sent_to_accounts_at'] },
+      { name: 'office_outside_records_sent_outside_idx', fields: ['sent_to_outside_at'] }
     ]
   }
 );

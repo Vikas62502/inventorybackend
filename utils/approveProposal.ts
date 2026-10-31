@@ -6,9 +6,32 @@
 export const PAYMENT_TYPES = ['loan', 'cash', 'mix'] as const;
 export type ApprovePaymentType = (typeof PAYMENT_TYPES)[number];
 
-/** Body.proposal / proposalAmount — INR > 0, whole rupees. Missing / 0 / invalid → null. */
+/**
+ * Keep proposal aliases on the PATCH body. Zod/Joi pick() must include these
+ * or validate() strips them and loan/mix 400s VAL_PROPOSAL even when the dialog is filled.
+ */
+export function pickApproveProposalRaw(
+  body: Record<string, unknown> | null | undefined
+): unknown {
+  if (!body || typeof body !== 'object') return undefined;
+  const nested =
+    body.approval && typeof body.approval === 'object' && !Array.isArray(body.approval)
+      ? (body.approval as Record<string, unknown>)
+      : null;
+  return (
+    body.proposal ??
+    body.proposalAmount ??
+    body.proposal_amount ??
+    nested?.proposal ??
+    nested?.proposalAmount ??
+    nested?.proposal_amount
+  );
+}
+
+/** Body.proposal / proposalAmount / proposal_amount — number or numeric string (₹ / commas OK). */
 export function parseApproveProposalAmount(raw: unknown): number | null {
   if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw === 'boolean') return null;
   const n = typeof raw === 'number' ? raw : Number(String(raw).replace(/[₹,\s]/g, ''));
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n);

@@ -63,6 +63,14 @@ export const isFinalSettlementRequestBody = (
     .trim()
     .toLowerCase();
   const remaining = Number(body.remaining ?? body.remainingAmount ?? body.remaining_amount);
+  // Bank fees closing remaining is not Final Settlement. Do not treat fees as write-off d.
+  const bankFeesOnlyComplete =
+    (body.bankFees !== undefined || body.bank_fees !== undefined) &&
+    body.finalSettlementApplied === undefined &&
+    body.final_settlement_applied === undefined &&
+    body.finalSettlementAmount === undefined &&
+    body.final_settlement_amount === undefined;
+  if (bankFeesOnlyComplete) return false;
   if (status === 'completed' && Number.isFinite(remaining) && remaining === 0) {
     if (
       body.discountAmount !== undefined &&

@@ -26,10 +26,12 @@ import {
 import {
   buildMcoDocApiFields,
   buildMeterDocumentApiFields,
+  buildMeterDocumentApiFieldsFromResolved,
   buildMeterInstallationPendingPhotoApiFields,
   getLatestMcoDocMeta,
   getLatestMeterDocMeta,
   MCO_DOC_FIELDS,
+  METER_DOC_PRESIGN_TTL_SECONDS,
   resolveMeterStoredRef
 } from '../utils/meteringMediaApi';
 import {
@@ -47,7 +49,8 @@ import {
   meteringDetailsEchoFields,
   parseTruthyFlag
 } from '../utils/installationPartialApi';
-import { buildFinalConfirmationApiFields } from '../utils/finalConfirmationDocuments';
+import { buildFinalConfirmationApiFields, buildFinalConfirmationApiFieldsMany } from '../utils/finalConfirmationDocuments';
+import { resolveBrowsableMediaUrlMap } from '../utils/s3Service';
 import { assertInstallationUploadAllowed } from '../utils/installationUploadState';
 
 const assertInstallationTeamQuotationScope = (req: Request, quotation: Quotation, res: Response): boolean => {
@@ -307,7 +310,7 @@ const getWorkflowQueue = async (
         attributes: ['id', 'firstName', 'lastName', 'mobile', 'email', 'streetAddress', 'city', 'state', 'pincode']
       },
       { model: QuotationProduct, as: 'products', required: false },
-      { model: CustomPanel, as: 'customPanels', required: false },
+      { model: CustomPanel, as: 'customPanels', required: false, separate: true },
       // §M — Final confirmation preview fields for Baldev / Final process tabs.
       {
         model: QuotationDocument,
@@ -323,13 +326,19 @@ const getWorkflowQueue = async (
     ];
     // §7.5 — skip heavy media/visits on queue list critical path unless opted in.
     if (includeMedia) {
-      includes.push({ model: QuotationInstallationDoc, as: 'installationDocs', required: false });
+      includes.push({
+        model: QuotationInstallationDoc,
+        as: 'installationDocs',
+        required: false,
+        separate: true
+      });
     }
     if (includeVisits) {
       includes.push({
         model: Visit,
         as: 'visits',
         required: false,
+        separate: true,
         attributes: [
           'id',
           'visitDate',
@@ -369,12 +378,39 @@ const getWorkflowQueue = async (
     const quotations = await Quotation.findAndCountAll({
       where,
       include: includes,
-      subQuery: false,
-      distinct: true,
       order: [[orderByField, sortOrder]],
       limit,
       offset
     });
+
+    const finalConfirmationByQuotationId = await buildFinalConfirmationApiFieldsMany(
+      quotations.rows.map((q: any) => ({
+        quotationId: q.id,
+        ...(typeof q.documents?.toJSON === 'function' ? q.documents.toJSON() : q.documents || {})
+      }))
+    );
+    const meterRefByQuotationId = new Map<string, { ref: string | null; name: string | null }>();
+    for (const q of quotations.rows as any[]) {
+      const rawInstallationDocs = includeMedia
+        ? (q.installationDocs || []).map((doc: any) =>
+            typeof doc.toJSON === 'function' ? doc.toJSON() : doc
+          )
+        : [];
+      const latestMeterDoc = includeMedia
+        ? getLatestMeterDocMeta(rawInstallationDocs)
+        : { name: null as string | null, storedRef: null as string | null };
+      const meterStoredRef =
+        resolveMeterStoredRef(q.meterDocumentImageUrl, includeMedia ? rawInstallationDocs : []) ||
+        (typeof q.meterDocumentImageUrl === 'string' ? q.meterDocumentImageUrl : null);
+      meterRefByQuotationId.set(String(q.id), {
+        ref: typeof meterStoredRef === 'string' && meterStoredRef.trim() ? meterStoredRef.trim() : null,
+        name: latestMeterDoc.name
+      });
+    }
+    const meterUrlMap = await resolveBrowsableMediaUrlMap(
+      [...meterRefByQuotationId.values()].map((entry) => entry.ref),
+      METER_DOC_PRESIGN_TTL_SECONDS
+    );
 
     res.json({
       success: true,
@@ -436,21 +472,22 @@ const getWorkflowQueue = async (
                 siteCompletionImages: [] as any[],
                 installationFieldUrls: {}
               };
-          const latestMeterDoc = includeMedia
-            ? getLatestMeterDocMeta(rawInstallationDocs)
-            : { name: null as string | null, storedRef: null as string | null };
           const mcoDocFields = includeMedia
             ? await buildMcoDocApiFields(rawInstallationDocs)
             : {};
+          const meterMeta = meterRefByQuotationId.get(String(q.id)) || {
+            ref: null as string | null,
+            name: null as string | null
+          };
           // §AF — always echo meter document public URLs (re-presign from stored key), even when includeMedia=false.
-          const meterStoredRef =
-            resolveMeterStoredRef(q.meterDocumentImageUrl, includeMedia ? rawInstallationDocs : []) ||
-            (typeof q.meterDocumentImageUrl === 'string' ? q.meterDocumentImageUrl : null);
-          const meterDocumentFields = await buildMeterDocumentApiFields(
-            meterStoredRef,
-            latestMeterDoc.name
+          const meterDocumentFields = buildMeterDocumentApiFieldsFromResolved(
+            meterMeta.ref,
+            meterMeta.ref ? meterUrlMap.get(meterMeta.ref) ?? null : null,
+            meterMeta.name
           );
-          const finalConfirmationFields = await buildFinalConfirmationApiFields(q.documents);
+          const finalConfirmationFields =
+            finalConfirmationByQuotationId.get(String(q.id)) ||
+            (await buildFinalConfirmationApiFields(q.documents));
           return {
             id: q.id,
             status: q.status,
