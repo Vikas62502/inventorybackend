@@ -964,6 +964,14 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
       bank_ifsc?: string;
       subsidyChequeDetails?: string;
       subsidy_cheque_details?: string;
+      approvalOtpRecipient?: string;
+      approval_otp_recipient?: string;
+      otpRecipient?: string;
+      otp_recipient?: string;
+      otpVerifiedBy?: string;
+      otp_verified_by?: string;
+      approvedByOtp?: string;
+      approved_by_otp?: string;
     };
     const statusRaw = body.status;
     const allowed = ['pending', 'approved', 'rejected', 'completed'] as const;
