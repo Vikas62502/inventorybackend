@@ -4,7 +4,7 @@
   "description": "Backend API for Chairbord Solar Inventory Management System",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "dev": "nodemon --exec ts-node --transpile-only server.ts",
     "type-check": "tsc --noEmit",

@@ -1,9 +1,9 @@
 # Dependencies
 node_modules
+node_modules *
 npm-debug.log
 yarn-debug.log
 yarn-error.log
-package-lock.json
 yarn.lock
 
 # Build outputs
@@ -31,11 +31,14 @@ build
 .git
 .gitignore
 .gitattributes
+.github
 
-# Documentation
+# Documentation / FE handoff stubs (not part of runtime build)
 README.md
 *.md
 docs/
+BACKEND_*.ts
+BACKEND_*.md
 
 # Test files
 **/*.test.ts
@@ -52,6 +55,7 @@ logs
 tmp
 temp
 *.tmp
+Untitled
 
 # Docker files (don't copy Dockerfile into itself)
 Dockerfile
@@ -62,9 +66,12 @@ docker-compose.*.yml
 # Uploads (will be created at runtime)
 uploads/*
 
+# Assets not needed at compile time stay; runtime PDF logo is under assets/
+
 # TypeScript source maps (not needed in production)
 *.map
 
 # Misc
 .cache
 .parcel-cache
+assets/image-*.jpg

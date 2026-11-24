@@ -9,8 +9,8 @@ WORKDIR /app
 # Copy package.json and lock file
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --legacy-peer-deps
+# Install dependencies (lockfile must be present — do not ignore package-lock.json)
+RUN npm ci --legacy-peer-deps
 
 # Copy all project files
 COPY . .
@@ -18,7 +18,8 @@ COPY . .
 # Ensure .env exists in the image (prevents COPY error when .env is absent locally)
 RUN if [ -f .env ]; then echo ".env found"; else touch .env; fi
 
-# Build the TypeScript application
+# Build the TypeScript application (raise heap — tsc OOMs on default ~2GB in buildx)
+ENV NODE_OPTIONS=--max-old-space-size=6144
 RUN npm run build
 
 # ---------------------------
@@ -35,6 +36,7 @@ ENV PORT=3000
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/assets ./assets
 COPY --from=builder /app/.env ./
 
 # Create uploads and secrets mount points
