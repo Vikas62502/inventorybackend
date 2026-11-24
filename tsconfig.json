@@ -44,7 +44,9 @@
     "node_modules*",
     "**/node_modules*",
     "dist",
-    "**/*.js"
+    "**/*.js",
+    "BACKEND_*.ts",
+    "database/**"
   ]
 }
 

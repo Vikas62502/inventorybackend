@@ -9,6 +9,7 @@ on:
 env:
   NODE_VERSION: '18'
   IMAGE_NAME: vikasyadav30/cbplsolarinventory
+  NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
   type-check:
@@ -30,6 +31,8 @@ jobs:
 
       - name: Run type check
         run: npm run type-check
+        env:
+          NODE_OPTIONS: '--max-old-space-size=8192'
 
   build:
     name: Build Docker Image
