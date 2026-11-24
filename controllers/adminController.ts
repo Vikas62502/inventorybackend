@@ -233,44 +233,21 @@ const canSubmitBankProcess = (req: Request): boolean =>
 /** Frontend always sends these on Admin Metering handoff (lib/api.ts → sendQuotationToMetering). */
 
 /**
- * Remaining = amountAfterSubsidy − discountAmount − bankFees − total paid.
- * Bank fees are never added to paid. Completed when remaining ≤ 0.
+ * Remaining = subtotal − discountAmount − bankFees − SUM(phase.paidAmount).
+ * Matches Accounts / Dealer Payments (§CI / FE §76). Not amountAfterSubsidy.
  */
 const remainingAgainstSubtotal = (
-  amountAfterSubsidyOrSubtotal: number | null | undefined,
+  subtotalOrBase: number | null | undefined,
   totalPaid: number,
   discountAmount: number | null | undefined = 0,
   bankFees: number | null | undefined = 0
 ): number => {
-  const base = Number(amountAfterSubsidyOrSubtotal) || 0;
+  const base = Number(subtotalOrBase) || 0;
   const discount = Math.max(0, Number(discountAmount) || 0);
   const fees = Math.max(0, Number(bankFees) || 0);
   const paid = Number(totalPaid);
   const safePaid = isNaN(paid) ? 0 : paid;
   return Math.max(0, base - discount - fees - safePaid);
-};
-
-const resolveAmountAfterSubsidyForRemaining = (q: {
-  subtotal?: number | null;
-  amountAfterSubsidy?: number | null;
-  centralSubsidy?: number | null;
-  stateSubsidy?: number | null;
-  products?: { centralSubsidy?: number | null; stateSubsidy?: number | null } | null;
-}): number => {
-  const subtotal = Number(q.subtotal || 0);
-  const rawStored = q.amountAfterSubsidy;
-  const stored = Number(rawStored);
-  if (
-    rawStored !== undefined &&
-    rawStored !== null &&
-    Number.isFinite(stored) &&
-    !(stored === 0 && subtotal > 0)
-  ) {
-    return Math.max(0, stored);
-  }
-  const central = Number(q.products?.centralSubsidy ?? q.centralSubsidy ?? 0);
-  const state = Number(q.products?.stateSubsidy ?? q.stateSubsidy ?? 0);
-  return Math.max(0, subtotal - central - state);
 };
 
 const resolveDealerIdForInventoryUser = async (userId: string, username?: string): Promise<string | null> => {
@@ -702,21 +679,31 @@ export const getAllQuotations = async (req: Request, res: Response): Promise<voi
         quotations: await Promise.all(quotations.rows.map(async (q) => {
           const qAny = q as any;
           const phases = phaseMap.get(String(q.id)) || qAny.paymentPhases || [];
-          const amountAfterSubsidyNum = resolveAmountAfterSubsidyForRemaining({
-            ...(q as any),
-            products: qAny.products
-          });
+          const remainingBaseSubtotal = pickQuotationSubtotalForPayments(
+            (typeof qAny.get === 'function'
+              ? (qAny.get({ plain: true }) as Record<string, unknown>)
+              : (q as unknown as Record<string, unknown>))
+          );
           const totalPaidForRemaining = sumPhasePaidAmounts(phases);
           const discountAmt = Number((q as any).discountAmount || 0);
           const bankFeesAmt = readBankFeesFromRow(q as any);
-          let remainingAmount = remainingAgainstSubtotal(
-            amountAfterSubsidyNum,
-            totalPaidForRemaining,
-            discountAmt,
-            bankFeesAmt
-          );
+          const settlementAmt = Number((q as any).finalSettlementAmount);
+          const settled =
+            !!(q as any).finalSettlementApplied ||
+            (Number.isFinite(settlementAmt) && settlementAmt > 0);
+          let remainingAmount = settled
+            ? 0
+            : remainingAgainstSubtotal(
+                remainingBaseSubtotal,
+                totalPaidForRemaining,
+                discountAmt,
+                bankFeesAmt
+              );
           let paymentStatusOut = q.paymentStatus;
-          if (remainingAmount > 0.01) {
+          if (settled) {
+            remainingAmount = 0;
+            paymentStatusOut = 'completed';
+          } else if (remainingAmount > 0.01) {
             paymentStatusOut = totalPaidForRemaining <= 0.01 ? 'pending' : 'partial';
           } else if (
             q.paymentStatus === 'completed' ||
@@ -2216,21 +2203,29 @@ export const getAdminQuotationById = async (req: Request, res: Response): Promis
       note: phase.note || null,
       ...collectApiFields(phase)
     }));
-    const amountAfterSubsidyNum = resolveAmountAfterSubsidyForRemaining({
-      ...(quotation as any),
-      products: quotationAny.products
-    });
+    const remainingBaseSubtotal = pickQuotationSubtotalForPayments(
+      quotation.get({ plain: true }) as unknown as Record<string, unknown>
+    );
     const totalPaidForRemaining = sumPhasePaidAmounts(phases);
     const discountAmt = Number((quotation as any).discountAmount || 0);
     const bankFeesAmt = readBankFeesFromRow(quotationAny);
-    let remainingAmount = remainingAgainstSubtotal(
-      amountAfterSubsidyNum,
-      totalPaidForRemaining,
-      discountAmt,
-      bankFeesAmt
-    );
+    const settlementAmt = Number(quotationAny.finalSettlementAmount);
+    const settled =
+      !!quotationAny.finalSettlementApplied ||
+      (Number.isFinite(settlementAmt) && settlementAmt > 0);
+    let remainingAmount = settled
+      ? 0
+      : remainingAgainstSubtotal(
+          remainingBaseSubtotal,
+          totalPaidForRemaining,
+          discountAmt,
+          bankFeesAmt
+        );
     let paymentStatusOut = quotationAny.paymentStatus;
-    if (remainingAmount > 0.01) {
+    if (settled) {
+      remainingAmount = 0;
+      paymentStatusOut = 'completed';
+    } else if (remainingAmount > 0.01) {
       paymentStatusOut = totalPaidForRemaining <= 0.01 ? 'pending' : 'partial';
     } else if (
       quotationAny.paymentStatus === 'completed' ||

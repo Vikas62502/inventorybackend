@@ -45,6 +45,8 @@ export type ProposalPdfDocument = {
   pricingTotalAmountLabel: string;
   /** Quotation subtotal — used as Project cost in email / PDF total. */
   subtotalLabel: string;
+  /** Display label: Cash | Loan | Cash + Loan */
+  paymentTypeLabel: string;
   paymentRows: Array<{
     stage: string;
     when: string;
@@ -100,6 +102,33 @@ const phaseLabel = (phase?: string | null): string => {
   if (/^1/.test(p)) return '1-Phase';
   if (/^3/.test(p)) return '3-Phase';
   return '1-Phase';
+};
+
+/** cash | loan | mix → Cash | Loan | Cash + Loan */
+const paymentTypeLabelFromQuotation = (quotation: Quotation): string => {
+  const raw = String(
+    (quotation as any).paymentType ??
+      (quotation as any).payment_type ??
+      quotation.paymentMode ??
+      (quotation as any).payment_mode ??
+      (quotation as any).filePaymentType ??
+      (quotation as any).file_payment_type ??
+      ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (raw === 'cash') return 'Cash';
+  if (raw === 'loan') return 'Loan';
+  if (
+    raw === 'mix' ||
+    raw === 'cash_loan' ||
+    raw === 'cashloan' ||
+    raw === 'cash+loan'
+  ) {
+    return 'Cash + Loan';
+  }
+  return '—';
 };
 
 const systemKwLabelFromProducts = (p: Record<string, any>, quotation: Quotation): string => {
@@ -527,6 +556,7 @@ export const buildProposalDocumentFromQuotationId = async (
     pricingTotalLabel,
     pricingTotalAmountLabel: subtotalLabel,
     subtotalLabel,
+    paymentTypeLabel: paymentTypeLabelFromQuotation(quotation),
     paymentRows,
     banks: PROPOSAL_BANKS,
     warrantyRows: [

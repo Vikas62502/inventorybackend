@@ -68,6 +68,7 @@ export const sendQuotationApprovalEmail = async (
   const phase = String(doc.phaseLabel || '1-Phase').trim();
   // subtotalLabel already uses Math.round via formatInr
   const projectCost = String(doc.subtotalLabel || '—').trim();
+  const paymentType = String(doc.paymentTypeLabel || '—').trim();
   const customerName = String(doc.customerName || 'Customer').trim();
   const subject = `ChairBord Solar – Quotation for Your Approval (${quotationId})`;
 
@@ -81,6 +82,7 @@ export const sendQuotationApprovalEmail = async (
         (<strong>${phase}</strong>) for your review.
       </p>
       <p>
+        <strong>Payment type:</strong> ${paymentType}<br/>
         <strong>Project cost (subtotal):</strong> ${projectCost}
       </p>
       <p>

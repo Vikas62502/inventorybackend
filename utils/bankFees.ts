@@ -1,7 +1,7 @@
 /**
  * Bank fees on loan / cash+loan. Cash = 0. Never add fees to paid.
- * remaining = base − discount − bankFees − paid.
- * See BACKEND_BANK_FEES.ts
+ * remaining = subtotal − discount − bankFees − paid (§CI / Accounts).
+ * See BACKEND_BANK_FEES.ts · BACKEND_DEALER_PAYMENTS_REMAINING.ts
  */
 
 import { normalizePaymentType } from './cashLoanAmounts';

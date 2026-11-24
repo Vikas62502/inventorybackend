@@ -126,6 +126,7 @@
 | 114 | High | Approve 400 even when Proposal amount is filled | **Done** | §87 / REQUIRED §CF / FE §71 / §BY / `BACKEND_APPROVE_PROPOSAL_FIX.ts` |
 | 115 | High | Dealer Payments: all approved files incl. settled | **Done** | §88 / REQUIRED §CG / FE §74 / §CB / `BACKEND_DEALER_PAYMENTS_ALL.ts` |
 | 116 | High | Status timeline OTP approver name (Kamlesh / Sunil / HR) | **Done** | §89 / REQUIRED §CH / FE §75 / §CC / `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts` |
+| 117 | High | Dealer Payments remaining must match Accounts (subtotal − discount − fees − paid) | **Done** | §90 / REQUIRED §CI / FE §76 / §CD / `BACKEND_DEALER_PAYMENTS_REMAINING.ts` |
 
 **Deploy before QA:**
 

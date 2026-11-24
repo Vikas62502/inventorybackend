@@ -528,16 +528,17 @@ const sumPhasePaidAmounts = (phases: PaymentPhaseRecord[]): number =>
   phases.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
 
 /**
- * Remaining = amountAfterSubsidy − discountAmount − bankFees − total paid.
- * Bank fees are never added to paid. Prefer amountAfterSubsidy, not raw subtotal.
+ * Remaining = subtotal − discountAmount − bankFees − SUM(phase.paidAmount).
+ * Matches Account Management / Dealer Payments (§CI / FE §76).
+ * Do NOT use amountAfterSubsidy (stale completed / after-subsidy zero while installment gap remains).
  */
 const remainingPaymentAgainstSubtotal = (
-  amountAfterSubsidyOrSubtotal: number | null | undefined,
+  subtotalOrBase: number | null | undefined,
   totalPaid: number,
   discountAmount: number | null | undefined = 0,
   bankFees: number | null | undefined = 0
 ): number => {
-  const base = Number(amountAfterSubsidyOrSubtotal) || 0;
+  const base = Number(subtotalOrBase) || 0;
   const discount = Math.max(0, Number(discountAmount) || 0);
   const fees = Math.max(0, Number(bankFees) || 0);
   const paid = Number(totalPaid);
@@ -575,10 +576,10 @@ const effectivePayableCap = (
 };
 
 /** Resolve remaining + status for API. Never claim completed / remaining 0 while unpaid gap exists.
- * When final settlement is applied (flag or amount > 0), always echo remaining 0 + completed (§BB). */
+ * Base = quotation subtotal (same as Accounts). When final settlement applied → remaining 0 + completed (§BB). */
 const reconcilePaymentRemainingStatus = (
   storedStatus: string | null | undefined,
-  amountAfterSubsidy: number,
+  subtotal: number,
   totalPaid: number,
   discountAmount: number,
   finalSettlementApplied?: boolean,
@@ -594,7 +595,7 @@ const reconcilePaymentRemainingStatus = (
   }
   const fees = Math.max(0, Number(bankFees) || 0);
   const remaining = remainingPaymentAgainstSubtotal(
-    amountAfterSubsidy,
+    subtotal,
     totalPaid,
     discountAmount,
     fees
@@ -612,7 +613,7 @@ const reconcilePaymentRemainingStatus = (
   if (storedStatus === 'completed') {
     return { remaining: 0, paymentStatus: 'completed' };
   }
-  const payable = effectivePayableCap(amountAfterSubsidy, discountAmount);
+  const payable = effectivePayableCap(subtotal, discountAmount);
   const derived = calculatePaymentStatus(paid, payable) as 'pending' | 'partial' | 'completed';
   return { remaining: 0, paymentStatus: derived };
 };
@@ -1823,12 +1824,16 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
         ? calculatePricing(products, q.discount, (q as any).discountAmount)
         : null;
 
-      const amountAfterSubsidyNum = resolveAmountAfterSubsidy(q as any, products);
-          const totalPaidForRemaining = sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]);
+      const remainingBaseSubtotal = pickQuotationSubtotalForPayments(
+        (typeof (q as any).get === 'function'
+          ? (q as any).get({ plain: true })
+          : q) as Record<string, unknown>
+      );
+      const totalPaidForRemaining = sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]);
       const { remaining: remainingAmount, paymentStatus: reconciledPaymentStatus } =
         reconcilePaymentRemainingStatus(
           q.paymentStatus,
-          amountAfterSubsidyNum,
+          remainingBaseSubtotal,
           totalPaidForRemaining,
           Number((q as any).discountAmount || 0),
           !!(q as any).finalSettlementApplied,
@@ -2409,12 +2414,14 @@ export const getQuotationById = async (req: Request, res: Response): Promise<voi
       )
     };
 
-    const amountAfterSubsidyNum = resolveAmountAfterSubsidy(quotation as any, products);
+    const remainingBaseSubtotal = pickQuotationSubtotalForPayments(
+      quotation.get({ plain: true }) as unknown as Record<string, unknown>
+    );
     const totalPaidForRemaining = sumPhasePaidAmounts(phaseRows as PaymentPhaseRecord[]);
     const { remaining: remainingAmount, paymentStatus: reconciledPaymentStatus } =
       reconcilePaymentRemainingStatus(
         quotation.paymentStatus,
-        amountAfterSubsidyNum,
+        remainingBaseSubtotal,
         totalPaidForRemaining,
         Number((quotation as any).discountAmount || 0),
         !!(quotation as any).finalSettlementApplied,
@@ -2806,7 +2813,9 @@ export const updateQuotationDiscount = async (req: Request, res: Response): Prom
         finalAmount: newFinalAmount,
         discountAmount: computedDiscountAmount,
         remainingAmount: remainingPaymentAgainstSubtotal(
-          amountAfterSubsidy,
+          pickQuotationSubtotalForPayments(
+            quotation.get({ plain: true }) as unknown as Record<string, unknown>
+          ) || Number(quotation.subtotal || 0),
           Number(quotation.paidAmount || 0),
           computedDiscountAmount,
           readBankFeesFromRow(quotation as any)
@@ -3207,7 +3216,7 @@ export const revertQuotationSystem = async (req: Request, res: Response): Promis
 
     const paidForRemaining = Number(quotation.paidAmount || 0);
     const computedRemaining = remainingPaymentAgainstSubtotal(
-      newAmountAfterSubsidy,
+      newSubtotal,
       paidForRemaining,
       newDiscountAmount,
       readBankFeesFromRow(quotation as any)
@@ -3741,7 +3750,9 @@ export const updateQuotationPricing = async (req: Request, res: Response): Promi
     const computedRemaining = looksLikeSettlementPricing
       ? 0
       : remainingPaymentAgainstSubtotal(
-          amountAfterSubsidy,
+          pickQuotationSubtotalForPayments(
+            quotation.get({ plain: true }) as unknown as Record<string, unknown>
+          ) || Number(quotation.subtotal || 0),
           paidForRemaining,
           effectiveDiscountAmount,
           readBankFeesFromRow(quotation as any)
@@ -4167,11 +4178,13 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
     } else {
       // Status-only / site-cost-only update — do not touch installments; skip VAL_012.
       const discountAmt = Number((quotation as any).discountAmount || 0);
-      const amountAfterSubsidyCap = resolveAmountAfterSubsidy(quotation as any);
+      const remainingBaseSubtotal = pickQuotationSubtotalForPayments(
+        quotation.get({ plain: true }) as unknown as Record<string, unknown>
+      );
       const paidAmt = Number(quotation.paidAmount || 0);
       const reconciled = reconcilePaymentRemainingStatus(
         paymentStatusFromBody ?? quotation.paymentStatus,
-        amountAfterSubsidyCap,
+        remainingBaseSubtotal,
         paidAmt,
         discountAmt,
         undefined,
@@ -4238,12 +4251,14 @@ export const updateQuotationPaymentDetails = async (req: Request, res: Response)
       quotation.paidAmount != null
         ? Number(quotation.paidAmount)
         : sumPhasePaidAmounts(responsePhases);
-    const amountAfterSubsidyOut = resolveAmountAfterSubsidy(quotation as any);
+    const remainingBaseOut = pickQuotationSubtotalForPayments(
+      quotation.get({ plain: true }) as unknown as Record<string, unknown>
+    );
     const discountAmtOut = Number((quotation as any).discountAmount || 0);
     const qAny = quotation as any;
     const reconciledOut = reconcilePaymentRemainingStatus(
       quotation.paymentStatus,
-      amountAfterSubsidyOut,
+      remainingBaseOut,
       totalPaidSaved,
       discountAmtOut,
       !!qAny.finalSettlementApplied,
@@ -4586,7 +4601,7 @@ export const revertQuotationFinalSettlement = async (req: Request, res: Response
     const finalAmount = Math.max(0, amountAfterSubsidy - newDiscountAmount);
     const bankFeesAmt = readBankFeesFromRow(quotation as any);
     const remainingAmount = remainingPaymentAgainstSubtotal(
-      amountAfterSubsidy,
+      Number(quotation.subtotal || 0) || amountAfterSubsidy,
       paid,
       newDiscountAmount,
       bankFeesAmt

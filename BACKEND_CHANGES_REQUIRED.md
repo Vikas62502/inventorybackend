@@ -3011,6 +3011,30 @@ Restart the API after deploy so names persist.
 
 ---
 
+## §CI — Dealer Payments remaining must match Accounts — Nov 24 2026
+
+**Status: implemented** — HANDOFF **§90** (FE notes §76 / their §CD) · `BACKEND_DEALER_PAYMENTS_REMAINING.ts`
+
+Dealer Payments must not show Remaining ₹0 while Accounts still has a balance.
+
+| Rule | Behavior |
+|------|----------|
+| Formula | `remaining = max(0, subtotal − discountAmount − bankFees − SUM(phase.paidAmount))` |
+| Base | Quotation **subtotal** (not `amountAfterSubsidy`) |
+| Status | `pending` / `partial` / `completed` derived from that remaining |
+| Zero only when | `finalSettlementApplied` or `finalSettlementAmount > 0` |
+| Do not | Force ₹0 from stale `paymentStatus: completed` or after-subsidy remaining while installment gap > 0 |
+
+Example: subtotal ₹1,86,000 − paid ₹1,30,200 → remaining ₹55,800 (`partial`).
+
+### Done when
+
+- [x] Dealer + admin list/detail remaining uses subtotal − discount − bankFees − paid
+- [x] Stale completed does not zero a positive installment gap
+- [x] Settlement still forces remaining 0 + completed
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
@@ -3023,4 +3047,5 @@ Restart the API after deploy so names persist.
 | `BACKEND_BANK_FEES.ts` | Bank fees on payment-details (§CE / FE §70) |
 | `BACKEND_DEALER_PAYMENTS_ALL.ts` | Dealer Payments all approved files (§CG / FE §74) |
 | `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts` | Status timeline OTP approver (§CH / FE §75) |
+| `BACKEND_DEALER_PAYMENTS_REMAINING.ts` | Dealer Payments remaining = Accounts (§CI / FE §76) |
 | `controllers/callingLeadController.ts` | Calling queue implementation |
