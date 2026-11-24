@@ -124,6 +124,8 @@
 | 112 | High | Accounts Proposal persisted on admin approve | **Done** | §85 / REQUIRED §CD / `BACKEND_APPROVE_PROPOSAL.ts` |
 | 113 | High | Bank fees persist on payment-details (DB not localStorage) | **Done** | §86 / REQUIRED §CE / FE §70 / §BX / `BACKEND_BANK_FEES.ts` |
 | 114 | High | Approve 400 even when Proposal amount is filled | **Done** | §87 / REQUIRED §CF / FE §71 / §BY / `BACKEND_APPROVE_PROPOSAL_FIX.ts` |
+| 115 | High | Dealer Payments: all approved files incl. settled | **Done** | §88 / REQUIRED §CG / FE §74 / §CB / `BACKEND_DEALER_PAYMENTS_ALL.ts` |
+| 116 | High | Status timeline OTP approver name (Kamlesh / Sunil / HR) | **Done** | §89 / REQUIRED §CH / FE §75 / §CC / `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts` |
 
 **Deploy before QA:**
 
@@ -3913,4 +3915,18 @@ Live bug: Admin Approve (Loan) with Proposal amount ₹1,60,000 still returned `
 `PATCH /admin/quotations/:id/status` reads any of those keys as a number or numeric string (`₹` / commas OK). Do not reject with `typeof !== "number"`. Schema is `.passthrough()` so the keys are not stripped.
 
 Loan / mix 400 only when none of them is INR > 0. Cash still stores subtotal. Persist and echo `quotations.proposal`. Upsert ledger proposal only.
+
+## 88. Dealer Payments — all agent approved files (incl. settled) — Nov 24 2026
+
+**Status: implemented** — REQUIRED **§CG** (FE notes §74 / their §CB) · `BACKEND_DEALER_PAYMENTS_ALL.ts`
+
+`GET /api/quotations?status=approved&limit=1000&includeMedia=false` (dealer JWT):
+
+- Scope: `dealerId = req.dealer.id` only
+- Pagination: real `total` / `totalPages` / `hasNext` (limit up to 1000)
+- Always echo `installments` / `paymentPhases` (do not strip when `includeMedia=false`)
+- **Do not** drop settled / completed / remaining 0 rows from `status=approved`
+- Echo `dealerId` / `dealer_id` as string; `dealer.name` for FE match
+
+Code: `controllers/quotationController.ts` → `getQuotations`.
 

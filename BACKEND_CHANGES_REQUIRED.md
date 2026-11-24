@@ -2957,6 +2957,60 @@ Loan / mix 400 only when none of them is INR > 0. Cash still stores subtotal. Pe
 
 ---
 
+## §CG — Dealer Payments: all approved files (incl. settled) — Nov 24 2026
+
+**Status: implemented** — HANDOFF **§88** (FE notes §74 / their §CB) · `BACKEND_DEALER_PAYMENTS_ALL.ts`
+
+`GET /api/quotations?status=approved` for a dealer JWT must:
+
+| Rule | Behavior |
+|------|----------|
+| Scope | `dealerId = req.dealer.id` only |
+| Pagination | Real `total` / `hasNext`; limit up to 1000 |
+| Phases | Keep `paymentPhases` when `includeMedia=false` |
+| Settled | Include completed / remaining 0 / `finalSettlementApplied` rows |
+
+Do **not** add `paymentStatus` / settlement filters unless the client sends `paymentStatus=`.
+
+### Done when
+
+- [x] Dealer approved list scoped to agent
+- [x] Pagination covers full agent set
+- [x] Phases always on list rows
+- [x] Settled approved files still returned
+
+---
+
+## §CH — Status timeline: OTP approver name (Kamlesh / Sunil / HR) — Nov 24 2026
+
+**Status: implemented** — HANDOFF **§89** (FE notes §75 / their §CC) · `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts`
+
+Admin Status timeline must show who verified the approve OTP. Refetch detail when opening timeline.
+
+| Step | Backend must |
+|------|----------------|
+| Verify OTP | Stash `approvalOtpVerifiedBy` (+ `approvalOtpVerifiedAt`) on quotation; return `recipientKey` / `recipientLabel` / mobile; never return OTP digits |
+| Approve | Write `statusHistory` with `by` / `byLabel` / `otpRecipient` / `otpMobile` (body `approvalOtpRecipient` **or** stash); clear stash |
+| GET | Echo those fields (don’t strip to `{ status, at }`) |
+
+| Piece | Behavior |
+|-------|----------|
+| Recipients | `kamlesh` Kamlesh Sir **9269666646** · `sunil` Sunil Sir **9251666646** · `hr` HR **9251005610** |
+| Columns | `quotations.approvalOtpVerifiedBy` / `approvalOtpVerifiedAt` (bootstrap + migration) |
+| Approve aliases | `approvalOtpRecipient`, `approval_otp_recipient`, `otpRecipient`, `otpVerifiedBy`, `approvedByOtp` |
+
+Restart the API after deploy so names persist.
+
+### Done when
+
+- [x] Verify stashes recipient on quotation
+- [x] Approve PATCH stores OTP verifier on approved history rows (body or stash)
+- [x] Approve clears stash
+- [x] GET list/detail preserves `by` / `byLabel` / `otpMobile`
+- [x] Phones match FE handoff (9269666646 / 9251666646 / 9251005610)
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
@@ -2967,4 +3021,6 @@ Loan / mix 400 only when none of them is INR > 0. Cash still stores subtotal. Pe
 | `BACKEND_ADMIN_QUOTATION_STATUS.ts` | HR upload reference, `patchDealerCallingQueueAction` |
 | `BACKEND_APPROVE_PROPOSAL_FIX.ts` | Approve 400 when proposal is filled (§CF / FE §71) |
 | `BACKEND_BANK_FEES.ts` | Bank fees on payment-details (§CE / FE §70) |
+| `BACKEND_DEALER_PAYMENTS_ALL.ts` | Dealer Payments all approved files (§CG / FE §74) |
+| `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts` | Status timeline OTP approver (§CH / FE §75) |
 | `controllers/callingLeadController.ts` | Calling queue implementation |

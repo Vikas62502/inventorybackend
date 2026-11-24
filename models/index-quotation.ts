@@ -23,6 +23,7 @@ import SubvendorLeaserPayment from './SubvendorLeaserPayment';
 import SubvendorBill from './SubvendorBill';
 import OfficeOutsideRecord from './OfficeOutsideRecord';
 import OfficeOutsideLedger from './OfficeOutsideLedger';
+import ApprovalOtp from './ApprovalOtp';
 
 // ================================================================================
 // DEALER ASSOCIATIONS
@@ -148,6 +149,7 @@ export {
   SubvendorLeaserPayment,
   SubvendorBill,
   OfficeOutsideRecord,
-  OfficeOutsideLedger
+  OfficeOutsideLedger,
+  ApprovalOtp
 };
 

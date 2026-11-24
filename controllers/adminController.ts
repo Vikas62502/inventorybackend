@@ -117,6 +117,12 @@ import {
 import { pickApproveProposalRaw, resolveApproveProposalAmount } from '../utils/approveProposal';
 import { readBankFeesFromRow } from '../utils/bankFees';
 import { persistQuotationSystemKw } from '../utils/persistQuotationSystemKw';
+import { sendQuotationApprovalEmail } from '../utils/emails/approvalemail';
+import {
+  APPROVAL_OTP_RECIPIENTS,
+  approvalOtpRecipientLabel,
+  normalizeRecipient
+} from '../utils/otp/approvalOtp';
 import {
   buildFinalConfirmationApiFields,
   buildFinalConfirmationApiFieldsMany
@@ -988,10 +994,38 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
         body.approvedAt ??
         body.approved_at
       );
+
+    // OTP verifier (Kamlesh / Sunil / HR) — Status timeline. Prefer body, else last verify on quotation.
+    const otpRecipientRaw =
+      body.approvalOtpRecipient ??
+      body.approval_otp_recipient ??
+      body.otpRecipient ??
+      body.otp_recipient ??
+      body.otpVerifiedBy ??
+      body.otp_verified_by ??
+      body.approvedByOtp ??
+      body.approved_by_otp ??
+      plainBefore.approvalOtpVerifiedBy ??
+      plainBefore.approval_otp_verified_by;
+    const historyEntry: Record<string, unknown> = { status: statusRaw, at };
+    if (statusRaw === 'approved' && otpRecipientRaw != null && String(otpRecipientRaw).trim()) {
+      const recipientKey = normalizeRecipient(otpRecipientRaw);
+      const recipient = APPROVAL_OTP_RECIPIENTS[recipientKey];
+      historyEntry.by = recipientKey;
+      historyEntry.byLabel = approvalOtpRecipientLabel(recipientKey);
+      historyEntry.otpRecipient = recipientKey;
+      historyEntry.otpMobile = recipient.mobileNumber;
+    }
+
     const updateData: Record<string, unknown> = {
       status: statusRaw,
-      statusHistory: [...prevHistory, { status: statusRaw, at }]
+      statusHistory: [...prevHistory, historyEntry]
     };
+    if (statusRaw === 'approved') {
+      // Clear one-shot verify stash after recording on history
+      updateData.approvalOtpVerifiedBy = null;
+      updateData.approvalOtpVerifiedAt = null;
+    }
 
     if (statusRaw === 'approved') {
       const paymentTypeResolved =
@@ -1130,6 +1164,17 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
         logError('Upsert subvendor ledger proposal on approve failed (non-fatal)', ledgerErr, {
           quotationId
         });
+      }
+      try {
+        const mailResult = await sendQuotationApprovalEmail({
+          quotationId: quotation.id
+        });
+        logInfo('Quotation approval email sent', {
+          quotationId,
+          to: mailResult.to
+        });
+      } catch (mailErr) {
+        logError('Quotation approval email failed (non-fatal)', mailErr, { quotationId });
       }
     }
     await quotation.reload();

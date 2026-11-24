@@ -7,22 +7,63 @@ import { serializeProposalApiFields } from './approveProposal';
 import { quotationOfficeLocationApiFields } from './moduleFieldPermissions';
 import { parseBankDocumentNames } from './meteringWorkflowApi';
 
-export type QuotationStatusHistoryEntry = { status: string; at: string };
+export type QuotationStatusHistoryEntry = {
+  status: string;
+  at: string;
+  /** OTP verifier key: kamlesh | sunil | hr */
+  by?: string;
+  /** Display name e.g. "Kamlesh Sir" */
+  byLabel?: string;
+  otpRecipient?: string;
+  otpMobile?: string;
+};
+
+const normalizeHistoryEntry = (e: unknown): QuotationStatusHistoryEntry | null => {
+  if (!e || typeof e !== 'object') return null;
+  const row = e as Record<string, unknown>;
+  const status = String(row.status ?? row.to ?? row.newStatus ?? '').trim();
+  const at = String(row.at ?? row.changedAt ?? row.timestamp ?? row.createdAt ?? '').trim();
+  if (!status || !at) return null;
+  const by = String(
+    row.by ?? row.approvedBy ?? row.otpRecipient ?? row.otp_recipient ?? row.recipient ?? ''
+  ).trim();
+  const byLabel = String(
+    row.byLabel ??
+      row.by_label ??
+      row.approvedByLabel ??
+      row.approved_by_label ??
+      row.recipientLabel ??
+      row.recipient_label ??
+      ''
+  ).trim();
+  const otpRecipient = String(row.otpRecipient ?? row.otp_recipient ?? by ?? '').trim();
+  const otpMobile = String(row.otpMobile ?? row.otp_mobile ?? row.mobileNumber ?? '').trim();
+  return {
+    status,
+    at,
+    ...(by ? { by } : {}),
+    ...(byLabel ? { byLabel } : {}),
+    ...(otpRecipient ? { otpRecipient } : {}),
+    ...(otpMobile ? { otpMobile } : {})
+  };
+};
 
 /**
  * Read statusHistory from DB row (JSON array, JSON string, or snake_case key).
+ * Keeps OTP verifier fields (by / byLabel) for admin Status timeline.
  */
 export function readStatusHistoryFromRow(q: Record<string, unknown>): QuotationStatusHistoryEntry[] {
   const raw = q.statusHistory ?? q.status_history;
+  const parseList = (list: unknown[]): QuotationStatusHistoryEntry[] =>
+    list.map(normalizeHistoryEntry).filter((e): e is QuotationStatusHistoryEntry => !!e);
+
   if (Array.isArray(raw)) {
-    return raw.filter((e): e is QuotationStatusHistoryEntry => !!e && typeof e === 'object' && typeof (e as any).status === 'string' && typeof (e as any).at === 'string');
+    return parseList(raw);
   }
   if (typeof raw === 'string' && raw.trim()) {
     try {
       const p = JSON.parse(raw) as unknown;
-      return Array.isArray(p)
-        ? p.filter((e): e is QuotationStatusHistoryEntry => !!e && typeof e === 'object' && typeof (e as any).status === 'string' && typeof (e as any).at === 'string')
-        : [];
+      return Array.isArray(p) ? parseList(p) : [];
     } catch {
       return [];
     }

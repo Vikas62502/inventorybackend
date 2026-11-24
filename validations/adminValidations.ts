@@ -22,7 +22,16 @@ export const updateStatusSchema = z
     bankIfsc: z.string().optional(),
     bank_ifsc: z.string().optional(),
     subsidyChequeDetails: z.string().optional(),
-    subsidy_cheque_details: z.string().optional()
+    subsidy_cheque_details: z.string().optional(),
+    // OTP verifier for Status timeline (Kamlesh / Sunil / HR)
+    approvalOtpRecipient: z.string().optional(),
+    approval_otp_recipient: z.string().optional(),
+    otpRecipient: z.string().optional(),
+    otp_recipient: z.string().optional(),
+    otpVerifiedBy: z.string().optional(),
+    otp_verified_by: z.string().optional(),
+    approvedByOtp: z.string().optional(),
+    approved_by_otp: z.string().optional()
   })
   .passthrough()
   .refine(

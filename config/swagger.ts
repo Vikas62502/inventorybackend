@@ -579,11 +579,15 @@ const swaggerDefinition = {
     { name: 'Visits', description: 'Visit management endpoints' },
     { name: 'Visitors', description: 'Visitor management endpoints' },
     { name: 'Admin', description: 'Admin management endpoints (Quotation System)' },
-    { name: 'Config', description: 'System configuration endpoints' }
+    { name: 'Config', description: 'System configuration endpoints' },
+    { name: 'SMS', description: 'OTP / DLT SMS endpoints' },
+    { name: 'Email', description: 'Quotation approval email endpoints' }
   ]
 };
 
 const apiGlobs = [
+  path.resolve(__dirname, '../server.ts'),
+  path.resolve(__dirname, '../server.js'),
   path.resolve(__dirname, '../routes/*.ts'),
   path.resolve(__dirname, '../controllers/*.ts'),
   path.resolve(__dirname, '../routes/*.js'),

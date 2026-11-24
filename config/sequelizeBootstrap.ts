@@ -536,6 +536,45 @@ const ensureCreatedCallingAssignmentRemap = async (): Promise<void> => {
   }
 };
 
+/** Admin approve OTP (4-digit, 30 min TTL, one row per quotation). */
+const ensureApprovalOtpsTable = async (): Promise<void> => {
+  try {
+    await sequelize.query(`
+      CREATE TABLE IF NOT EXISTS approval_otps (
+        id SERIAL PRIMARY KEY,
+        quotation_id VARCHAR(50) NOT NULL UNIQUE,
+        otp VARCHAR(4) NOT NULL,
+        recipient_key VARCHAR(20) NOT NULL,
+        mobile_number VARCHAR(15) NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await sequelize.query(
+      'CREATE INDEX IF NOT EXISTS approval_otps_expires_at_idx ON approval_otps (expires_at);'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure approval_otps table', { message });
+  }
+};
+
+/** §CC — stash OTP verifier on quotation between verify and approve (Status timeline). */
+const ensureApprovalOtpVerifiedColumns = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS "approvalOtpVerifiedBy" VARCHAR(20) NULL;'
+    );
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS "approvalOtpVerifiedAt" TIMESTAMPTZ NULL;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure approval OTP verified columns', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -560,6 +599,8 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureCallingLeadFormColumns();
     await ensureCreatedCallingAssignmentRemap();
     await ensureOldSheetSourcesDisabled();
+    await ensureApprovalOtpsTable();
+    await ensureApprovalOtpVerifiedColumns();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

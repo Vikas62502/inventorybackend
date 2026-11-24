@@ -1693,8 +1693,11 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       }
     }
 
-    // Account managers / accounts-everyone list cannot override status filter - approved only
-    // For others, allow status filter from query params
+    // Account managers / accounts-everyone list cannot override status filter - approved only.
+    // For others, allow status filter from query params.
+    // §CG / FE §CB — dealer Payments: status=approved includes settled / completed / remaining 0.
+    // Never filter finalSettlementApplied / paymentStatus unless the client sends paymentStatus=.
+    // Keep paymentPhases even when includeMedia=false (phases are not media).
     if (!isAccountManager && !listAllApprovedAccounts && status) {
       where.status = status;
     }
@@ -1885,22 +1888,26 @@ export const getQuotations = async (req: Request, res: Response): Promise<void> 
       const dealerName = dealer
         ? `${dealer.firstName || ''} ${dealer.lastName || ''}`.trim() || null
         : null;
+      const dealerIdOut = q.dealerId != null ? String(q.dealerId) : null;
       return {
         id: q.id,
-        dealerId: q.dealerId,
-        dealer_id: q.dealerId,
+        dealerId: dealerIdOut,
+        dealer_id: dealerIdOut,
         customerType: customerTypeValue,
         customer_type: customerTypeValue,
-        dealer: dealer ? {
-          id: dealer.id,
-          firstName: dealer.firstName,
-          lastName: dealer.lastName,
-          email: dealer.email,
-          mobile: dealer.mobile,
-          phone: dealer.mobile,
-          username: dealer.username,
-          role: dealer.role
-        } : null,
+        dealer: dealer
+          ? {
+              id: String(dealer.id),
+              name: dealerName,
+              firstName: dealer.firstName,
+              lastName: dealer.lastName,
+              email: dealer.email,
+              mobile: dealer.mobile,
+              phone: dealer.mobile,
+              username: dealer.username,
+              role: dealer.role
+            }
+          : null,
         dealerName,
         dealer_name: dealerName,
         dealerMobile: dealer?.mobile ?? null,

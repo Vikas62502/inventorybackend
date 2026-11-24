@@ -2040,9 +2040,9 @@ const buildCallingActionsResponse = async (req: Request) => {
         include: [leadInclude],
         distinct: true,
         col: 'id'
-      }),
-      CallingActionHistory.findAll({
-        where,
+    }),
+    CallingActionHistory.findAll({
+      where,
         include: [leadInclude],
         order: listOrder,
         limit,
@@ -5936,12 +5936,12 @@ export const getHrLeadUploadBatchRows = async (req: Request, res: Response): Pro
     const [assignments, callingLeads] = await Promise.all([
       leadIds.length
         ? DealerLeadAssignment.findAll({
-            where: {
-              leadId: { [Op.in]: leadIds },
-              [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
-            },
-            attributes: ['leadId', 'dealerId', 'status']
-          })
+        where: {
+          leadId: { [Op.in]: leadIds },
+          [Op.and]: [LATEST_ASSIGNMENT_OWNERSHIP_CLAUSE]
+        },
+        attributes: ['leadId', 'dealerId', 'status']
+      })
         : Promise.resolve([] as DealerLeadAssignment[]),
       leadIds.length
         ? CallingLead.findAll({

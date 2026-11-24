@@ -9,7 +9,9 @@ import { sequelizeBootstrap } from './config/sequelizeBootstrap';
 import { attachRealtimeServer, emitRealtime, realtimeEvents } from './utils/realtime';
 import { startSheetAutoSyncCron } from './utils/sheetAutoSyncCron';
 import { startSheetWriteBackCron } from './utils/sheetWriteBackCron';
-
+import { sendSms } from './utils/otp/sms';
+import { sendApprovalOtp, verifyApprovalOtp } from './utils/otp/approvalOtp';
+import { sendQuotationApprovalEmail } from './utils/emails/approvalemail';
 dotenv.config();
 
 // Import route (Inventory Systems)
@@ -173,6 +175,334 @@ app.use('/api/serial-numbers', serialNumberRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/maps', mapsRoutes);
 
+/**
+ * @swagger
+ * /api/send-sms:
+ *   post:
+ *     summary: Send ChairBord OTP SMS
+ *     description: Sends a DLT-registered OTP SMS via the ChairBord 2FA_AUTH template.
+ *     tags: [SMS]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - mobileNumber
+ *               - message
+ *               - otpNumber
+ *             properties:
+ *               mobileNumber:
+ *                 type: string
+ *                 description: Recipient mobile number (10 digits)
+ *                 example: "9876543210"
+ *               message:
+ *                 type: string
+ *                 description: Context label inserted into the SMS template (e.g. login / wallet top-up)
+ *                 example: "Wallet TOP UP 2FA"
+ *               otpNumber:
+ *                 type: string
+ *                 description: OTP value to send
+ *                 example: "123456"
+ *     responses:
+ *       200:
+ *         description: SMS accepted for delivery
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: SMS sent successfully
+ *       400:
+ *         description: Missing or invalid request body
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: SMS provider / configuration error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post('/api/send-sms', (req: Request, res: Response) => {
+  const { mobileNumber, message, otpNumber } = req.body;
+  void sendSms(mobileNumber, message, otpNumber, '2FA_AUTH');
+  res.json({ success: true, message: 'SMS sent successfully' });
+});
+
+/**
+ * @swagger
+ * /api/send-approval-email:
+ *   post:
+ *     summary: Send quotation approval email with proposal PDF
+ *     description: |
+ *       Loads the quotation by `quotationId`, builds the Solar Installation Proposal PDF from that
+ *       quotation (same 3-page layout as the frontend download), and emails it from connect@chairbord.com.
+ *       Email body details (customer, system, pricing) also come from that quotation id.
+ *     tags: [Email]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - quotationId
+ *             properties:
+ *               quotationId:
+ *                 type: string
+ *                 description: Quotation id used to build the PDF and email content
+ *                 example: "QT-5MXYEQ"
+ *               to:
+ *                 type: string
+ *                 format: email
+ *                 description: Optional override; defaults to customer.email on the quotation
+ *                 example: "customer@example.com"
+ *               kind:
+ *                 type: string
+ *                 enum: [consent, approved]
+ *                 description: consent = file-login proposal/consent email; approved = after admin approve
+ *                 example: consent
+ *               cc:
+ *                 oneOf:
+ *                   - type: string
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                 description: Optional CC address(es)
+ *     responses:
+ *       200:
+ *         description: Approval email sent
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Approval email sent successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     messageId:
+ *                       type: string
+ *                       example: "<abc@mail.gmail.com>"
+ *                     to:
+ *                       type: string
+ *                       example: "customer@example.com"
+ *                     quotationId:
+ *                       type: string
+ *                       example: "QT-5MXYEQ"
+ *       400:
+ *         description: Missing quotationId / invalid email / quotation has no customer email
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Quotation not found (when resolving customer email)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Mail / PDF generation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post('/api/send-approval-email', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const quotationId = String(body.quotationId ?? body.quotation_id ?? '').trim();
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'quotationId is required' }
+      });
+      return;
+    }
+
+    const toOverride = String(body.to ?? body.email ?? '').trim();
+    const kindRaw = String(body.kind ?? body.purpose ?? '').trim().toLowerCase();
+    const kind = kindRaw === 'consent' ? 'consent' : 'approved';
+    const result = await sendQuotationApprovalEmail({
+      quotationId,
+      to: toOverride || undefined,
+      cc: body.cc as string | string[] | undefined,
+      kind
+    });
+
+    res.json({
+      success: true,
+      message: 'Approval email sent successfully',
+      data: {
+        messageId: result.messageId,
+        to: result.to,
+        quotationId: result.quotationId
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to send approval email';
+    const notFound = /not found/i.test(message);
+    const badRequest =
+      /required|recipient email|customer\.email/i.test(message) || /quotationId/i.test(message);
+    logger.error('Send approval email failed', { error: message });
+    res.status(notFound ? 404 : badRequest ? 400 : 500).json({
+      success: false,
+      error: {
+        code: notFound ? 'RES_001' : badRequest ? 'VAL_001' : 'SYS_001',
+        message
+      }
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/approval-otp/send:
+ *   post:
+ *     summary: Send 4-digit approval OTP SMS
+ *     description: |
+ *       Generates a random 4-digit OTP, stores it for the quotation (30 minutes),
+ *       replaces any previous OTP for that quotation, and SMS to Kamlesh / Sunil / HR.
+ *       Default recipient is Kamlesh Sir (8210554718).
+ *     tags: [SMS]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [quotationId]
+ *             properties:
+ *               quotationId:
+ *                 type: string
+ *                 example: QT-5MXYEQ
+ *               recipient:
+ *                 type: string
+ *                 enum: [kamlesh, sunil, hr]
+ *                 default: kamlesh
+ *     responses:
+ *       200:
+ *         description: OTP stored and SMS accepted
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: Quotation not found
+ */
+app.post('/api/approval-otp/send', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const quotationId = String(body.quotationId ?? body.quotation_id ?? '').trim();
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'quotationId is required' }
+      });
+      return;
+    }
+    const result = await sendApprovalOtp({
+      quotationId,
+      recipient: String(body.recipient ?? body.to ?? 'kamlesh')
+    });
+    res.json({
+      success: true,
+      message: `OTP sent to ${result.recipientLabel}`,
+      data: {
+        quotationId: result.quotationId,
+        recipient: result.recipientKey,
+        recipientLabel: result.recipientLabel,
+        mobileNumber: result.mobileNumber,
+        expiresAt: result.expiresAt
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to send approval OTP';
+    const notFound = /not found/i.test(message);
+    logger.error('Send approval OTP failed', { error: message });
+    res.status(notFound ? 404 : 400).json({
+      success: false,
+      error: { code: notFound ? 'RES_001' : 'VAL_001', message }
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/approval-otp/verify:
+ *   post:
+ *     summary: Verify approval OTP
+ *     description: |
+ *       Checks the 4-digit OTP against the database for the quotation.
+ *       On success the OTP row is erased. Expired OTPs (30 min) are erased.
+ *     tags: [SMS]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [quotationId, otp]
+ *             properties:
+ *               quotationId:
+ *                 type: string
+ *               otp:
+ *                 type: string
+ *                 example: "4821"
+ *     responses:
+ *       200:
+ *         description: OTP verified and cleared
+ *       400:
+ *         description: Incorrect / expired / missing OTP
+ */
+app.post('/api/approval-otp/verify', async (req: Request, res: Response) => {
+  try {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const quotationId = String(body.quotationId ?? body.quotation_id ?? '').trim();
+    const otp = String(body.otp ?? body.otpNumber ?? '').trim();
+    if (!quotationId) {
+      res.status(400).json({
+        success: false,
+        error: { code: 'VAL_001', message: 'quotationId is required' }
+      });
+      return;
+    }
+    const result = await verifyApprovalOtp({ quotationId, otp });
+    res.json({
+      success: true,
+      message: 'OTP verified',
+      data: {
+        quotationId: result.quotationId,
+        verified: true,
+        recipient: result.recipientKey,
+        recipientKey: result.recipientKey,
+        recipientLabel: result.recipientLabel,
+        mobileNumber: result.mobileNumber
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to verify OTP';
+    logger.error('Verify approval OTP failed', { error: message });
+    res.status(400).json({
+      success: false,
+      error: { code: 'VAL_OTP', message }
+    });
+  }
+});
+
 // 404 handler res
 app.use((_: Request, res: Response) => {
   res.status(404).json({ error: 'Route not found' });
@@ -252,6 +582,8 @@ void sequelizeBootstrap.then(() => {
     startSheetWriteBackCron();
   });
 });
+
+
 
 export default app;
 
