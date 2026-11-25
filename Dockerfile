@@ -39,17 +39,20 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
-# Chromium for Puppeteer PDF generation (avoids re-downloading during npm install)
+# Proposal / consent PDF — system Chromium (not Puppeteer Chrome-for-Testing cache)
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 RUN apk add --no-cache \
-    chromium \
-    nss \
-    freetype \
-    harfbuzz \
-    ca-certificates \
-    ttf-freefont
+      chromium \
+      nss \
+      freetype \
+      harfbuzz \
+      ca-certificates \
+      ttf-freefont \
+      font-noto-emoji \
+    && (test -x /usr/bin/chromium || ln -sf /usr/bin/chromium-browser /usr/bin/chromium)
 
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/dist ./dist

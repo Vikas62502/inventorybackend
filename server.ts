@@ -1,7 +1,8 @@
+// Must load before any module that reads process.env at import time (e.g. SMS).
+import 'dotenv/config';
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import path from 'path';
-import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
 import logger from './config/logger';
@@ -12,7 +13,6 @@ import { startSheetWriteBackCron } from './utils/sheetWriteBackCron';
 import { sendSms } from './utils/otp/sms';
 import { sendApprovalOtp, verifyApprovalOtp } from './utils/otp/approvalOtp';
 import { sendQuotationApprovalEmail } from './utils/emails/approvalemail';
-dotenv.config();
 
 // Import route (Inventory Systems)
 import authRoutes from './routes/authRoutes';

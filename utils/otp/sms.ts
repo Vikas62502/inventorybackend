@@ -5,17 +5,29 @@ type SmsTemplate = {
   templateId: string | undefined;
 };
 
-const SMS_URL = process.env.SMS_URL;
-const API_KEY = process.env.DLT_API_KEY;
-const SENDER_ID = process.env.DLT_SENDER_ID;
+const env = (key: string): string => {
+  const raw = process.env[key];
+  if (raw == null) return '';
+  return String(raw).trim().replace(/^['"]|['"]$/g, '');
+};
 
-const TEMPLATES: Record<SmsTemplateId, SmsTemplate> = {
-  '2FA_AUTH': {
-    message: (message: string, otpNumber: string) =>
-      `Your OTP for ChairBord ${message} is: ${otpNumber} .Please do not share this OTP with anyone.
+const getSmsConfig = () => ({
+  smsUrl: env('SMS_URL'),
+  apiKey: env('DLT_API_KEY'),
+  senderId: env('DLT_SENDER_ID'),
+  templateId2fa: env('DLT_TEMPLATE_ID_2FA_AUTH')
+});
+
+const getTemplates = (): Record<SmsTemplateId, SmsTemplate> => {
+  const { templateId2fa } = getSmsConfig();
+  return {
+    '2FA_AUTH': {
+      message: (message: string, otpNumber: string) =>
+        `Your OTP for ChairBord ${message} is: ${otpNumber} .Please do not share this OTP with anyone.
 ChairBord Pvt. Ltd.`,
-    templateId: process.env.DLT_TEMPLATE_ID_2FA_AUTH
-  }
+      templateId: templateId2fa || undefined
+    }
+  };
 };
 
 /** e.g. 10 → "10kw", 5.5 → "5.5kw" */
@@ -72,11 +84,12 @@ const sendSms = async (
   otpNumber: string,
   msgId: SmsTemplateId = '2FA_AUTH'
 ): Promise<void> => {
-  if (!SMS_URL || !API_KEY || !SENDER_ID) {
+  const { smsUrl, apiKey, senderId } = getSmsConfig();
+  if (!smsUrl || !apiKey || !senderId) {
     throw new Error('SMS_URL, DLT_API_KEY, and DLT_SENDER_ID are required');
   }
 
-  const template = TEMPLATES[msgId];
+  const template = getTemplates()[msgId];
   if (!template) {
     throw new Error(`Invalid template ID: ${msgId}`);
   }
@@ -85,17 +98,17 @@ const sendSms = async (
   }
 
   const body = new URLSearchParams({
-    sender_id: SENDER_ID,
+    sender_id: senderId,
     mobile_no: mobileNumber,
     message: template.message(message, otpNumber),
     dlt_template_id: template.templateId
   });
 
   try {
-    const response = await fetch(SMS_URL, {
+    const response = await fetch(smsUrl, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${API_KEY}`,
+        authorization: `Bearer ${apiKey}`,
         'cache-control': 'no-cache',
         'content-type': 'application/x-www-form-urlencoded'
       },

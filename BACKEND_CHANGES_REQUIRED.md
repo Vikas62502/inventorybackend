@@ -3035,6 +3035,39 @@ Example: subtotal ₹1,86,000 − paid ₹1,30,200 → remaining ₹55,800 (`par
 
 ---
 
+## §CJ — Proposal PDF uses system Chrome (consent email) — Nov 25 2026
+
+**Status: implemented** — HANDOFF **§91** (FE notes §77 / their §CE) · `BACKEND_PROPOSAL_PDF_CHROME.ts`
+
+`utils/emails/generateProposalPdf.ts` launches Chrome in order: `PUPPETEER_EXECUTABLE_PATH` → system paths → `channel:chrome` → bundled.
+
+Docker Alpine runner installs `chromium` and sets `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`.
+
+### Done when
+
+- [x] PDF generation prefers system / env Chrome
+- [x] Docker image includes Chromium for approval/consent email PDF
+
+---
+
+## §CK — Dealer create/revise → is_current + restore-current — Nov 25 2026
+
+**Status: implemented** — HANDOFF **§92** (FE notes §78 / their §CF) · `BACKEND_DEALER_CURRENT_QUOTATION.ts` · related §23
+
+| Action | Behavior |
+|--------|----------|
+| Create / additional revise | New row `isCurrent=true`; siblings demoted via `markQuotationAsCurrentForCustomer` |
+| Restore | `POST …/restore-current`, `POST …/set-current`, `PATCH { isCurrent: true }` |
+| GET | Echo `isCurrent` / `is_current` (+ `sourceQuotationId`) for Admin Current badge |
+
+### Done when
+
+- [x] Create marks current + demotes siblings
+- [x] Restore endpoints flip Current without deleting rows
+- [x] List/detail echo `isCurrent` for Admin
+
+---
+
 ## File index (May–June 2026 handoff)
 
 | Doc / code | Topics |
@@ -3048,4 +3081,6 @@ Example: subtotal ₹1,86,000 − paid ₹1,30,200 → remaining ₹55,800 (`par
 | `BACKEND_DEALER_PAYMENTS_ALL.ts` | Dealer Payments all approved files (§CG / FE §74) |
 | `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts` | Status timeline OTP approver (§CH / FE §75) |
 | `BACKEND_DEALER_PAYMENTS_REMAINING.ts` | Dealer Payments remaining = Accounts (§CI / FE §76) |
+| `BACKEND_PROPOSAL_PDF_CHROME.ts` | Proposal PDF system Chrome (§CJ / FE §77) |
+| `BACKEND_DEALER_CURRENT_QUOTATION.ts` | Dealer is_current + restore (§CK / FE §78) |
 | `controllers/callingLeadController.ts` | Calling queue implementation |

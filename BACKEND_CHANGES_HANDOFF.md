@@ -127,6 +127,8 @@
 | 115 | High | Dealer Payments: all approved files incl. settled | **Done** | §88 / REQUIRED §CG / FE §74 / §CB / `BACKEND_DEALER_PAYMENTS_ALL.ts` |
 | 116 | High | Status timeline OTP approver name (Kamlesh / Sunil / HR) | **Done** | §89 / REQUIRED §CH / FE §75 / §CC / `BACKEND_STATUS_TIMELINE_OTP_APPROVER.ts` |
 | 117 | High | Dealer Payments remaining must match Accounts (subtotal − discount − fees − paid) | **Done** | §90 / REQUIRED §CI / FE §76 / §CD / `BACKEND_DEALER_PAYMENTS_REMAINING.ts` |
+| 118 | High | Proposal PDF uses system Chrome (PUPPETEER_EXECUTABLE_PATH) | **Done** | §91 / REQUIRED §CJ / FE §77 / §CE / `BACKEND_PROPOSAL_PDF_CHROME.ts` |
+| 119 | High | Dealer create/revise is_current + restore-current | **Done** | §92 / REQUIRED §CK / FE §78 / §CF / `BACKEND_DEALER_CURRENT_QUOTATION.ts` |
 
 **Deploy before QA:**
 
