@@ -113,6 +113,14 @@ jobs:
             AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
             AWS_REGION=${{ secrets.AWS_REGION || 'ap-south-1' }}
 
+            SMS_URL=${{ secrets.SMS_URL }}
+            DLT_SENDER_ID=${{ secrets.DLT_SENDER_ID }}
+            DLT_API_KEY=${{ secrets.DLT_API_KEY }}
+            DLT_TEMPLATE_ID_2FA_AUTH=${{ secrets.DLT_TEMPLATE_ID_2FA_AUTH }}
+
+            EMAIL_USER=${{ secrets.EMAIL_USER }}
+            EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
+
             # Google Sheets → HR Social Media
             GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
             GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
