@@ -7,7 +7,7 @@ const normalizeEnvValue = (value?: string): string => {
 };
 
 const customJobName = normalizeEnvValue(process.env.LOKI_JOB_NAME) || 'Solar_Inventory';
-const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP) || "http://43.204.133.228:3100";
+const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP) || "http://187.127.158.150:3100";
 
 const isValidUrl = (value: string): boolean => {
   try {
