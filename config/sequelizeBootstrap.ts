@@ -575,6 +575,21 @@ const ensureApprovalOtpVerifiedColumns = async (): Promise<void> => {
   }
 };
 
+/** §CG — Admin Actions consent email Done state (proposal PDF). */
+const ensureConsentEmailSentColumns = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS "consentEmailSentAt" TIMESTAMPTZ NULL;'
+    );
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS "consentEmailSentTo" VARCHAR(255) NULL;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure consent email sent columns', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -601,6 +616,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureOldSheetSourcesDisabled();
     await ensureApprovalOtpsTable();
     await ensureApprovalOtpVerifiedColumns();
+    await ensureConsentEmailSentColumns();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

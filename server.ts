@@ -14,6 +14,7 @@ import { sendSms } from './utils/otp/sms';
 import { sendApprovalOtp, verifyApprovalOtp } from './utils/otp/approvalOtp';
 import { sendQuotationApprovalEmail, warmApprovalMailer } from './utils/emails/approvalemail';
 import { warmProposalPdfBrowser } from './utils/emails/generateProposalPdf';
+import Quotation from './models/Quotation';
 
 // Import route (Inventory Systems)
 import authRoutes from './routes/authRoutes';
@@ -358,10 +359,30 @@ app.post('/api/send-approval-email', async (req: Request, res: Response) => {
         to: toOverride || undefined,
         cc: body.cc as string | string[] | undefined,
         kind
-      }).catch((error) => {
-        const message = error instanceof Error ? error.message : 'Failed to send approval email';
-        logger.error('Send approval email failed (background)', { error: message, quotationId });
-      });
+      })
+        .then(async (result) => {
+          // §CG — stamp consent even when send is async (Admin Actions "Done").
+          if (kind !== 'consent') return;
+          try {
+            await Quotation.update(
+              {
+                consentEmailSentAt: new Date(),
+                consentEmailSentTo: result.to
+              },
+              { where: { id: quotationId } }
+            );
+          } catch (stampErr) {
+            const stampMsg = stampErr instanceof Error ? stampErr.message : String(stampErr);
+            logger.warn('Could not stamp consentEmailSentAt (background)', {
+              quotationId,
+              message: stampMsg
+            });
+          }
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : 'Failed to send approval email';
+          logger.error('Send approval email failed (background)', { error: message, quotationId });
+        });
       return;
     }
 
@@ -372,13 +393,36 @@ app.post('/api/send-approval-email', async (req: Request, res: Response) => {
       kind
     });
 
+    // §CG — Admin Actions "Done" for consent email (not tied to file-login save).
+    if (kind === 'consent') {
+      try {
+        await Quotation.update(
+          {
+            consentEmailSentAt: new Date(),
+            consentEmailSentTo: result.to
+          },
+          { where: { id: quotationId } }
+        );
+      } catch (stampErr) {
+        const stampMsg = stampErr instanceof Error ? stampErr.message : String(stampErr);
+        logger.warn('Could not stamp consentEmailSentAt', { quotationId, message: stampMsg });
+      }
+    }
+
     res.json({
       success: true,
       message: 'Approval email sent successfully',
       data: {
         messageId: result.messageId,
         to: result.to,
-        quotationId: result.quotationId
+        quotationId: result.quotationId,
+        ...(kind === 'consent'
+          ? {
+              consentEmailSent: true,
+              consentEmailSentAt: new Date().toISOString(),
+              consentEmailSentTo: result.to
+            }
+          : {})
       }
     });
   } catch (error) {
