@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import puppeteer, { type LaunchOptions } from 'puppeteer';
+import puppeteer from 'puppeteer';
 import {
   buildProposalDocumentFromQuotationId,
   type ProposalPdfDocument
@@ -15,7 +15,9 @@ const LAUNCH_ARGS = [
   '--disable-dev-shm-usage'
 ];
 
-type ChromeCandidate = { label: string; options: LaunchOptions };
+/** Full launch options (LaunchOptions alone omits headless/args in puppeteer 22 types). */
+type ChromeLaunchOptions = NonNullable<Parameters<typeof puppeteer.launch>[0]>;
+type ChromeCandidate = { label: string; options: ChromeLaunchOptions };
 
 const systemChromePaths = (): string[] => {
   if (process.platform === 'darwin') {
