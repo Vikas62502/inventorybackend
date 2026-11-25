@@ -111,8 +111,8 @@ jobs:
             chmod 600 .env
 
             echo "🔎 Env keys present:"
-            grep -E '^(PORT|NODE_ENV|AWS_BUCKET_NAME|AWS_REGION|PROD_URL)=' .env || true
-            for key in DB_HOST JWT_SECRET AWS_ACCESS_KEY AWS_SECRET_KEY; do
+            grep -E '^(PORT|NODE_ENV|AWS_BUCKET_NAME|AWS_REGION|PROD_URL|EMAIL_USER)=' .env || true
+            for key in DB_HOST JWT_SECRET AWS_ACCESS_KEY AWS_SECRET_KEY EMAIL_USER EMAIL_PASSWORD SMS_URL DLT_API_KEY; do
               if grep -q "^${key}=.\+" .env; then echo "$key=SET"; else echo "$key=EMPTY_OR_MISSING"; fi
             done
 
