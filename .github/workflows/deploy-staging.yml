@@ -2,7 +2,7 @@ name: Deploy to Staging
 
 on:
   push:
-    branches: [ develop ]
+    branches: [develop]
   workflow_dispatch:
 
 env:
@@ -16,112 +16,24 @@ jobs:
     environment:
       name: staging
       url: ${{ secrets.STAGING_URL }}
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:develop
-            ${{ env.IMAGE_NAME }}:staging-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Create .env file on staging server
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          port: ${{ secrets.STAGING_PORT || 22 }}
-          script: |
-            cd ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
-            mkdir -p secrets
-            chmod 700 secrets
-            cat > .env << EOF
-            # Database Configuration
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_PORT=${{ secrets.DB_PORT }}
-            DB_NAME=${{ secrets.DB_NAME }}
-            DB_USER=${{ secrets.DB_USER }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DB_SSL=${{ secrets.DB_SSL || 'false' }}
-            DB_SSL_REJECT_UNAUTHORIZED=${{ secrets.DB_SSL_REJECT_UNAUTHORIZED || 'true' }}
-            
-            # Application Configuration
-            PORT=${{ secrets.PORT || '3000' }}
-            NODE_ENV=development
-            UPLOAD_DIR=${{ secrets.UPLOAD_DIR || './uploads' }}
-            MAX_FILE_SIZE=${{ secrets.MAX_FILE_SIZE || '5242880' }}
-            
-            # JWT Configuration
-            JWT_SECRET=${{ secrets.JWT_SECRET }}
-            JWT_EXPIRE=${{ secrets.JWT_EXPIRE || '7d' }}
-            
-            # Loki Logging Configuration
-            LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
-            LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
-            LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
-
-            # AWS Configuration
-            AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
-            AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
-            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
-            AWS_REGION=${{ secrets.AWS_REGION }}
-            
-            # Production URL
-            PROD_URL=${{ secrets.STAGING_URL || '' }}
-
-            # Google Sheets → HR Social Media
-            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
-            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
-            CRON_SECRET=${{ secrets.CRON_SECRET }}
-            EOF
-            chmod 600 .env
-
-            echo "🔎 Previewing generated .env on staging server..."
-            echo "Non-sensitive values:"
-            grep -E '^(PORT|NODE_ENV|UPLOAD_DIR|MAX_FILE_SIZE|LOG_LEVEL|LOKI_HOST_IP|LOKI_JOB_NAME|AWS_BUCKET_NAME|AWS_REGION|PROD_URL)=' .env || true
-
-            echo "Sensitive values presence:"
-            for key in DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSL DB_SSL_REJECT_UNAUTHORIZED JWT_SECRET JWT_EXPIRE AWS_ACCESS_KEY AWS_SECRET_KEY GOOGLE_APPLICATION_CREDENTIALS CRON_SECRET; do
-              value=$(awk -F= -v target="$key" '$1 == target { print substr($0, index($0, "=") + 1); exit }' .env)
-              if [ -z "$value" ]; then
-                echo "$key=EMPTY_OR_MISSING"
-              else
-                echo "$key=SET"
-              fi
-            done
-
       - name: Write Google Sheets service account key
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           python3 - <<'PY'
-          import os, sys
+          import os
           raw = os.environ.get("GOOGLE_SA_JSON") or ""
-          if not raw.strip():
-              print("GOOGLE_SERVICE_ACCOUNT_JSON GitHub secret is empty")
-              sys.exit(1)
-          open("google-sheets-service-account.json", "w", encoding="utf-8").write(raw)
-          print("Wrote Google Sheets key file")
+          if raw.strip():
+              open("google-sheets-service-account.json", "w", encoding="utf-8").write(raw)
+              print("Wrote Google Sheets key file")
+          else:
+              print("GOOGLE_SERVICE_ACCOUNT_JSON empty — skipping key file")
           PY
 
       - name: Copy Google Sheets key to staging server
+        if: hashFiles('google-sheets-service-account.json') != ''
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.STAGING_HOST }}
@@ -132,7 +44,7 @@ jobs:
           target: ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}/secrets
           overwrite: true
 
-      - name: Deploy to staging server
+      - name: Create .env and deploy to staging
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.STAGING_HOST }}
@@ -140,84 +52,120 @@ jobs:
           key: ${{ secrets.STAGING_SSH_KEY }}
           port: ${{ secrets.STAGING_PORT || 22 }}
           script: |
-            set -e  # Exit on error
+            set -e
             DEPLOY_PATH=${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
-            IMAGE_NAME=vikasyadav30/cbplsolarinventory:develop
+            # Use SHA tag so we wait for THIS commit's CI image, not a stale :develop
+            IMAGE_NAME=${{ env.IMAGE_NAME }}:develop-${{ github.sha }}
             CONTAINER_NAME="cbpl-solar-inventory-backend-staging"
-            
-            echo "🚀 Starting staging deployment..."
-            echo "📁 Deploy path: $DEPLOY_PATH"
-            echo "🐳 Image: $IMAGE_NAME"
-            echo "📦 Container: $CONTAINER_NAME"
-            
-            # Navigate to deploy path
-            cd $DEPLOY_PATH || { echo "❌ Failed to cd to $DEPLOY_PATH"; exit 1; }
-            echo "✅ Changed to directory: $(pwd)"
-            
-            # Check if .env file exists
-            if [ ! -f .env ]; then
-              echo "❌ .env file not found in $DEPLOY_PATH"
+
+            mkdir -p "$DEPLOY_PATH/secrets"
+            chmod 700 "$DEPLOY_PATH/secrets"
+            cd "$DEPLOY_PATH"
+
+            cat > .env << EOF
+            # Database Configuration
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_PORT=${{ secrets.DB_PORT }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_SSL=${{ secrets.DB_SSL || 'false' }}
+            DB_SSL_REJECT_UNAUTHORIZED=${{ secrets.DB_SSL_REJECT_UNAUTHORIZED || 'true' }}
+
+            # Application Configuration
+            PORT=${{ secrets.PORT || '3000' }}
+            NODE_ENV=development
+            UPLOAD_DIR=${{ secrets.UPLOAD_DIR || './uploads' }}
+            MAX_FILE_SIZE=${{ secrets.MAX_FILE_SIZE || '5242880' }}
+
+            # JWT Configuration
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            JWT_EXPIRE=${{ secrets.JWT_EXPIRE || '7d' }}
+
+            # Loki Logging Configuration
+            LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
+            LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
+            LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
+
+            # AWS Configuration
+            AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
+            AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
+            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
+            AWS_REGION=${{ secrets.AWS_REGION || 'ap-south-1' }}
+
+            # Production URL
+            PROD_URL=${{ secrets.STAGING_URL || '' }}
+
+            SMS_URL=${{ secrets.SMS_URL }}
+            DLT_SENDER_ID=${{ secrets.DLT_SENDER_ID }}
+            DLT_API_KEY=${{ secrets.DLT_API_KEY }}
+            DLT_TEMPLATE_ID_2FA_AUTH=${{ secrets.DLT_TEMPLATE_ID_2FA_AUTH }}
+
+            EMAIL_USER=${{ secrets.EMAIL_USER }}
+            EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
+
+            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
+            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
+            CRON_SECRET=${{ secrets.CRON_SECRET }}
+            EOF
+            chmod 600 .env
+
+            echo "🔎 Env keys present:"
+            grep -E '^(PORT|NODE_ENV|AWS_BUCKET_NAME|AWS_REGION|PROD_URL)=' .env || true
+            for key in DB_HOST JWT_SECRET AWS_ACCESS_KEY AWS_SECRET_KEY; do
+              if grep -q "^${key}=.\+" .env; then echo "$key=SET"; else echo "$key=EMPTY_OR_MISSING"; fi
+            done
+
+            echo "📥 Pulling $IMAGE_NAME (waiting for CI image push if needed)..."
+            pull_ok=0
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              if sudo docker pull "$IMAGE_NAME"; then
+                pull_ok=1
+                break
+              fi
+              echo "Pull attempt $i failed, retrying in 20s..."
+              sleep 20
+            done
+            if [ "$pull_ok" -ne 1 ]; then
+              echo "❌ Failed to pull $IMAGE_NAME after waiting for CI"
               exit 1
             fi
-            echo "✅ .env file found"
-            
-            # Pull the latest image
-            echo "📥 Pulling image from Docker Hub..."
-            sudo docker pull $IMAGE_NAME || { echo "❌ Failed to pull image"; exit 1; }
-            echo "✅ Image pulled successfully"
-            
-            # Stop and remove old container
-            echo "🛑 Stopping old container..."
-            sudo docker stop $CONTAINER_NAME || echo "⚠️  Container not running (this is OK)"
-            sudo docker rm $CONTAINER_NAME || echo "⚠️  Container not found (this is OK)"
-            echo "✅ Old container removed"
-            
-            # Run new container with .env file
-            echo "🚀 Starting new container..."
-            ENV_FILE_PATH="$DEPLOY_PATH/.env"
-            echo "📄 Using .env file at: $ENV_FILE_PATH"
+
+            sudo docker stop "$CONTAINER_NAME" || true
+            sudo docker rm "$CONTAINER_NAME" || true
+
             KEY_FILE="$DEPLOY_PATH/secrets/google-sheets-service-account.json"
-            if [ ! -s "$KEY_FILE" ]; then
-              echo "❌ Google Sheets key missing at $KEY_FILE"
-              exit 1
+            VOLUME_ARGS=""
+            if [ -s "$KEY_FILE" ]; then
+              chmod 600 "$KEY_FILE" || true
+              VOLUME_ARGS="-v $KEY_FILE:/app/secrets/google-sheets-service-account.json:ro"
+            else
+              echo "⚠️ Google Sheets key missing at $KEY_FILE (continuing without mount)"
             fi
-            chmod 600 "$KEY_FILE" || true
+
             sudo docker run -d \
-              --name $CONTAINER_NAME \
+              --name "$CONTAINER_NAME" \
               --restart unless-stopped \
               -p 3050:3000 \
               -e PORT=3000 \
-              --env-file "$ENV_FILE_PATH" \
-              -v "$KEY_FILE:/app/secrets/google-sheets-service-account.json:ro" \
-              $IMAGE_NAME || { echo "❌ Failed to start container"; exit 1; }
-            echo "✅ Container started"
-            
-            # Wait a moment for container to start
+              --env-file "$DEPLOY_PATH/.env" \
+              $VOLUME_ARGS \
+              "$IMAGE_NAME"
+
             sleep 5
-            
-            # Check if container is running
-            if sudo docker ps | grep -q $CONTAINER_NAME; then
-              echo "✅ Container is running"
-            else
-              echo "❌ Container is not running!"
-              echo "📋 Container logs:"
-              sudo docker logs $CONTAINER_NAME || true
+            if ! sudo docker ps | grep -q "$CONTAINER_NAME"; then
+              echo "❌ Container is not running"
+              sudo docker logs "$CONTAINER_NAME" || true
               exit 1
             fi
-            
-            # Run migrations
-            echo "🔄 Running migrations..."
-            sudo docker exec $CONTAINER_NAME npm run migrate || echo "⚠️  Migrations failed (non-critical)"
-            
-            # Clean up unused images
-            echo "🧹 Cleaning up unused images..."
-            sudo docker system prune -f || true
-            
-            echo "✅ Staging deployment completed successfully!"
+
+            sudo docker exec "$CONTAINER_NAME" npm run migrate || echo "⚠️ Migrations failed (non-critical)"
+            sudo docker image prune -f || true
+            echo "✅ Staging deployment completed"
 
       - name: Health check
         run: |
-          sleep 10
+          sleep 5
           response=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.STAGING_URL }}/health || echo "000")
           if [ "$response" != "200" ]; then
             echo "Health check failed with status: $response"

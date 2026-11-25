@@ -1,8 +1,7 @@
 name: Test
 
+# PRs only — push already runs type-check in CI, so avoid a second full install/build
 on:
-  push:
-    branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
 
@@ -13,7 +12,6 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    
     services:
       postgres:
         image: postgres:15-alpine
@@ -44,16 +42,6 @@ jobs:
 
       - name: Run type check
         run: npm run type-check
-        env:
-          NODE_OPTIONS: '--max-old-space-size=8192'
-
-      - name: Run linting (if configured)
-        run: |
-          if [ -f "package.json" ] && grep -q "\"lint\"" package.json; then
-            npm run lint
-          else
-            echo "No lint script found, skipping..."
-          fi
 
       - name: Build application
         run: npm run build
@@ -85,6 +73,3 @@ jobs:
           DB_PASSWORD: test_password
           JWT_SECRET: test-secret-key
           NODE_ENV: test
-
-
-

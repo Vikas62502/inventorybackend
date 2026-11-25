@@ -2,15 +2,16 @@ name: Deploy to Production
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to deploy'
-        required: true
+        description: 'Image tag to deploy (default: main)'
+        required: false
         type: string
+        default: 'main'
 
 env:
   NODE_ENV: production
@@ -23,77 +24,19 @@ jobs:
     environment:
       name: production
       url: ${{ secrets.PROD_URL }}
-    
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:main
-            ${{ env.IMAGE_NAME }}:prod-${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
-
-      - name: Create .env file on production server
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.PROD_HOST }}
-          username: ${{ secrets.PROD_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_PORT || 22 }}
-          script: |
-            cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
-            mkdir -p secrets
-            chmod 700 secrets
-            cat > .env << EOF
-            # Database Configuration
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_PORT=${{ secrets.DB_PORT }}
-            DB_NAME=${{ secrets.DB_NAME }}
-            DB_USER=${{ secrets.DB_USER }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DB_SSL=${{ secrets.DB_SSL || 'false' }}
-            DB_SSL_REJECT_UNAUTHORIZED=${{ secrets.DB_SSL_REJECT_UNAUTHORIZED || 'true' }}
-            
-            # Application Configuration (PORT=3000 inside container; APP_PORT is host/nginx upstream)
-            PORT=3000
-            APP_PORT=${{ secrets.APP_PORT || secrets.PORT || '3050' }}
-            NODE_ENV=production
-            
-            # JWT Configuration
-            JWT_SECRET=${{ secrets.JWT_SECRET }}
-            JWT_EXPIRE=${{ secrets.JWT_EXPIRE || '7d' }}
-            
-            # Loki Logging Configuration
-            LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
-            LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
-            LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
-            
-            # Production URL
-            PROD_URL=${{ secrets.PROD_URL || '' }}
-
-            # Google Sheets → HR Social Media (in-container path; file is bind-mounted)
-            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
-            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
-            CRON_SECRET=${{ secrets.CRON_SECRET }}
-            EOF
-            chmod 600 .env
+      - name: Resolve image tag
+        id: image
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            # Use SHA tag so we wait for THIS commit's CI image, not a stale :main
+            echo "tag=main-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Write Google Sheets service account key
         env:
@@ -120,7 +63,7 @@ jobs:
           target: ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}/secrets
           overwrite: true
 
-      - name: Deploy to production server
+      - name: Create .env and deploy to production
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.PROD_HOST }}
@@ -130,18 +73,71 @@ jobs:
           script: |
             set -e
             DEPLOY_PATH=${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
-            IMAGE_NAME=vikasyadav30/cbplsolarinventory:main
+            IMAGE_NAME=${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
             CONTAINER_NAME="cbpl-solar-inventory-backend-prod"
 
-            cd "$DEPLOY_PATH" || { echo "Failed to cd to $DEPLOY_PATH"; exit 1; }
-            if [ ! -f .env ]; then
-              echo ".env file not found"
+            mkdir -p "$DEPLOY_PATH/secrets"
+            chmod 700 "$DEPLOY_PATH/secrets"
+            cd "$DEPLOY_PATH"
+
+            cat > .env << EOF
+            # Database Configuration
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_PORT=${{ secrets.DB_PORT }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_SSL=${{ secrets.DB_SSL || 'false' }}
+            DB_SSL_REJECT_UNAUTHORIZED=${{ secrets.DB_SSL_REJECT_UNAUTHORIZED || 'true' }}
+
+            # Application Configuration (PORT=3000 inside container; APP_PORT is host/nginx upstream)
+            PORT=3000
+            APP_PORT=${{ secrets.APP_PORT || secrets.PORT || '3050' }}
+            NODE_ENV=production
+
+            # JWT Configuration
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            JWT_EXPIRE=${{ secrets.JWT_EXPIRE || '7d' }}
+
+            # Loki Logging Configuration
+            LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
+            LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
+            LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
+
+            # Production URL
+            PROD_URL=${{ secrets.PROD_URL || '' }}
+
+            # AWS Configuration
+            AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
+            AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
+            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
+            AWS_REGION=${{ secrets.AWS_REGION || 'ap-south-1' }}
+
+            # Google Sheets → HR Social Media
+            GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
+            GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
+            CRON_SECRET=${{ secrets.CRON_SECRET }}
+            EOF
+            chmod 600 .env
+
+            echo "📥 Pulling $IMAGE_NAME (waiting for CI image push if needed)..."
+            pull_ok=0
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              if sudo docker pull "$IMAGE_NAME"; then
+                pull_ok=1
+                break
+              fi
+              echo "Pull attempt $i failed, retrying in 20s..."
+              sleep 20
+            done
+            if [ "$pull_ok" -ne 1 ]; then
+              echo "Failed to pull $IMAGE_NAME after waiting for CI"
               exit 1
             fi
 
-            sudo docker pull "$IMAGE_NAME"
             sudo docker stop "$CONTAINER_NAME" || true
             sudo docker rm "$CONTAINER_NAME" || true
+
             KEY_FILE="$DEPLOY_PATH/secrets/google-sheets-service-account.json"
             if [ ! -s "$KEY_FILE" ]; then
               echo "Google Sheets key missing at $KEY_FILE"
@@ -166,11 +162,11 @@ jobs:
             fi
 
             sudo docker exec "$CONTAINER_NAME" npm run migrate || echo "Migrations failed (non-critical)"
-            sudo docker system prune -f || true
+            sudo docker image prune -f || true
 
       - name: Health check
         run: |
-          sleep 15
+          sleep 10
           max_attempts=5
           attempt=1
           while [ $attempt -le $max_attempts ]; do
@@ -198,34 +194,12 @@ jobs:
             cd ${{ secrets.PROD_DEPLOY_PATH || '/opt/chairbord-api' }}
             sudo docker start cbpl-solar-inventory-backend-prod || true
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          body: |
-            Production deployment of version ${{ github.ref }}
-            
-            **Changes:**
-            - See commit history for details
-            
-            **Deployment:**
-            - Image: ${{ env.IMAGE_NAME }}:main
-            - Environment: Production
-            - Deployed at: ${{ github.event.head_commit.timestamp }}
-          draft: false
-          prerelease: false
-
       - name: Notify deployment
         if: always()
         uses: 8398a7/action-slack@v3
         with:
           status: ${{ job.status }}
-          text: 'Production deployment ${{ job.status }} - Version ${{ github.ref }}'
+          text: 'Production deployment ${{ job.status }} - Image ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}'
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
