@@ -1,8 +1,8 @@
 name: Deploy to Staging
 
+# Manual only — automatic VPS deploy now runs inside CI after Docker build
+# (Actions → CI → "Deploy to Hostinger VPS")
 on:
-  push:
-    branches: [develop]
   workflow_dispatch:
 
 env:
@@ -11,12 +11,8 @@ env:
 
 jobs:
   deploy:
-    name: Deploy to Staging (Hostinger VPS)
+    name: Manual Deploy to Hostinger VPS
     runs-on: ubuntu-latest
-    environment:
-      name: staging
-      url: ${{ secrets.STAGING_URL }}
-
     steps:
       - name: Write Google Sheets service account key
         env:
@@ -27,12 +23,8 @@ jobs:
           raw = os.environ.get("GOOGLE_SA_JSON") or ""
           if raw.strip():
               open("google-sheets-service-account.json", "w", encoding="utf-8").write(raw)
-              print("Wrote Google Sheets key file")
-          else:
-              print("GOOGLE_SERVICE_ACCOUNT_JSON empty — skipping key file")
           PY
 
-      # Prefer HOSTINGER_* (actual VPS srv*) — fall back to STAGING_* if needed
       - name: Copy Google Sheets key to VPS
         if: hashFiles('google-sheets-service-account.json') != ''
         uses: appleboy/scp-action@v0.1.7
@@ -45,7 +37,7 @@ jobs:
           target: ${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}/secrets
           overwrite: true
 
-      - name: Create .env and deploy develop image to VPS
+      - name: Create .env and deploy to VPS
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.HOSTINGER_HOST || secrets.STAGING_HOST }}
@@ -55,11 +47,8 @@ jobs:
           script: |
             set -e
             DEPLOY_PATH=${{ secrets.STAGING_DEPLOY_PATH || '/opt/chairbord-api' }}
-            IMAGE_SHA=${{ env.IMAGE_NAME }}:develop-${{ github.sha }}
-            IMAGE_DEVELOP=${{ env.IMAGE_NAME }}:develop
-            IMAGE_LATEST=${{ env.IMAGE_NAME }}:latest
+            IMAGE_NAME=${{ env.IMAGE_NAME }}:latest
             CONTAINER_NAME="cbpl-solar-inventory-backend-staging"
-            # Match current VPS mapping: host 3050 -> container PORT (also 3050)
             APP_PORT=${{ secrets.PORT || '3050' }}
 
             mkdir -p "$DEPLOY_PATH/secrets"
@@ -67,7 +56,6 @@ jobs:
             cd "$DEPLOY_PATH"
 
             cat > .env << EOF
-            # Database Configuration
             DB_HOST=${{ secrets.DB_HOST }}
             DB_PORT=${{ secrets.DB_PORT }}
             DB_NAME=${{ secrets.DB_NAME }}
@@ -75,82 +63,42 @@ jobs:
             DB_PASSWORD=${{ secrets.DB_PASSWORD }}
             DB_SSL=${{ secrets.DB_SSL || 'false' }}
             DB_SSL_REJECT_UNAUTHORIZED=${{ secrets.DB_SSL_REJECT_UNAUTHORIZED || 'true' }}
-
-            # Application Configuration
             PORT=${{ secrets.PORT || '3050' }}
             NODE_ENV=staging
             UPLOAD_DIR=${{ secrets.UPLOAD_DIR || './uploads' }}
             MAX_FILE_SIZE=${{ secrets.MAX_FILE_SIZE || '5242880' }}
-
-            # JWT Configuration
             JWT_SECRET=${{ secrets.JWT_SECRET }}
             JWT_EXPIRE=${{ secrets.JWT_EXPIRE || '7d' }}
-
-            # Loki Logging Configuration
             LOKI_HOST_IP=${{ secrets.LOKI_HOST_IP || '' }}
             LOKI_JOB_NAME=${{ secrets.LOKI_JOB_NAME || 'Solar_Inventory' }}
             LOG_LEVEL=${{ secrets.LOG_LEVEL || 'info' }}
-
-            # AWS Configuration
             AWS_ACCESS_KEY=${{ secrets.AWS_ACCESS_KEY || '' }}
             AWS_SECRET_KEY=${{ secrets.AWS_SECRET_KEY || '' }}
             AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME || 'cbpl-bajaj-node' }}
             AWS_REGION=${{ secrets.AWS_REGION || 'ap-south-1' }}
-
-            # Production URL
             PROD_URL=${{ secrets.STAGING_URL || '' }}
-
             SMS_URL=${{ secrets.SMS_URL }}
             DLT_SENDER_ID=${{ secrets.DLT_SENDER_ID }}
             DLT_API_KEY=${{ secrets.DLT_API_KEY }}
             DLT_TEMPLATE_ID_2FA_AUTH=${{ secrets.DLT_TEMPLATE_ID_2FA_AUTH }}
-
             EMAIL_USER=${{ secrets.EMAIL_USER }}
             EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
-
             GOOGLE_SHEETS_SPREADSHEET_ID=${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID || '18zqPIpa3fcjRvfNqdm3FPC10bszPIPHbv5F3-TMk0A0' }}
             GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-sheets-service-account.json
             CRON_SECRET=${{ secrets.CRON_SECRET }}
             EOF
             chmod 600 .env
 
-            echo "🔎 Env presence on VPS:"
-            for key in DB_HOST JWT_SECRET AWS_ACCESS_KEY AWS_SECRET_KEY AWS_BUCKET_NAME AWS_REGION EMAIL_USER EMAIL_PASSWORD SMS_URL DLT_API_KEY; do
-              if grep -q "^${key}=.\+" .env; then echo "$key=SET"; else echo "$key=EMPTY_OR_MISSING"; fi
-            done
-
-            echo "📥 Pulling develop image for this commit (then fallbacks)..."
-            IMAGE_NAME=""
-            for candidate in "$IMAGE_SHA" "$IMAGE_DEVELOP" "$IMAGE_LATEST"; do
-              echo "Trying $candidate ..."
-              for i in 1 2 3 4 5 6; do
-                if sudo docker pull "$candidate"; then
-                  IMAGE_NAME="$candidate"
-                  break 2
-                fi
-                echo "Pull attempt $i for $candidate failed, retrying in 15s..."
-                sleep 15
-              done
-            done
-            if [ -z "$IMAGE_NAME" ]; then
-              echo "❌ Failed to pull develop/latest image from Docker Hub"
-              exit 1
-            fi
-            echo "✅ Using image: $IMAGE_NAME"
-
+            sudo docker pull "$IMAGE_NAME"
             sudo docker stop "$CONTAINER_NAME" || true
             sudo docker rm "$CONTAINER_NAME" || true
 
             KEY_FILE="$DEPLOY_PATH/secrets/google-sheets-service-account.json"
             VOLUME_ARGS=""
             if [ -s "$KEY_FILE" ]; then
-              chmod 600 "$KEY_FILE" || true
               VOLUME_ARGS="-v $KEY_FILE:/app/secrets/google-sheets-service-account.json:ro"
-            else
-              echo "⚠️ Google Sheets key missing at $KEY_FILE (continuing without mount)"
             fi
 
-            # Match live VPS: 3050:3050 (app listens on PORT from .env)
             sudo docker run -d \
               --name "$CONTAINER_NAME" \
               --restart unless-stopped \
@@ -160,41 +108,6 @@ jobs:
               "$IMAGE_NAME"
 
             sleep 5
-            if ! sudo docker ps | grep -q "$CONTAINER_NAME"; then
-              echo "❌ Container is not running"
-              sudo docker logs "$CONTAINER_NAME" || true
-              exit 1
-            fi
-
-            echo "🔎 Runtime EMAIL env inside container:"
-            sudo docker exec "$CONTAINER_NAME" printenv | grep -E '^EMAIL_' || echo "EMAIL_*=MISSING"
-
-            sudo docker exec "$CONTAINER_NAME" npm run migrate || echo "⚠️ Migrations failed (non-critical)"
-            sudo docker image prune -f || true
-            echo "✅ Staging deployment to Hostinger VPS completed ($IMAGE_NAME)"
-
-      - name: Health check
-        run: |
-          sleep 5
-          # Prefer STAGING_URL; otherwise probe common VPS health path via secret host if set later
-          URL="${{ secrets.STAGING_URL }}"
-          if [ -z "$URL" ]; then
-            echo "STAGING_URL secret not set — skipping remote health check"
-            exit 0
-          fi
-          response=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health" || echo "000")
-          if [ "$response" != "200" ]; then
-            echo "Health check failed with status: $response"
-            exit 1
-          fi
-          echo "Health check passed"
-
-      - name: Notify deployment
-        if: always()
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          text: 'Staging (Hostinger VPS) deployment ${{ job.status }}'
-          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+            sudo docker exec "$CONTAINER_NAME" printenv | grep -E '^EMAIL_' || true
+            sudo docker exec "$CONTAINER_NAME" npm run migrate || true
+            echo "✅ Manual deploy done"
