@@ -6,7 +6,9 @@ const normalizeEnvValue = (value?: string): string => {
   return value.trim().replace(/^['"]+|['"]+$/g, '');
 };
 
+// Solar Inventory
 const customJobName = normalizeEnvValue(process.env.LOKI_JOB_NAME) || 'Solar_Inventory';
+// Solar Inventory
 const lokiHostip = normalizeEnvValue(process.env.LOKI_HOST_IP) || "http://187.127.158.150:3100";
 
 const isValidUrl = (value: string): boolean => {
