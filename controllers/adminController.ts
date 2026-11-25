@@ -1160,17 +1160,6 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
           quotationId
         });
       }
-      try {
-        const mailResult = await sendQuotationApprovalEmail({
-          quotationId: quotation.id
-        });
-        logInfo('Quotation approval email sent', {
-          quotationId,
-          to: mailResult.to
-        });
-      } catch (mailErr) {
-        logError('Quotation approval email failed (non-fatal)', mailErr, { quotationId });
-      }
     }
     await quotation.reload();
 
@@ -1184,6 +1173,20 @@ export const updateQuotationStatus = async (req: Request, res: Response): Promis
         ...quotationAdminMetadataFields(rowAfter)
       }
     });
+
+    // Send email after responding so approve API is not blocked by Puppeteer/Gmail
+    if (statusRaw === 'approved') {
+      void sendQuotationApprovalEmail({ quotationId: quotation.id })
+        .then((mailResult) => {
+          logInfo('Quotation approval email sent', {
+            quotationId,
+            to: mailResult.to
+          });
+        })
+        .catch((mailErr) => {
+          logError('Quotation approval email failed (non-fatal)', mailErr, { quotationId });
+        });
+    }
 
     logInfo('Quotation status updated by admin', {
       quotationId: quotation.id,

@@ -12,7 +12,8 @@ import { startSheetAutoSyncCron } from './utils/sheetAutoSyncCron';
 import { startSheetWriteBackCron } from './utils/sheetWriteBackCron';
 import { sendSms } from './utils/otp/sms';
 import { sendApprovalOtp, verifyApprovalOtp } from './utils/otp/approvalOtp';
-import { sendQuotationApprovalEmail } from './utils/emails/approvalemail';
+import { sendQuotationApprovalEmail, warmApprovalMailer } from './utils/emails/approvalemail';
+import { warmProposalPdfBrowser } from './utils/emails/generateProposalPdf';
 
 // Import route (Inventory Systems)
 import authRoutes from './routes/authRoutes';
@@ -338,6 +339,32 @@ app.post('/api/send-approval-email', async (req: Request, res: Response) => {
     const toOverride = String(body.to ?? body.email ?? '').trim();
     const kindRaw = String(body.kind ?? body.purpose ?? '').trim().toLowerCase();
     const kind = kindRaw === 'consent' ? 'consent' : 'approved';
+    // Default: respond immediately and send in background (PDF+Gmail was blocking the UI for 20-60s).
+    // Pass wait=true if the client needs the actual Gmail messageId.
+    const waitForSend =
+      body.wait === true ||
+      body.wait === 'true' ||
+      body.sync === true ||
+      body.sync === 'true';
+
+    if (!waitForSend) {
+      res.json({
+        success: true,
+        message: 'Approval email queued',
+        data: { quotationId, queued: true, kind }
+      });
+      void sendQuotationApprovalEmail({
+        quotationId,
+        to: toOverride || undefined,
+        cc: body.cc as string | string[] | undefined,
+        kind
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : 'Failed to send approval email';
+        logger.error('Send approval email failed (background)', { error: message, quotationId });
+      });
+      return;
+    }
+
     const result = await sendQuotationApprovalEmail({
       quotationId,
       to: toOverride || undefined,
@@ -580,6 +607,9 @@ void sequelizeBootstrap.then(() => {
     // HR Social Media: sheet → DB every 10 min; DB → sheet + stale reassign every 2 hours
     startSheetAutoSyncCron();
     startSheetWriteBackCron();
+    // Pay Chrome launch and the Gmail TLS handshake now, not on the first approval email.
+    void warmProposalPdfBrowser();
+    void warmApprovalMailer();
   });
 });
 

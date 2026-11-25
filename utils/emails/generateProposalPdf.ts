@@ -1,18 +1,36 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import puppeteer from 'puppeteer';
+import puppeteer, { type Browser, type Page } from 'puppeteer';
 import {
   buildProposalDocumentFromQuotationId,
   type ProposalPdfDocument
 } from './buildProposalDocument';
 import { renderProposalPdfHtml } from './renderProposalPdfHtml';
+import logger from '../../config/logger';
+
+let browserPromise: Promise<Browser> | null = null;
+const idlePages: Page[] = [];
+const MAX_IDLE_PAGES = 2;
 
 const LAUNCH_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-sync',
+  '--disable-default-apps',
+  '--disable-translate',
+  '--disable-component-update',
+  '--disable-domain-reliability',
+  '--mute-audio',
+  '--hide-scrollbars',
+  '--no-first-run',
+  '--no-default-browser-check',
   '--font-render-hinting=none',
-  '--disable-dev-shm-usage'
+  '--disable-features=AudioServiceOutOfProcess,TranslateUI'
 ];
 
 /** Full launch options (LaunchOptions alone omits headless/args in puppeteer 22 types). */
@@ -81,7 +99,7 @@ const resolveChromeCandidates = (): ChromeCandidate[] => {
   return candidates;
 };
 
-const launchBrowser = async () => {
+const launchBrowser = async (): Promise<Browser> => {
   const candidates = resolveChromeCandidates();
   let lastError: unknown;
 
@@ -103,12 +121,69 @@ const launchBrowser = async () => {
     : new Error('Failed to launch Chrome for PDF generation');
 };
 
-const htmlToPdfBuffer = async (html: string): Promise<Buffer> => {
-  const browser = await launchBrowser();
+const getBrowser = async (): Promise<Browser> => {
+  if (!browserPromise) {
+    browserPromise = launchBrowser().catch((err: unknown) => {
+      browserPromise = null;
+      throw err;
+    });
+  }
 
+  const browser = await browserPromise;
+  if (!browser.connected) {
+    browserPromise = null;
+    idlePages.length = 0;
+    return getBrowser();
+  }
+  return browser;
+};
+
+const closePageQuietly = async (page: Page): Promise<void> => {
+  await page.close().catch((err: unknown) => {
+    logger.warn('Failed to close Puppeteer page', {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+};
+
+const acquirePage = async (): Promise<Page> => {
+  const browser = await getBrowser();
+  while (idlePages.length > 0) {
+    const page = idlePages.pop();
+    if (page && !page.isClosed() && page.browser().connected) return page;
+  }
+  const page = await browser.newPage();
+  // Proposal HTML is static (inline CSS + data-URI images). Skipping JS avoids compile time.
+  await page.setJavaScriptEnabled(false);
+  return page;
+};
+
+const releasePage = async (page: Page): Promise<void> => {
+  if (page.isClosed() || !page.browser().connected) return;
+  if (idlePages.length >= MAX_IDLE_PAGES) {
+    await closePageQuietly(page);
+    return;
+  }
+  idlePages.push(page);
+};
+
+/** Launch Chrome once so the first approval email does not pay browser startup. */
+export const warmProposalPdfBrowser = (): Promise<void> =>
+  getBrowser()
+    .then(() => undefined)
+    .catch((err: unknown) => {
+      logger.warn('Proposal PDF browser warmup failed', {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+
+const htmlToPdfBuffer = async (html: string): Promise<Buffer> => {
+  const page = await acquirePage();
+  let reusePage = true;
   try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    // domcontentloaded is enough for inlined HTML/CSS/data-URI logos.
+    // networkidle0 was waiting on idle network and made every email very slow in Docker.
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 15000 });
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -116,8 +191,12 @@ const htmlToPdfBuffer = async (html: string): Promise<Buffer> => {
       preferCSSPageSize: true
     });
     return Buffer.from(pdf);
+  } catch (err) {
+    reusePage = false;
+    await closePageQuietly(page);
+    throw err;
   } finally {
-    await browser.close();
+    if (reusePage) await releasePage(page);
   }
 };
 

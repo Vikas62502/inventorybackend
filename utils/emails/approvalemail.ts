@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import logger from '../../config/logger';
 import { buildProposalDocumentFromQuotationId } from './buildProposalDocument';
 import { generateQuotationProposalPdfFromDocument } from './generateProposalPdf';
 
@@ -24,12 +25,44 @@ const requireMailEnv = () => {
   return { user, pass };
 };
 
+let cachedTransporter: nodemailer.Transporter | null = null;
+let cachedTransporterUser: string | null = null;
+let mailerWarmPromise: Promise<void> | null = null;
+
 const createTransporter = () => {
   const { user, pass } = requireMailEnv();
-  return nodemailer.createTransport({
+  if (cachedTransporter && cachedTransporterUser === user) {
+    return { transporter: cachedTransporter, user };
+  }
+  cachedTransporter = nodemailer.createTransport({
     service: 'gmail',
-    auth: { user, pass }
+    pool: true,
+    maxConnections: 3,
+    maxMessages: 100,
+    auth: { user, pass },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000
   });
+  cachedTransporterUser = user;
+  return { transporter: cachedTransporter, user };
+};
+
+/** Open the Gmail SMTP pool once so the first send does not pay the TLS handshake alone. */
+export const warmApprovalMailer = (): Promise<void> => {
+  if (mailerWarmPromise) return mailerWarmPromise;
+  mailerWarmPromise = (async () => {
+    try {
+      const { transporter } = createTransporter();
+      await transporter.verify();
+    } catch (err) {
+      mailerWarmPromise = null;
+      logger.warn('Approval mailer warmup failed', {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  })();
+  return mailerWarmPromise;
 };
 
 /**
@@ -52,8 +85,11 @@ export const sendQuotationApprovalEmail = async (
     );
   }
 
-  const { user } = requireMailEnv();
-  const pdfBuffer = await generateQuotationProposalPdfFromDocument(doc);
+  // Render the PDF and open SMTP at the same time. Gmail's handshake used to sit after Chrome.
+  const pdfBuffer = await Promise.all([
+    generateQuotationProposalPdfFromDocument(doc),
+    warmApprovalMailer()
+  ]).then(([pdf]) => pdf);
   const fileName = `ChairBord-Quotation-${quotationId}.pdf`;
 
   // systemKwLabel is e.g. "3.33 kW" — round capacity for email (3.33 → 3)
@@ -103,7 +139,7 @@ export const sendQuotationApprovalEmail = async (
       </p>
     </div>
   `;
-  const transporter = createTransporter();
+  const { transporter, user } = createTransporter();
   const info = await transporter.sendMail({
     from: `"ChairBord Solar" <${user}>`,
     to,
