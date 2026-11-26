@@ -58,20 +58,42 @@ export const formatOtpSystemSet = (systemType: string | null | undefined): strin
   return t || 'dcr';
 };
 
+/** After set: 1-Phase → "1-p", 3-Phase → "3-p" */
+export const formatOtpPhase = (phase: string | null | undefined): string => {
+  const p = String(phase || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-')
+    .replace(/\s+/g, '-');
+  if (
+    p === '3' ||
+    p === '3p' ||
+    p === '3-p' ||
+    p === '3phase' ||
+    p === '3-phase' ||
+    p.startsWith('3')
+  ) {
+    return '3-p';
+  }
+  return '1-p';
+};
+
 /**
  * DLT template `message` var only (OTP is separate):
- * e.g. "10kw of amt:178000 dcr"
- * Final SMS: Your OTP for ChairBord 10kw of amt:178000 dcr is: 2575 .Please do not share...
+ * e.g. "10kw of amt:178000 dcr 1-p"
+ * Final SMS: Your OTP for ChairBord 10kw of amt:178000 dcr 1-p is: 2575 .Please do not share...
  */
 export const buildOtpContext = (args: {
   systemSize: string;
   amount: string;
   systemSet: string;
+  phase?: string;
 }): string => {
   const size = String(args.systemSize || '0kw').trim();
   const amount = String(args.amount || '0').trim();
   const set = String(args.systemSet || 'dcr').trim();
-  return `${size} of amt:${amount} ${set}`;
+  const phase = formatOtpPhase(args.phase);
+  return `${size} of amt:${amount} ${set} ${phase}`;
 };
 
 /**

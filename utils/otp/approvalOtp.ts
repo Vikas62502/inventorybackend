@@ -4,6 +4,7 @@ import { Quotation, QuotationProduct } from '../../models/index-quotation';
 import {
   buildOtpContext,
   formatOtpAmount,
+  formatOtpPhase,
   formatOtpSystemSet,
   formatOtpSystemSize,
   sendSms
@@ -53,11 +54,12 @@ export type SendApprovalOtpResult = {
   recipientLabel: string;
   mobileNumber: string;
   expiresAt: string;
-  /** DLT message var (no OTP), e.g. "10kw of amt:178000 dcr" */
+  /** DLT message var (no OTP), e.g. "10kw of amt:178000 dcr 1-p" */
   context: string;
   systemSize: string;
   amount: string;
   systemSet: string;
+  phase: string;
 };
 
 /** Resolve size / amount / set from quotation, then merge into one `context` string. */
@@ -93,11 +95,16 @@ const resolveOtpSmsPartsFromQuotation = async (quotationId: string) => {
     quotation.subtotal ?? productPlain?.subtotal ?? quotation.totalAmount ?? 0
   );
 
+  const phaseRaw = String(
+    productPlain?.phase || (quotation as any).phase || ''
+  );
+
   const systemSize = formatOtpSystemSize(systemKw);
   const amount = formatOtpAmount(subtotal);
   const systemSet = formatOtpSystemSet(systemType);
+  const phase = formatOtpPhase(phaseRaw);
 
-  return { systemSize, amount, systemSet };
+  return { systemSize, amount, systemSet, phase };
 };
 
 export const sendApprovalOtp = async (input: {
@@ -114,11 +121,12 @@ export const sendApprovalOtp = async (input: {
   const otp = generateFourDigitOtp();
   const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
-  // DLT message var: "10kw of amt:178000 dcr" — OTP is the second template var
+  // DLT message var: "10kw of amt:178000 dcr 1-p" — OTP is the second template var
   const context = buildOtpContext({
     systemSize: smsParts.systemSize,
     amount: smsParts.amount,
-    systemSet: smsParts.systemSet
+    systemSet: smsParts.systemSet,
+    phase: smsParts.phase
   });
 
   await clearQuotationOtps(quotationId);
@@ -144,7 +152,8 @@ export const sendApprovalOtp = async (input: {
     context,
     systemSize: smsParts.systemSize,
     amount: smsParts.amount,
-    systemSet: smsParts.systemSet
+    systemSet: smsParts.systemSet,
+    phase: smsParts.phase
   };
 };
 
