@@ -590,6 +590,18 @@ const ensureConsentEmailSentColumns = async (): Promise<void> => {
   }
 };
 
+/** Dealer edit unlock when File login is already_login / login_now. */
+const ensureFileLoginDealerEditAccessColumn = async (): Promise<void> => {
+  try {
+    await sequelize.query(
+      'ALTER TABLE quotations ADD COLUMN IF NOT EXISTS "fileLoginDealerEditAccess" BOOLEAN NULL DEFAULT FALSE;'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('Could not ensure fileLoginDealerEditAccess column', { message });
+  }
+};
+
 /**
  * Resolves after DB auth + lightweight schema fixes. Server should await this before binding the port
  * so the first request never hits a missing-column error.
@@ -617,6 +629,7 @@ export const sequelizeBootstrap = (async (): Promise<void> => {
     await ensureApprovalOtpsTable();
     await ensureApprovalOtpVerifiedColumns();
     await ensureConsentEmailSentColumns();
+    await ensureFileLoginDealerEditAccessColumn();
     logger.info('PostgreSQL database connected successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';

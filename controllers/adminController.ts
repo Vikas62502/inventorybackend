@@ -286,9 +286,19 @@ function normalizeIfscValue(raw: unknown): string | null {
   return IFSC_REGEX.test(v) ? v : null;
 }
 
-function normalizeFileLoginStatus(raw: unknown): 'already_login' | 'login_now' | null {
+function normalizeFileLoginStatus(
+  raw: unknown
+): 'pending_for_login' | 'already_login' | 'login_now' | null {
   if (typeof raw !== 'string') return null;
   const v = raw.trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (
+    v === 'pending_for_login' ||
+    v === 'pending_login' ||
+    v === 'pendingforlogin' ||
+    v === 'pending'
+  ) {
+    return 'pending_for_login';
+  }
   if (v === 'already_login' || v === 'already_logged_in' || v === 'alreadylogin') return 'already_login';
   if (v === 'login_now' || v === 'loginnow') return 'login_now';
   return null;
@@ -1975,13 +1985,14 @@ export const updateQuotationBankProcess = async (req: Request, res: Response): P
   }
 };
 
-// PATCH /admin/quotations/:quotationId/file-login — see BACKEND_ADMIN_QUOTATION_STATUS.ts
+// PATCH /admin/quotations/:quotationId/file-login — admin
+// PATCH /quotations/:quotationId/file-login — dealer (own quotation) or admin
 export const updateQuotationFileLogin = async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!req.dealer || req.dealer.role !== 'admin') {
+    if (!req.dealer) {
       res.status(401).json({
         success: false,
-        error: { code: 'AUTH_003', message: 'Admin required' }
+        error: { code: 'AUTH_003', message: 'Authentication required' }
       });
       return;
     }
@@ -2004,19 +2015,61 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
       return;
     }
 
+    // Admin panel / inventory admin may update any row; dealers only their own.
+    const isAdmin = hasAdminQuotationAccess(req) || req.dealer.role === 'admin';
+    const isOwner = String(quotation.dealerId) === String(req.dealer.id);
+    if (!isAdmin && !isOwner) {
+      res.status(403).json({
+        success: false,
+        error: { code: 'AUTH_004', message: 'Not allowed to update file login for this quotation' }
+      });
+      return;
+    }
+
     const body = req.body as Record<string, unknown>;
     const manualFileLoginAt = parseOptionalTimestamp(
       body.fileLoginAt ?? body.file_login_at
     );
+    const currentStatus = normalizeFileLoginStatus(
+      quotation.fileLoginStatus ?? (quotation as any).file_login_status
+    );
+
+    /** Locked for dealer when admin set already_login / login_now. Unlock = Not set or Pending. */
+    const isDealerLockedStatus =
+      currentStatus === 'already_login' || currentStatus === 'login_now';
+
+    if (!isAdmin && isDealerLockedStatus) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'AUTH_004',
+          message:
+            'File login is locked (Already login / Login now). Ask admin to set Not set or Pending for login.'
+        }
+      });
+      return;
+    }
 
     if (body.resetFileLogin === true) {
+      if (!isAdmin && isDealerLockedStatus) {
+        res.status(403).json({
+          success: false,
+          error: {
+            code: 'AUTH_004',
+            message:
+              'Cannot revert locked file login. Ask admin to set Not set or Pending for login.'
+          }
+        });
+        return;
+      }
       await quotation.update({
         fileLoginStatus: null,
         filePaymentType: null,
         fileBankName: null,
         fileBankIfsc: null,
         fileSubsidyChequeDetails: null,
-        fileLoginAt: null
+        fileLoginAt: null,
+        fileLoginDealerEditAccess: false
       });
       await quotation.reload();
       res.json({
@@ -2025,7 +2078,8 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
           id: quotationId,
           reset: true,
           fileLoginStatus: null,
-          fileLoginAt: null
+          fileLoginAt: null,
+          fileLoginDealerEditAccess: false
         }
       });
       return;
@@ -2035,7 +2089,22 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
     if (!fls) {
       res.status(400).json({
         success: false,
-        error: { code: 'VAL_006', message: 'fileLoginStatus must be already_login or login_now' }
+        error: {
+          code: 'VAL_006',
+          message: 'fileLoginStatus must be pending_for_login, already_login, or login_now'
+        }
+      });
+      return;
+    }
+
+    // Dealer may only set pending_for_login (admin unlocks by Not set / Pending).
+    if (!isAdmin && fls !== 'pending_for_login') {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'AUTH_004',
+          message: 'Dealers can only send Pending for login'
+        }
       });
       return;
     }
@@ -2060,6 +2129,9 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
       filePaymentType: paymentType,
       fileLoginAt: manualFileLoginAt || new Date()
     };
+
+    // already_login / login_now → dealer locked until admin sets Not set / Pending.
+    updatePayload.fileLoginDealerEditAccess = false;
 
     if (paymentType === 'loan' || paymentType === 'mix') {
       const bankNameRaw = body.fileBankName ?? body.file_bank_name ?? body.bankName;
@@ -2118,13 +2190,16 @@ export const updateQuotationFileLogin = async (req: Request, res: Response): Pro
         fileSubsidyChequeDetails: plain.fileSubsidyChequeDetails ?? null,
         fileLoginAt: plain.fileLoginAt
           ? new Date(plain.fileLoginAt as Date).toISOString()
-          : null
+          : null,
+        fileLoginDealerEditAccess: Boolean(plain.fileLoginDealerEditAccess),
+        file_login_dealer_edit_access: Boolean(plain.fileLoginDealerEditAccess)
       }
     });
 
-    logInfo('Quotation file-login updated by admin', {
+    logInfo('Quotation file-login updated', {
       quotationId: quotation.id,
-      adminId: req.dealer.id,
+      actorId: req.dealer.id,
+      actorRole: req.dealer.role,
       fileLoginStatus: plain.fileLoginStatus
     });
   } catch (error) {
@@ -2690,7 +2765,7 @@ export const getAdminProductNeeded = async (req: Request, res: Response): Promis
         ? {
             status: { [Op.notIn]: ['rejected', 'reject', 'approved', 'completed'] },
             [Op.or]: [
-              { fileLoginStatus: { [Op.in]: ['already_login', 'login_now'] } },
+              { fileLoginStatus: { [Op.in]: ['pending_for_login', 'already_login', 'login_now'] } },
               { fileLoginAt: { [Op.ne]: null } }
             ]
           }

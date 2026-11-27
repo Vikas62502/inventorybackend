@@ -23,10 +23,17 @@ import {
   mergePricingTablesPayload,
   normalizePricingTablesPayload
 } from '../utils/pricingTablesSeed';
+import {
+  emptyCatalogComponentPricing,
+  normalizeCatalogComponentPricing
+} from '../utils/catalogComponentPricing';
 
 const CONFIG_CACHE_TTL_MS = 60 * 1000;
 let productCatalogCache: { value: any; expiresAt: number } | null = null;
 let pricingTablesCache: { value: any; expiresAt: number } | null = null;
+let catalogComponentPricingCache: { value: any; expiresAt: number } | null = null;
+
+const CATALOG_COMPONENT_PRICING_KEY = 'catalog_component_pricing';
 
 // Get product catalog
 export const getProductCatalog = async (_req: Request, res: Response): Promise<void> => {
@@ -558,4 +565,139 @@ export const updatePricingTables = async (req: Request, res: Response): Promise<
   }
 };
 
+/** GET Admin Catalog → Price set (also used by Project Estimated Cost). */
+export const getCatalogComponentPricing = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const now = Date.now();
+    if (catalogComponentPricingCache && catalogComponentPricingCache.expiresAt > now) {
+      res.json({
+        success: true,
+        data: catalogComponentPricingCache.value
+      });
+      return;
+    }
+
+    const config = await SystemConfig.findByPk(CATALOG_COMPONENT_PRICING_KEY);
+    let payload = emptyCatalogComponentPricing();
+    if (config) {
+      try {
+        const parsed =
+          typeof config.configValue === 'string'
+            ? JSON.parse(config.configValue)
+            : config.configValue;
+        payload = normalizeCatalogComponentPricing(parsed);
+      } catch (parseError) {
+        logError('Failed to parse catalog component pricing JSON', parseError);
+        res.status(500).json({
+          success: false,
+          error: { code: 'SYS_001', message: 'Internal server error' }
+        });
+        return;
+      }
+    }
+
+    catalogComponentPricingCache = {
+      value: payload,
+      expiresAt: now + CONFIG_CACHE_TTL_MS
+    };
+    res.json({
+      success: true,
+      data: payload
+    });
+  } catch (error) {
+    logError('Get catalog component pricing error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SYS_001', message: 'Internal server error' }
+    });
+  }
+};
+
+/**
+ * PUT Admin Catalog → Price set Save.
+ * Body: { version: 1, categories: { panel, inverter, structure, cable, meter, accessories } }
+ * Replaces the full payload (draft edits are FE-only until Save).
+ */
+export const updateCatalogComponentPricing = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const rawBody = req.body;
+    const userId = req.dealer?.id || req.user?.id;
+
+    if (!rawBody || typeof rawBody !== 'object') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Validation error',
+          details: [{ field: 'body', message: 'Invalid request body' }]
+        }
+      });
+      return;
+    }
+
+    const patch =
+      (rawBody as { data?: unknown }).data && typeof (rawBody as { data?: unknown }).data === 'object'
+        ? (rawBody as { data: unknown }).data
+        : rawBody;
+
+    const categories =
+      patch && typeof patch === 'object'
+        ? (patch as { categories?: unknown }).categories
+        : undefined;
+    if (!categories || typeof categories !== 'object') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'VAL_001',
+          message: 'Body must include categories object',
+          details: [{ field: 'categories', message: 'required' }]
+        }
+      });
+      return;
+    }
+
+    const normalized = normalizeCatalogComponentPricing(patch);
+    const configValue = JSON.stringify(normalized);
+    const existingConfig = await SystemConfig.findByPk(CATALOG_COMPONENT_PRICING_KEY);
+
+    if (existingConfig) {
+      await existingConfig.update({
+        configValue,
+        dataType: 'json',
+        updatedAt: new Date()
+      });
+    } else {
+      await SystemConfig.create({
+        configKey: CATALOG_COMPONENT_PRICING_KEY,
+        configValue,
+        dataType: 'json',
+        description: 'Admin Catalog Price set (panel/inverter/structure/cable/meter/accessories)',
+        category: 'pricing',
+        updatedAt: new Date()
+      });
+    }
+
+    catalogComponentPricingCache = {
+      value: normalized,
+      expiresAt: Date.now() + CONFIG_CACHE_TTL_MS
+    };
+
+    logInfo('Catalog component pricing updated', {
+      updatedBy: userId,
+      timestamp: new Date().toISOString()
+    });
+
+    res.json({
+      success: true,
+      message: 'Catalog component pricing updated successfully',
+      data: normalized
+    });
+  } catch (error) {
+    logError('Update catalog component pricing error', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'PRICING_003', message: 'Failed to save catalog component pricing' }
+    });
+  }
+};
 

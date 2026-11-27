@@ -1,5 +1,13 @@
 import express, { Router } from 'express';
-import { getProductCatalog, getIndianStates, updateProductCatalog, getPricingTables, updatePricingTables } from '../controllers/configController';
+import {
+  getProductCatalog,
+  getIndianStates,
+  updateProductCatalog,
+  getPricingTables,
+  updatePricingTables,
+  getCatalogComponentPricing,
+  updateCatalogComponentPricing
+} from '../controllers/configController';
 import { authenticate, authorizeAdmin } from '../middleware/authQuotation';
 import { validate } from '../middleware/validate';
 import { updateProductCatalogSchema } from '../validations/configValidations';
@@ -314,6 +322,10 @@ router.get('/pricing', getPricingTables);
  *         description: Internal server error
  */
 router.put('/pricing', authorizeAdmin, validate(updatePricingTablesSchema), updatePricingTables);
+
+/** Alias: Admin Catalog → Price set */
+router.get('/catalog-component-pricing', getCatalogComponentPricing);
+router.put('/catalog-component-pricing', authorizeAdmin, updateCatalogComponentPricing);
 
 export default router;
 

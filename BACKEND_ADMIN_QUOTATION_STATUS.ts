@@ -180,6 +180,14 @@ function readStatusHistory(row) {
 function normalizeFileLoginStatus(raw) {
   if (typeof raw !== "string") return null
   const v = raw.trim().toLowerCase().replace(/[-\s]+/g, "_")
+  if (
+    v === "pending_for_login" ||
+    v === "pending_login" ||
+    v === "pendingforlogin" ||
+    v === "pending"
+  ) {
+    return "pending_for_login"
+  }
   if (v === "already_login" || v === "already_logged_in" || v === "alreadylogin") return "already_login"
   if (v === "login_now" || v === "loginnow") return "login_now"
   return null
@@ -475,7 +483,10 @@ export async function patchAdminQuotationFileLogin(req, res) {
     if (!fls) {
       res.status(400).json({
         success: false,
-        error: { code: "VAL_006", message: "fileLoginStatus must be already_login or login_now" },
+        error: {
+          code: "VAL_006",
+          message: "fileLoginStatus must be pending_for_login, already_login, or login_now",
+        },
       })
       return
     }

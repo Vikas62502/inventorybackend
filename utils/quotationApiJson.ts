@@ -553,6 +553,9 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
   const fileBankIfsc = (q.fileBankIfsc ?? q.file_bank_ifsc ?? null) as string | null;
   const fileSubsidyChequeDetails = (q.fileSubsidyChequeDetails ?? q.file_subsidy_cheque_details ?? null) as string | null;
   const fileLoginAt = toIsoStringOrNull(q.fileLoginAt ?? q.file_login_at);
+  const fileLoginDealerEditAccess = Boolean(
+    q.fileLoginDealerEditAccess ?? q.file_login_dealer_edit_access ?? false
+  );
   const consentEmailSentAt = toIsoStringOrNull(
     q.consentEmailSentAt ?? q.consent_email_sent_at
   );
@@ -592,6 +595,8 @@ export function quotationAdminMetadataFields(q: Record<string, unknown>) {
     file_subsidy_cheque_details: fileSubsidyChequeDetails,
     fileLoginAt,
     file_login_at: fileLoginAt,
+    fileLoginDealerEditAccess,
+    file_login_dealer_edit_access: fileLoginDealerEditAccess,
     consentEmailSentAt,
     consent_email_sent_at: consentEmailSentAt,
     consentEmailSentTo,

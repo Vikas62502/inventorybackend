@@ -47,7 +47,17 @@ import {
   uploadInstallerDocument
 } from '../controllers/workflowController';
 import { getVisitsForQuotation, rescheduleVisit } from '../controllers/visitController';
-import { getPricingTables, updatePricingTables } from '../controllers/configController';
+import {
+  getPricingTables,
+  updatePricingTables,
+  getCatalogComponentPricing,
+  updateCatalogComponentPricing
+} from '../controllers/configController';
+import {
+  updateQuotationFileLogin,
+  retrieveQuotationFromInstallation,
+  updateQuotationBankProcess
+} from '../controllers/adminController';
 import {
   authenticate,
   authorizeDealer,
@@ -68,8 +78,12 @@ import { validate } from '../middleware/validate';
 import { logRequestBeforeValidation, logRequestAfterValidation } from '../middleware/requestLogger';
 import { createQuotationSchema, updateDiscountSchema, updateProductsSchema, updatePricingSchema, updatePaymentDetailsSchema, updatePaymentModeSchema, updateInstallationReleaseSchema, updateInstallationScheduledAtSchema, finalSettlementSchema, revertFinalSettlementSchema } from '../validations/quotationValidations';
 import { updatePricingTablesSchema } from '../validations/pricingValidations';
-import { patchQuotationInstallationTeamSchema, bankProcessSchema, retrieveFromInstallationSchema } from '../validations/adminValidations';
-import { retrieveQuotationFromInstallation } from '../controllers/adminController';
+import {
+  patchQuotationInstallationTeamSchema,
+  bankProcessSchema,
+  retrieveFromInstallationSchema,
+  fileLoginSchema
+} from '../validations/adminValidations';
 import {
   meteringDetailsSchema,
   meteringMcoDocumentsSchema,
@@ -78,7 +92,6 @@ import {
 } from '../validations/workflowValidations';
 import { handleInstallerMultipart, handleSingleInstallerUploadMultipart } from './installerRoutes';
 import { rescheduleVisitSchema } from '../validations/visitValidations';
-import { updateQuotationBankProcess } from '../controllers/adminController';
 import { isBankProcessRequestBody } from '../utils/meteringWorkflowApi';
 
 const INSTALLER_COMPLETION_FILE_FIELDS = new Set([
@@ -622,6 +635,16 @@ router.put(
   updatePricingTables
 );
 
+/** Admin Catalog → Price set (FE: api.quotations.getCatalogComponentPricing) */
+router.get(
+  '/catalog-component-pricing',
+  rejectAccountManager,
+  authorizeDealerAdminOrVisitor,
+  getCatalogComponentPricing
+);
+/** Admin Catalog → Price set Save (FE: api.quotations.updateCatalogComponentPricing) */
+router.put('/catalog-component-pricing', authorizeAdmin, updateCatalogComponentPricing);
+
 /**
  * @swagger
  * /api/quotations:
@@ -758,6 +781,14 @@ router.get('/:quotationId', authorizeDealerAdminOrVisitor, getQuotationById);
  *       401:
  *         description: Unauthorized
  */
+/** Dealer / admin: send for login or revert (same body as admin file-login). */
+router.patch(
+  '/:quotationId/file-login',
+  authorizeDealerOrAccountManager,
+  validate(fileLoginSchema),
+  updateQuotationFileLogin
+);
+
 router.patch('/:quotationId/discount', authorizeDealerOrAccountManager, validate(updateDiscountSchema), updateQuotationDiscount);
 
 /**

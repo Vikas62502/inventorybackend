@@ -208,7 +208,9 @@ export const fileLoginSchema = z
     bankIfsc: z.string().optional(),
     bank_ifsc: z.string().optional(),
     fileSubsidyChequeDetails: z.string().optional(),
-    file_subsidy_cheque_details: z.string().optional()
+    file_subsidy_cheque_details: z.string().optional(),
+    fileLoginDealerEditAccess: z.boolean().optional(),
+    file_login_dealer_edit_access: z.boolean().optional()
   })
   .passthrough();
 

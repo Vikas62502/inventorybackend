@@ -67,7 +67,7 @@ export function isReleasedToInstaller(q: Record<string, unknown>): boolean {
 
 export type ProductNeededScope = 'installation_pending' | 'file_login';
 
-const FILE_LOGIN_STATUSES = ['already_login', 'login_now'] as const;
+const FILE_LOGIN_STATUSES = ['pending_for_login', 'already_login', 'login_now'] as const;
 
 export function parseProductNeededScope(query: {
   scope?: unknown;
